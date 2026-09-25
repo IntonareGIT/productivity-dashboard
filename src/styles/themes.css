@@ -1,0 +1,135 @@
+/* 
+  Theme CSS Custom Properties 
+  Layout, borders, and typography remain constant across themes.
+  Only colors swap dynamically.
+*/
+
+:root {
+  /* Default font */
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  color-scheme: dark;
+}
+
+/* 1. STUDYING THEME: Cool Blue / Indigo */
+[data-theme="studying"] {
+  --bg-primary: #0f172a;           /* slate-900 */
+  --bg-surface: #1e293b;           /* slate-800 */
+  --bg-surface-elevated: #334155;  /* slate-700 */
+  --border-subtle: #334155;
+  --border-strong: #475569;
+  --accent-primary: #6366f1;       /* indigo-500 */
+  --accent-hover: #4f46e5;         /* indigo-600 */
+  --accent-subtle: rgba(99, 102, 241, 0.15);
+  --accent-text: #818cf8;          /* indigo-400 */
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-tertiary: #64748b;
+}
+
+html[data-theme="studying"].light {
+  --bg-primary: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-surface-elevated: #f1f5f9;
+  --border-subtle: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --accent-primary: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-subtle: rgba(79, 70, 229, 0.1);
+  --accent-text: #4338ca;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-tertiary: #94a3b8;
+}
+
+/* 2. WORKING THEME: Neutral Slate / Graphite */
+[data-theme="working"] {
+  --bg-primary: #121214;           /* zinc-950 */
+  --bg-surface: #1c1c20;           /* zinc-900 */
+  --bg-surface-elevated: #27272e;  /* zinc-800 */
+  --border-subtle: #2d2d35;
+  --border-strong: #3f3f46;
+  --accent-primary: #71717a;       /* zinc-500 */
+  --accent-hover: #a1a1aa;         /* zinc-400 */
+  --accent-subtle: rgba(161, 161, 170, 0.15);
+  --accent-text: #d4d4d8;          /* zinc-300 */
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-tertiary: #71717a;
+}
+
+html[data-theme="working"].light {
+  --bg-primary: #f4f4f5;
+  --bg-surface: #ffffff;
+  --bg-surface-elevated: #e4e4e7;
+  --border-subtle: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --accent-primary: #3f3f46;
+  --accent-hover: #27272a;
+  --accent-subtle: rgba(63, 63, 70, 0.1);
+  --accent-text: #18181b;
+  --text-primary: #09090b;
+  --text-secondary: #52525b;
+  --text-tertiary: #a1a1aa;
+}
+
+/* 3. RESEARCHING THEME: Deep Teal / Green */
+[data-theme="researching"] {
+  --bg-primary: #041f1e;           /* deep pine */
+  --bg-surface: #0a2d2a;           /* teal dark */
+  --bg-surface-elevated: #11413c;  /* teal elevated */
+  --border-subtle: #184e49;
+  --border-strong: #1f645e;
+  --accent-primary: #14b8a6;       /* teal-500 */
+  --accent-hover: #0d9488;         /* teal-600 */
+  --accent-subtle: rgba(20, 184, 166, 0.15);
+  --accent-text: #2dd4bf;          /* teal-400 */
+  --text-primary: #f0fdfa;
+  --text-secondary: #99f6e4;
+  --text-tertiary: #5eead4;
+}
+
+html[data-theme="researching"].light {
+  --bg-primary: #f0fdfa;
+  --bg-surface: #ffffff;
+  --bg-surface-elevated: #ccfbf1;
+  --border-subtle: #99f6e4;
+  --border-strong: #5eead4;
+  --accent-primary: #0d9488;
+  --accent-hover: #0f766e;
+  --accent-subtle: rgba(13, 148, 136, 0.12);
+  --accent-text: #115e59;
+  --text-primary: #134e4a;
+  --text-secondary: #115e59;
+  --text-tertiary: #14b8a6;
+}
+
+/* 4. PLAYING THEME: Warmer Purple / Amber */
+[data-theme="playing"] {
+  --bg-primary: #1a0f2e;           /* deep violet */
+  --bg-surface: #271745;           /* rich plum */
+  --bg-surface-elevated: #3b2466;  /* violet elevated */
+  --border-subtle: #452877;
+  --border-strong: #5b359c;
+  --accent-primary: #f59e0b;       /* amber-500 */
+  --accent-hover: #d97706;         /* amber-600 */
+  --accent-subtle: rgba(245, 158, 11, 0.18);
+  --accent-text: #fbbf24;          /* amber-400 */
+  --text-primary: #faf5ff;
+  --text-secondary: #e9d5ff;
+  --text-tertiary: #c084fc;
+}
+
+html[data-theme="playing"].light {
+  --bg-primary: #fffbeb;
+  --bg-surface: #ffffff;
+  --bg-surface-elevated: #fef3c7;
+  --border-subtle: #fde68a;
+  --border-strong: #fcd34d;
+  --accent-primary: #d97706;
+  --accent-hover: #b45309;
+  --accent-subtle: rgba(217, 119, 6, 0.12);
+  --accent-text: #92400e;
+  --text-primary: #451a03;
+  --text-secondary: #78350f;
+  --text-tertiary: #b45309;
+}
