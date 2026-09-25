@@ -182,7 +182,13 @@ will be persisted once Settings storage lands (plan: a singleton row in an
 │   │   ├── library/             # Phase 4: subjects, notes, resources
 │   │   │   └── LibraryPage.tsx
 │   │   ├── calendar/            # Phase 3: month/week views & events
-│   │   │   └── CalendarPage.tsx
+│   │   │   ├── CalendarPage.tsx
+│   │   │   ├── categories.ts    # fixed (theme-independent) category colors
+│   │   │   ├── eventsRepo.ts    # event CRUD + group-by-date
+│   │   │   └── components/
+│   │   │       ├── EventModal.tsx
+│   │   │       ├── MonthView.tsx
+│   │   │       └── WeekView.tsx
 │   │   ├── shifts/              # Phase 2: weekly strip, PTO, overrides
 │   │   │   ├── ShiftsPage.tsx
 │   │   │   ├── shiftLogic.ts    # pure schedule resolution & summaries
@@ -251,3 +257,11 @@ will be persisted once Settings storage lands (plan: a singleton row in an
   scheduled-hours summaries. Settings: Work Schedule section (off days,
   shift length, start time). Dashboard today strip + weekly hours now read
   real shift data (correct end times, override badges, worked-vs-scheduled).
+- **Phase 3 — Calendar:** no schema changes. Added `calendar/` with
+  `eventsRepo.ts` (event CRUD, events grouped by date) and `categories.ts`
+  (fixed class/deadline/personal/work colors, independent of theme). Month
+  view: 42-cell grid, event chips (dots on mobile), shift days rendered as a
+  subtle `bg-accent-subtle` background tint (PTO = faint amber) — never as
+  event blocks; legend explains the tint. Week view: 7 columns on desktop,
+  stacked day sections below md. Event modal: add/edit/delete with title,
+  date, start/end time, category. Dashboard today strip reads these events.
