@@ -180,7 +180,13 @@ will be persisted once Settings storage lands (plan: a singleton row in an
 │   │   │       ├── UpcomingDeadlinesCard.tsx
 │   │   │       └── WeeklyHoursCard.tsx
 │   │   ├── library/             # Phase 4: subjects, notes, resources
-│   │   │   └── LibraryPage.tsx
+│   │   │   ├── LibraryPage.tsx
+│   │   │   ├── libraryRepo.ts   # subject/resource CRUD (cascade delete)
+│   │   │   ├── palette.ts       # fixed 12-color subject palette
+│   │   │   └── components/
+│   │   │       ├── SubjectModal.tsx
+│   │   │       ├── ResourceModal.tsx
+│   │   │       └── SubjectDetail.tsx   # two-pane notes + resources
 │   │   ├── calendar/            # Phase 3: month/week views & events
 │   │   │   ├── CalendarPage.tsx
 │   │   │   ├── categories.ts    # fixed (theme-independent) category colors
@@ -265,3 +271,13 @@ will be persisted once Settings storage lands (plan: a singleton row in an
   event blocks; legend explains the tint. Week view: 7 columns on desktop,
   stacked day sections below md. Event modal: add/edit/delete with title,
   date, start/end time, category. Dashboard today strip reads these events.
+- **Phase 4 — Study Library:** no schema changes. Added `library/` with
+  `libraryRepo.ts` (CRUD + cascade delete of a subject's resources),
+  `palette.ts` (fixed 12-color palette, theme-independent). Subject grid:
+  color-strip cards with resource counts and pending-due badges; add/edit
+  modal with live color preview. Detail view: two panes (notes with explicit
+  Save | resources with tag chips, due-date badges — Overdue/Due today/Done —
+  URL links vs copyable file paths, completed toggle, filter). Search on the
+  library page filters subjects (name/description/notes) and shows
+  cross-subject resource matches. Resource due dates feed the Dashboard
+  deadlines card (already live-queried there).
