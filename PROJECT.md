@@ -166,7 +166,8 @@ will be persisted once Settings storage lands (plan: a singleton row in an
 │   │   │   ├── TopBar.tsx       # clock + status selector + light/dark toggle
 │   │   │   └── BottomNav.tsx    # mobile nav (< md)
 │   │   └── ui/
-│   │       └── Card.tsx
+│   │       ├── Card.tsx
+│   │       └── Modal.tsx        # dialog (bottom sheet on mobile)
 │   ├── db/
 │   │   ├── db.ts                # Dexie instance & table definitions
 │   │   └── defaultData.ts       # default shift config + theme mappings
@@ -183,11 +184,17 @@ will be persisted once Settings storage lands (plan: a singleton row in an
 │   │   ├── calendar/            # Phase 3: month/week views & events
 │   │   │   └── CalendarPage.tsx
 │   │   ├── shifts/              # Phase 2: weekly strip, PTO, overrides
-│   │   │   └── ShiftsPage.tsx
+│   │   │   ├── ShiftsPage.tsx
+│   │   │   ├── shiftLogic.ts    # pure schedule resolution & summaries
+│   │   │   ├── shiftsRepo.ts    # Dexie mutations for config/overrides
+│   │   │   └── components/
+│   │   │       └── DayOverrideModal.tsx
 │   │   ├── focus/               # Phase 5: pomodoro timer & session log
 │   │   │   └── FocusPage.tsx
 │   │   └── settings/            # Phase 6: theme map, shifts, export/import
-│   │       └── SettingsPage.tsx
+│   │       ├── SettingsPage.tsx
+│   │       └── components/
+│   │           └── ShiftScheduleSettings.tsx
 │   ├── stores/
 │   │   ├── useStatusThemeStore.ts   # status/theme/colorScheme (Zustand)
 │   │   └── usePomodoroStore.ts      # active timer state (Zustand)
@@ -196,6 +203,8 @@ will be persisted once Settings storage lands (plan: a singleton row in an
 │   │   └── themes.css            # 4 themes x light/dark CSS variables
 │   ├── types/
 │   │   └── index.ts              # all shared interfaces (mirrors schema)
+│   ├── utils/
+│   │   └── id.ts                 # newId() UUID helper for all tables
 │   ├── App.tsx                   # tab routing between feature pages
 │   └── main.tsx                  # entry; self-hosted Inter font imports
 ├── index.html
@@ -233,3 +242,12 @@ will be persisted once Settings storage lands (plan: a singleton row in an
   app shell (sidebar/top bar/bottom nav), theme system (4 themes × light/dark,
   status mapping), routing to page stubs, bento Dashboard (today strip,
   pomodoro mini-widget, upcoming deadlines, weekly hours).
+- **Phase 2 — Work Shift Tracker:** no schema changes (v1 tables already
+  covered it). Added `shiftLogic.ts` (shared day resolution: PTO > custom_off
+  > custom_hours > default schedule; week/month summaries; worked-hours
+  estimation) and `shiftsRepo.ts` (one override per date, config patching).
+  Shifts page: Mon–Sun weekly strip (stacked on mobile), distinct colors for
+  shift/off/PTO, day-tap modal for PTO + one-off adjustments, weekly + monthly
+  scheduled-hours summaries. Settings: Work Schedule section (off days,
+  shift length, start time). Dashboard today strip + weekly hours now read
+  real shift data (correct end times, override badges, worked-vs-scheduled).

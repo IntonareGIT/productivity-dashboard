@@ -2,6 +2,7 @@ import React from 'react';
 import { Card } from '../../components/ui/Card';
 import { Settings2, Palette } from 'lucide-react';
 import { useStatusThemeStore } from '../../stores/useStatusThemeStore';
+import { ShiftScheduleSettings } from './components/ShiftScheduleSettings';
 import type { UserStatus, ThemeMode, ColorScheme } from '../../types';
 
 export const SettingsPage: React.FC = () => {
@@ -23,6 +24,9 @@ export const SettingsPage: React.FC = () => {
           Settings
         </h1>
       </div>
+
+      {/* Recurring work schedule: off days, shift length, start time */}
+      <ShiftScheduleSettings />
 
       {/* Theme to Status Mapping Section */}
       <Card
