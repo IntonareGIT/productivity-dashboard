@@ -83,9 +83,13 @@ export const FocusPage: React.FC = () => {
           ))}
         </div>
 
-        {/* Ring */}
-        <div className="relative">
-          <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}>
+        {/* Ring (scales down on narrow screens — never overflows) */}
+        <div className="relative w-full max-w-[264px] aspect-square">
+          <svg
+            viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+            className="w-full h-full"
+            aria-hidden="true"
+          >
             <circle
               cx={RING_SIZE / 2}
               cy={RING_SIZE / 2}

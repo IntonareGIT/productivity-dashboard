@@ -4,6 +4,7 @@ import { Settings2, Palette } from 'lucide-react';
 import { useStatusThemeStore } from '../../stores/useStatusThemeStore';
 import { ShiftScheduleSettings } from './components/ShiftScheduleSettings';
 import { PomodoroSettingsSection } from './components/PomodoroSettingsSection';
+import { DataBackupSection } from './components/DataBackupSection';
 import type { UserStatus, ThemeMode, ColorScheme } from '../../types';
 
 export const SettingsPage: React.FC = () => {
@@ -99,6 +100,9 @@ export const SettingsPage: React.FC = () => {
           })}
         </div>
       </Card>
+
+      {/* Export / import all app data */}
+      <DataBackupSection />
     </div>
   );
 };

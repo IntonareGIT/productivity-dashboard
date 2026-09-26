@@ -35,12 +35,12 @@ export const TopBar: React.FC = () => {
   return (
     <header className="h-14 border-b border-border bg-bg-surface/80 backdrop-blur-md sticky top-0 z-30 px-4 md:px-6 flex items-center justify-between transition-colors">
       {/* Left side: Date & Time */}
-      <div className="flex items-center space-x-3 text-xs sm:text-sm">
-        <span className="font-semibold text-content-primary">
+      <div className="flex items-center gap-2 sm:gap-3 text-xs sm:text-sm min-w-0">
+        <span className="font-semibold text-content-primary whitespace-nowrap">
           {format(currentTime, 'EEE, MMM d')}
         </span>
-        <span className="text-content-tertiary">•</span>
-        <span className="font-mono text-content-secondary font-medium">
+        <span className="hidden sm:inline text-content-tertiary">•</span>
+        <span className="font-mono text-content-secondary font-medium whitespace-nowrap">
           {format(currentTime, 'HH:mm:ss')}
         </span>
       </div>

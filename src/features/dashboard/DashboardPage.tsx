@@ -5,6 +5,7 @@ import { TodayTimelineStrip } from './components/TodayTimelineStrip';
 import { PomodoroMiniWidget } from './components/PomodoroMiniWidget';
 import { UpcomingDeadlinesCard } from './components/UpcomingDeadlinesCard';
 import { WeeklyHoursCard } from './components/WeeklyHoursCard';
+import { StatsCard } from './components/StatsCard';
 import type { NavTab } from '../../components/layout/Sidebar';
 import { format } from 'date-fns';
 
@@ -73,6 +74,11 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
           overrides={overrides}
           onNavigateShifts={() => onNavigate('shifts')}
         />
+
+        {/* Full-width: stats view (days studied, focus hours, sessions, resources) */}
+        <div className="md:col-span-3">
+          <StatsCard />
+        </div>
       </div>
     </div>
   );

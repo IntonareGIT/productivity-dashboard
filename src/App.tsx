@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { AppLayout } from './components/layout/AppLayout';
 import type { NavTab } from './components/layout/Sidebar';
+import { CommandPalette } from './components/ui/CommandPalette';
 import { DashboardPage } from './features/dashboard/DashboardPage';
 import { LibraryPage } from './features/library/LibraryPage';
 import { CalendarPage } from './features/calendar/CalendarPage';
@@ -14,8 +15,29 @@ import { db } from './db/db';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  // Bumped whenever "New event" runs from the palette; CalendarPage opens
+  // its event modal for today when this changes.
+  const [quickAddEventNonce, setQuickAddEventNonce] = useState(0);
   const initTheme = useStatusThemeStore((s) => s.initTheme);
   const loadPomodoroSettings = usePomodoroStore((s) => s.loadSettings);
+
+  // Global Ctrl/Cmd+K shortcut for the command palette.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  const handleNewEventFromPalette = useCallback(() => {
+    setActiveTab('calendar');
+    setQuickAddEventNonce((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     initializeDatabaseDefaults().then(async () => {
@@ -36,7 +58,7 @@ export const App: React.FC = () => {
       case 'library':
         return <LibraryPage />;
       case 'calendar':
-        return <CalendarPage />;
+        return <CalendarPage quickAddNonce={quickAddEventNonce} />;
       case 'shifts':
         return <ShiftsPage />;
       case 'focus':
@@ -51,6 +73,12 @@ export const App: React.FC = () => {
   return (
     <AppLayout activeTab={activeTab} onSelectTab={setActiveTab}>
       {renderContent()}
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onNavigate={setActiveTab}
+        onNewEvent={handleNewEventFromPalette}
+      />
     </AppLayout>
   );
 };

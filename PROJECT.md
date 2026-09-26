@@ -186,8 +186,15 @@ Phase 5; `PomodoroSettings` above is the canonical shape.
 │   │       ├── Card.tsx
 │   │       └── Modal.tsx        # dialog (bottom sheet on mobile)
 │   ├── db/
-│   │   ├── db.ts                # Dexie instance & table definitions
+│   │   ├── db.ts                # Dexie instance & table definitions (v2)
+│   │   ├── backup.ts            # export/import all tables as one JSON file
 │   │   └── defaultData.ts       # default shift config + theme mappings
+│   ├── components/
+│   │   ├── layout/ ... (as above)
+│   │   └── ui/
+│   │       ├── Card.tsx
+│   │       ├── Modal.tsx        # dialog (bottom sheet on mobile)
+│   │       └── CommandPalette.tsx  # Ctrl/Cmd+K quick-add palette
 │   ├── features/
 │   │   ├── dashboard/           # bento grid page + widget components
 │   │   │   ├── DashboardPage.tsx
@@ -195,7 +202,8 @@ Phase 5; `PomodoroSettings` above is the canonical shape.
 │   │   │       ├── TodayTimelineStrip.tsx
 │   │   │       ├── PomodoroMiniWidget.tsx
 │   │   │       ├── UpcomingDeadlinesCard.tsx
-│   │   │       └── WeeklyHoursCard.tsx
+│   │   │       ├── WeeklyHoursCard.tsx
+│   │   │       └── StatsCard.tsx     # Phase 6: days studied, focus hours
 │   │   ├── library/             # Phase 4: subjects, notes, resources
 │   │   │   ├── LibraryPage.tsx
 │   │   │   ├── libraryRepo.ts   # subject/resource CRUD (cascade delete)
@@ -226,7 +234,8 @@ Phase 5; `PomodoroSettings` above is the canonical shape.
 │   │       ├── SettingsPage.tsx
 │   │       └── components/
 │   │           ├── ShiftScheduleSettings.tsx
-│   │           └── PomodoroSettingsSection.tsx
+│   │           ├── PomodoroSettingsSection.tsx
+│   │           └── DataBackupSection.tsx
 │   ├── stores/
 │   │   ├── useStatusThemeStore.ts   # status/theme/colorScheme (Zustand)
 │   │   └── usePomodoroStore.ts      # active timer state (Zustand)
@@ -314,3 +323,17 @@ Phase 5; `PomodoroSettings` above is the canonical shape.
   cycles, sound/notification toggles) persisted + applied live. Dashboard
   mini-widget now reads the shared engine (no local interval) with
   Active/Paused/Idle status.
+- **Phase 6 — Settings, backup, deployment, polish:** no schema changes.
+  Added `db/backup.ts` — export **all 8 tables** to one downloadable JSON
+  (`productivity-backup-YYYY-MM-DD.json`) and import it back (validated,
+  transactional clear+bulkPut, reload to re-init stores) → Settings › Data &
+  Backup shows per-table row counts. Stats view: Dashboard `StatsCard` with
+  days studied this week, focus hours this month, sessions this week,
+  resources completed (existing pomodoro/library data only). Global
+  **Ctrl/Cmd+K command palette** (`components/ui/CommandPalette.tsx`):
+  new event (opens Calendar's event modal for today), start pomodoro
+  (shares the global engine), log/remove PTO today, plus navigation.
+  Responsive pass: Focus ring now scales (`aspect-square`, max 264px),
+  TopBar separator hidden below sm, resource row action buttons enlarged on
+  touch, week strip verified single-column below 768px. `DEPLOY.md` added
+  (Netlify drag-drop/CLI/Git + Vercel CLI/Git, PWA install + offline notes).

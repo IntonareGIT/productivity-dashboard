@@ -301,9 +301,9 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({
                           <button
                             onClick={() => setEditingResource(resource)}
                             aria-label="Edit resource"
-                            className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+                            className="p-3 md:p-2 -m-0.5 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
                           >
-                            <Pencil className="w-3.5 h-3.5" />
+                            <Pencil className="w-4 h-4 md:w-3.5 md:h-3.5" />
                           </button>
                           <button
                             onClick={() =>
@@ -312,13 +312,13 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({
                                 : setDeleteResourceId(resource.id)
                             }
                             aria-label="Delete resource"
-                            className={`p-2 rounded-lg transition-colors ${
+                            className={`p-3 md:p-2 -m-0.5 rounded-lg transition-colors ${
                               deleteResourceId === resource.id
                                 ? 'bg-rose-600 text-white'
                                 : 'text-content-tertiary hover:text-rose-500 hover:bg-rose-500/10'
                             }`}
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Trash2 className="w-4 h-4 md:w-3.5 md:h-3.5" />
                           </button>
                         </div>
                       </div>

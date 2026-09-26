@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { addDays, addMonths, format, startOfMonth, startOfWeek } from 'date-fns';
 import { CalendarDays, ChevronLeft, ChevronRight, Plus } from 'lucide-react';
@@ -15,11 +15,24 @@ import { EventModal } from './components/EventModal';
 
 type ViewMode = 'month' | 'week';
 
-export const CalendarPage: React.FC = () => {
+interface CalendarPageProps {
+  /** Bumped by the command palette's "New event" to open today's modal. */
+  quickAddNonce?: number;
+}
+
+export const CalendarPage: React.FC<CalendarPageProps> = ({ quickAddNonce = 0 }) => {
   const [view, setView] = useState<ViewMode>('month');
   const [anchor, setAnchor] = useState(new Date());
   const [newDate, setNewDate] = useState<string | null>(null);
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
+
+  // Command palette quick-add: jump to today and open the new-event modal.
+  useEffect(() => {
+    if (quickAddNonce > 0) {
+      setEditingEvent(null);
+      setNewDate(format(new Date(), 'yyyy-MM-dd'));
+    }
+  }, [quickAddNonce]);
 
   const events = useLiveQuery(() => db.calendarEvents.toArray()) ?? [];
   const config = useLiveQuery(() => db.shiftConfig.get('default')) ?? defaultShiftConfig;
