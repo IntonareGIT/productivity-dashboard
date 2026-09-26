@@ -20,9 +20,11 @@ any new feature and keep it updated whenever the schema evolves.
 ## 1. Dexie.js Database Schema
 
 Database name: `ProductivityDashboardDB`
-Current version: `4`
+Current version: `5`
 (v3 replaced `shiftConfig` with `weeklySchedules`; v4 added the `subjectId`
-index on `calendarEvents`)
+index on `calendarEvents`; v5 adds topic-based library: `topics`,
+`assessments`, topic-level `resources` with file blobs, and
+`subjectId`/`topicId` links on `pomodoroSessions`)
 Source: `src/db/db.ts` (interfaces in `src/types/index.ts`)
 
 ```typescript
@@ -45,6 +47,17 @@ db.version(3).stores({
 db.version(4).stores({
   calendarEvents:  'id, date, category, startTime, endTime, subjectId'
 });
+db.version(5).stores({
+  topics:          'id, subjectId, status, createdAt',
+  assessments:     'id, subjectId, date, status',
+  resources:       'id, subjectId, topicId, title, dueDate, createdAt',
+  pomodoroSessions:'id, date, durationMinutes, completedAt, subjectId, topicId',
+});
+db.version(5).upgrade(async (tx) => {
+  // One default topic per subject carries the legacy subject.notes;
+  // legacy subject-level resources are attached to that topic
+  // (keeping subjectId denormalized for fast dashboard queries).
+});
 ```
 
 Indexed fields are listed; `tags`, `notes`, etc. are stored but not indexed.
@@ -57,13 +70,82 @@ export interface Subject {
   name: string;            // Subject name (e.g. "Advanced Algorithms")
   description?: string;    // Short description
   color: string;           // Hex color, independent of the active theme
-  notes: string;           // Free-form notes (shown in the detail view)
+  notes: string;           // LEGACY free-form notes (migrated to a default topic in v5; kept for back-compat)
   createdAt: string;       // ISO 8601
   updatedAt: string;       // ISO 8601
 }
 ```
 
-### 1.2 `resources` — links/files attached to a subject
+Topics carry per-topic notes now (§1.2). `Subject.notes` is still written
+by old code paths but the UI reads topics.
+
+### 1.2 `topics` — one-to-many under subjects (v5)
+
+```typescript
+export type TopicStatus = 'not_started' | 'studying' | 'confident';
+
+export interface Topic {
+  id: string;              // UUID primary key
+  subjectId: string;       // Foreign key -> subjects.id
+  title: string;           // Topic title
+  notes: string;           // Markdown / LaTeX / code-supported notes
+  status: TopicStatus;     // Not started / Studying / Confident
+  order: number;           // Manual ordering within a subject
+  createdAt: string;       // ISO 8601
+  updatedAt: string;       // ISO 8601
+}
+```
+
+Subject page shows topics as a list/grid with status indicators and an
+overall progress bar ("N of M topics Confident"). Detail view: left pane
+= selected topic's notes, right pane = that topic's resources.
+
+### 1.3 `resources` — topic-level links + file uploads (v5)
+
+```typescript
+export type ResourceKind = 'link' | 'file';
+
+export interface Resource {
+  id: string;              // UUID primary key
+  subjectId: string;       // Denormalized FK -> subjects.id (fast dashboard queries)
+  topicId: string | null;  // FK -> topics.id (null = legacy subject-level row)
+  kind: ResourceKind;      // 'link' = urlOrPath; 'file' = blob holds the upload
+  title: string;           // Title / label
+  urlOrPath: string;       // Web URL or file reference/path (links)
+  fileName?: string | null;// Original upload name (files)
+  mimeType?: string | null;// Upload MIME (files)
+  fileSize?: number | null;// Upload bytes (files)
+  blob?: Blob | null;      // File bytes in Dexie (files; excluded from JSON backup)
+  tags: string[];          // Tag strings (not indexed)
+  dueDate?: string | null; // YYYY-MM-DD; feeds the Dashboard deadlines card
+  completed?: boolean;     // Done flag
+  createdAt: string;       // ISO 8601
+}
+```
+
+Uploads (PDF/image/doc) are stored as Blobs in IndexedDB and opened via
+`URL.createObjectURL(blob)` for view/download. JSON backup skips `blob`
+bytes (keeps metadata only) — see §1.10.
+
+### 1.4 `assessments` — exams/quizzes/assignments/projects per subject (v5)
+
+```typescript
+export type AssessmentType = 'exam' | 'quiz' | 'assignment' | 'project';
+export type AssessmentStatus = 'upcoming' | 'done';
+
+export interface Assessment {
+  id: string;              // UUID primary key
+  subjectId: string;       // FK -> subjects.id
+  name: string;            // e.g. "Midterm 1"
+  type: AssessmentType;
+  date: string;            // YYYY-MM-DD (feeds Dashboard deadlines alongside resource due dates)
+  weight?: number | null;  // optional % weight
+  status: AssessmentStatus;
+  createdAt: string;       // ISO 8601
+}
+```
+
+### 1.5 `calendarEvents` — month/week view events (with recurrence, v4)
 
 ```typescript
 export interface Resource {
@@ -116,7 +198,7 @@ Notes:
 - `subjectId` is indexed (v4) so a Library subject can list its linked
   lectures; linked events render with the subject's color on the Calendar.
 
-### 1.4 `weeklySchedules` — one independent record per roster week (v3)
+### 1.6 `weeklySchedules` — one independent record per roster week (v3)
 
 Replaces the old singleton `shiftConfig`. The schedule is fixed for a full
 week (Mon–Sun) and reassigned manually week to week; each week's record is
@@ -141,7 +223,7 @@ Resolution rules for a date (see `shiftLogic.ts`):
 2. Otherwise, look up the `weeklySchedules` row whose `weekStartDate`
    equals that date's Monday. Missing row → kind `unscheduled`.
 
-### 1.5 `shiftOverrides` — one-off date adjustments (PTO / custom hours)
+### 1.7 `shiftOverrides` — one-off date adjustments (PTO / custom hours)
 
 ```typescript
 export type ShiftOverrideType = 'pto' | 'custom_hours' | 'custom_off';
@@ -157,18 +239,24 @@ export interface ShiftOverride {
 }
 ```
 
-### 1.6 `pomodoroSessions` — focus session log
+### 1.8 `pomodoroSessions` — focus session log (v5: optional subject/topic link)
 
 ```typescript
 export interface PomodoroSession {
   id: string;               // UUID primary key
   date: string;             // YYYY-MM-DD
-  focusSubject: string;     // What was focused on
+  focusSubject: string;     // Display label (prefilled from subject/topic picker, still editable)
+  subjectId?: string | null; // optional FK to subjects (v5; per-subject focus stats)
+  topicId?: string | null;   // optional FK to topics (v5)
   durationMinutes: number;  // e.g. 25
   sessionType: 'focus' | 'short_break' | 'long_break';
   completedAt: string;      // ISO 8601
 }
 ```
+
+The Focus page replaces the free-text field with an optional subject/topic
+selector; the label stays editable. Subject pages show total focus time this
+week/month from linked sessions.
 
 ### 1.7 `themeStatusMap` — status → theme mapping (primary key is `status`)
 

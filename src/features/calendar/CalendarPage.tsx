@@ -3,10 +3,10 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { addDays, addMonths, format, startOfMonth, startOfWeek } from 'date-fns';
 import { CalendarDays, ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { db } from '../../db/db';
-import type { CalendarEvent } from '../../types';
+import type { CalendarEvent, Subject } from '../../types';
 import { buildShiftContext, resolveDay, type DayKind } from '../shifts/shiftLogic';
+import { occurrencesInRange, type Occurrence } from './recurrence';
 import { CATEGORIES } from './categories';
-import { groupEventsByDate } from './eventsRepo';
 import { MonthView } from './components/MonthView';
 import { WeekView } from './components/WeekView';
 import { EventModal } from './components/EventModal';
@@ -35,25 +35,51 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ quickAddNonce = 0 })
   const events = useLiveQuery(() => db.calendarEvents.toArray()) ?? [];
   const schedules = useLiveQuery(() => db.weeklySchedules.toArray()) ?? [];
   const overrides = useLiveQuery(() => db.shiftOverrides.toArray()) ?? [];
+  const subjects = useLiveQuery(() => db.subjects.toArray()) ?? [];
 
-  const eventsByDate = useMemo(() => groupEventsByDate(events), [events]);
+  const subjectsById = useMemo(() => {
+    const map: Record<string, Subject> = {};
+    for (const s of subjects) map[s.id] = s;
+    return map;
+  }, [subjects]);
+
+  // Date of the clicked occurrence (needed for series-scope edits/deletes).
+  const [occurrenceDate, setOccurrenceDate] = useState<string | null>(null);
+
+  // Visible range: 42 cells for the month grid, 7 days for the week view.
+  const [rangeStart, rangeEnd] = useMemo(() => {
+    const start =
+      view === 'month'
+        ? startOfWeek(startOfMonth(anchor), { weekStartsOn: 1 })
+        : startOfWeek(anchor, { weekStartsOn: 1 });
+    const count = view === 'month' ? 42 : 7;
+    return [start, addDays(start, count - 1)] as const;
+  }, [anchor, view]);
+
+  // Recurring series are expanded dynamically — no occurrence rows exist.
+  const occurrencesByDate = useMemo(
+    () => occurrencesInRange(events, rangeStart, rangeEnd),
+    [events, rangeStart, rangeEnd]
+  );
 
   // Shift tint for every cell of the visible range (background only).
   // Uses each date's OWN week record; unassigned weeks stay untinted.
   const shiftKindByDate = useMemo(() => {
     const map: Record<string, DayKind> = {};
     const ctx = buildShiftContext(overrides, schedules);
-    const rangeStart =
-      view === 'month'
-        ? startOfWeek(startOfMonth(anchor), { weekStartsOn: 1 })
-        : startOfWeek(anchor, { weekStartsOn: 1 });
     const count = view === 'month' ? 42 : 7;
     for (let i = 0; i < count; i++) {
       const d = addDays(rangeStart, i);
       map[format(d, 'yyyy-MM-dd')] = resolveDay(ctx, d).kind;
     }
     return map;
-  }, [overrides, schedules, anchor, view]);
+  }, [overrides, schedules, rangeStart, view]);
+
+  const handleOccurrenceClick = (occurrence: Occurrence) => {
+    setNewDate(null);
+    setOccurrenceDate(occurrence.dateKey);
+    setEditingEvent(occurrence.event);
+  };
 
   const rangeLabel =
     view === 'month'
@@ -132,24 +158,26 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ quickAddNonce = 0 })
         </div>
       </div>
 
-      {/* Calendar body */}
+      {/* Calendar body (occurrences expanded for this range only) */}
       {view === 'month' ? (
         <MonthView
           anchor={anchor}
-          eventsByDate={eventsByDate}
+          occurrencesByDate={occurrencesByDate}
+          subjectsById={subjectsById}
           shiftKindByDate={shiftKindByDate}
           today={new Date()}
           onDayClick={(dateKey) => setNewDate(dateKey)}
-          onEventClick={(evt) => setEditingEvent(evt)}
+          onEventClick={handleOccurrenceClick}
         />
       ) : (
         <WeekView
           anchor={anchor}
-          eventsByDate={eventsByDate}
+          occurrencesByDate={occurrencesByDate}
+          subjectsById={subjectsById}
           shiftKindByDate={shiftKindByDate}
           today={new Date()}
           onDayClick={(dateKey) => setNewDate(dateKey)}
-          onEventClick={(evt) => setEditingEvent(evt)}
+          onEventClick={handleOccurrenceClick}
         />
       )}
 
@@ -164,16 +192,25 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ quickAddNonce = 0 })
           <span className="w-3 h-3 rounded-sm bg-accent-subtle border border-accent/30" />
           Scheduled shift (background tint)
         </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-0.5 h-3 rounded-sm bg-indigo-500" />
+          Lecture linked to a subject (subject color)
+        </span>
         <span>Tap a day to add an event</span>
       </div>
 
-      {/* Event add/edit modal */}
+      {/* Event add/edit modal (occurrenceDate drives the series-scope prompt) */}
       <EventModal
         event={editingEvent}
         newDate={editingEvent ? null : newDate}
+        occurrenceDate={occurrenceDate}
+        subjectName={
+          editingEvent?.subjectId ? subjectsById[editingEvent.subjectId]?.name : undefined
+        }
         onClose={() => {
           setEditingEvent(null);
           setNewDate(null);
+          setOccurrenceDate(null);
         }}
       />
     </div>

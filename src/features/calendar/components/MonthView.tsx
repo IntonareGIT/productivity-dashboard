@@ -1,16 +1,18 @@
 import React, { useMemo } from 'react';
 import { addDays, format, isSameMonth, startOfMonth, startOfWeek } from 'date-fns';
-import type { CalendarEvent } from '../../../types';
+import type { Subject } from '../../../types';
 import type { DayKind } from '../../shifts/shiftLogic';
+import type { Occurrence } from '../recurrence';
 import { CATEGORY_MAP } from '../categories';
 
 interface MonthViewProps {
   anchor: Date; // any date within the displayed month
-  eventsByDate: Record<string, CalendarEvent[]>;
+  occurrencesByDate: Record<string, Occurrence[]>;
+  subjectsById: Record<string, Subject>;
   shiftKindByDate: Record<string, DayKind>;
   today: Date;
   onDayClick: (dateKey: string) => void;
-  onEventClick: (event: CalendarEvent) => void;
+  onEventClick: (occurrence: Occurrence) => void;
 }
 
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -22,10 +24,11 @@ function tintClasses(kind: DayKind | undefined): string {
   return '';
 }
 
-/** Month grid: 6 weeks × 7 days, shift-day tints, event chips. */
+/** Month grid: 6 weeks × 7 days, shift-day tints, event chips with dynamic occurrences. */
 export const MonthView: React.FC<MonthViewProps> = ({
   anchor,
-  eventsByDate,
+  occurrencesByDate,
+  subjectsById,
   shiftKindByDate,
   today,
   onDayClick,
@@ -57,12 +60,12 @@ export const MonthView: React.FC<MonthViewProps> = ({
       <div className="grid grid-cols-7">
         {cells.map((cell) => {
           const dateKey = format(cell, 'yyyy-MM-dd');
-          const events = eventsByDate[dateKey] ?? [];
+          const occurrences = occurrencesByDate[dateKey] ?? [];
           const inMonth = isSameMonth(cell, anchor);
           const isToday = dateKey === todayKey;
           const kind = shiftKindByDate[dateKey];
-          const visible = events.slice(0, 2);
-          const extra = events.length - visible.length;
+          const visible = occurrences.slice(0, 2);
+          const extra = occurrences.length - visible.length;
 
           return (
             <div
@@ -96,16 +99,25 @@ export const MonthView: React.FC<MonthViewProps> = ({
 
               {/* Event chips (desktop) */}
               <div className="hidden sm:flex flex-col gap-1">
-                {visible.map((evt) => {
+                {visible.map((occ) => {
+                  const evt = occ.event;
                   const meta = CATEGORY_MAP[evt.category];
+                  const subject = evt.subjectId ? subjectsById[evt.subjectId] : undefined;
+                  const subjectColor = subject?.color;
+
                   return (
                     <button
-                      key={evt.id}
+                      key={`${evt.id}-${occ.dateKey}`}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onEventClick(evt);
+                        onEventClick(occ);
                       }}
-                      className={`w-full text-left px-1.5 py-0.5 rounded text-[10px] leading-tight font-medium truncate hover:opacity-80 ${meta.badge}`}
+                      style={
+                        subjectColor
+                          ? { borderLeftColor: subjectColor, borderLeftWidth: '3px' }
+                          : undefined
+                      }
+                      className={`w-full text-left px-1.5 py-0.5 rounded text-[10px] leading-tight font-medium truncate hover:opacity-80 transition-all ${meta.badge}`}
                     >
                       {evt.startTime && (
                         <span className="opacity-70 font-mono">{evt.startTime} </span>
@@ -123,19 +135,30 @@ export const MonthView: React.FC<MonthViewProps> = ({
 
               {/* Compact dots (mobile) */}
               <div className="flex sm:hidden flex-wrap gap-1 mt-0.5">
-                {events.slice(0, 4).map((evt) => (
-                  <button
-                    key={evt.id}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onEventClick(evt);
-                    }}
-                    aria-label={evt.title}
-                    className={`w-2 h-2 rounded-full ${CATEGORY_MAP[evt.category].dot}`}
-                  />
-                ))}
-                {events.length > 4 && (
-                  <span className="text-[9px] text-content-tertiary">+{events.length - 4}</span>
+                {occurrences.slice(0, 4).map((occ) => {
+                  const evt = occ.event;
+                  const subject = evt.subjectId ? subjectsById[evt.subjectId] : undefined;
+                  const subjectColor = subject?.color;
+
+                  return (
+                    <button
+                      key={`${evt.id}-${occ.dateKey}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onEventClick(occ);
+                      }}
+                      aria-label={evt.title}
+                      style={subjectColor ? { backgroundColor: subjectColor } : undefined}
+                      className={`w-2 h-2 rounded-full ${
+                        subjectColor ? '' : CATEGORY_MAP[evt.category].dot
+                      }`}
+                    />
+                  );
+                })}
+                {occurrences.length > 4 && (
+                  <span className="text-[9px] text-content-tertiary">
+                    +{occurrences.length - 4}
+                  </span>
                 )}
               </div>
             </div>

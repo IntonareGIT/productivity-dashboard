@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../db/db';
 import { TodayTimelineStrip } from './components/TodayTimelineStrip';
@@ -8,6 +8,8 @@ import { WeeklyHoursCard } from './components/WeeklyHoursCard';
 import { StatsCard } from './components/StatsCard';
 import type { NavTab } from '../../components/layout/Sidebar';
 import { format } from 'date-fns';
+import { occursOn } from '../calendar/recurrence';
+
 
 interface DashboardPageProps {
   onNavigate: (tab: NavTab) => void;
@@ -17,10 +19,12 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
   const todayStr = format(new Date(), 'yyyy-MM-dd');
 
   // Dexie live queries
-  const events = useLiveQuery(
-    () => db.calendarEvents.where('date').equals(todayStr).toArray(),
-    [todayStr]
-  ) || [];
+  const allEvents = useLiveQuery(() => db.calendarEvents.toArray()) || [];
+  const today = new Date();
+  const events = useMemo(
+    () => allEvents.filter((e) => occursOn(e, today)),
+    [allEvents, todayStr]
+  );
 
   const schedules = useLiveQuery(() => db.weeklySchedules.toArray()) || [];
 

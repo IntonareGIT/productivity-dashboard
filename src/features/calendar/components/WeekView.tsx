@@ -1,17 +1,19 @@
 import React, { useMemo } from 'react';
 import { addDays, format, startOfWeek } from 'date-fns';
 import { Plus } from 'lucide-react';
-import type { CalendarEvent } from '../../../types';
+import type { Subject } from '../../../types';
 import type { DayKind } from '../../shifts/shiftLogic';
+import type { Occurrence } from '../recurrence';
 import { CATEGORY_MAP } from '../categories';
 
 interface WeekViewProps {
   anchor: Date; // any date within the displayed week
-  eventsByDate: Record<string, CalendarEvent[]>;
+  occurrencesByDate: Record<string, Occurrence[]>;
+  subjectsById: Record<string, Subject>;
   shiftKindByDate: Record<string, DayKind>;
   today: Date;
   onDayClick: (dateKey: string) => void;
-  onEventClick: (event: CalendarEvent) => void;
+  onEventClick: (occurrence: Occurrence) => void;
 }
 
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -28,7 +30,8 @@ function headerTint(kind: DayKind | undefined): string {
  */
 export const WeekView: React.FC<WeekViewProps> = ({
   anchor,
-  eventsByDate,
+  occurrencesByDate,
+  subjectsById,
   shiftKindByDate,
   today,
   onDayClick,
@@ -45,7 +48,7 @@ export const WeekView: React.FC<WeekViewProps> = ({
     <div className="grid grid-cols-1 md:grid-cols-7 gap-2 md:gap-1.5">
       {days.map((day, idx) => {
         const dateKey = format(day, 'yyyy-MM-dd');
-        const events = eventsByDate[dateKey] ?? [];
+        const occurrences = occurrencesByDate[dateKey] ?? [];
         const kind = shiftKindByDate[dateKey];
         const isToday = dateKey === todayKey;
 
@@ -89,7 +92,7 @@ export const WeekView: React.FC<WeekViewProps> = ({
 
             {/* Events */}
             <div className="p-1.5 space-y-1.5 flex-1 min-h-[64px] md:min-h-[140px]">
-              {events.length === 0 ? (
+              {occurrences.length === 0 ? (
                 <button
                   onClick={() => onDayClick(dateKey)}
                   className="w-full h-full min-h-[48px] flex items-center justify-center text-[11px] text-content-tertiary hover:text-accent transition-colors"
@@ -97,13 +100,22 @@ export const WeekView: React.FC<WeekViewProps> = ({
                   No events
                 </button>
               ) : (
-                events.map((evt) => {
+                occurrences.map((occ) => {
+                  const evt = occ.event;
                   const meta = CATEGORY_MAP[evt.category];
+                  const subject = evt.subjectId ? subjectsById[evt.subjectId] : undefined;
+                  const subjectColor = subject?.color;
+
                   return (
                     <button
-                      key={evt.id}
-                      onClick={() => onEventClick(evt)}
-                      className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium hover:opacity-80 transition-opacity ${meta.badge}`}
+                      key={`${evt.id}-${occ.dateKey}`}
+                      onClick={() => onEventClick(occ)}
+                      style={
+                        subjectColor
+                          ? { borderLeftColor: subjectColor, borderLeftWidth: '3px' }
+                          : undefined
+                      }
+                      className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium hover:opacity-80 transition-all ${meta.badge}`}
                     >
                       <span className="flex items-baseline gap-1.5">
                         <span className="font-mono text-[10px] opacity-70 shrink-0">

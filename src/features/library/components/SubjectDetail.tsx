@@ -334,6 +334,7 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({
       {(addingResource || editingResource) && (
         <ResourceModal
           subjectId={subject.id}
+          topicId={null}
           resource={editingResource}
           onClose={() => {
             setEditingResource(null);

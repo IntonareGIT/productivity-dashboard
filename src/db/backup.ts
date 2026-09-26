@@ -2,10 +2,12 @@ import type { Table } from 'dexie';
 import { format } from 'date-fns';
 import { db } from './db';
 
-/** Every table in the Dexie schema (v3) — must match PROJECT.md. */
+/** Every table in the Dexie schema (v5) — must match PROJECT.md. */
 export const BACKUP_TABLES = [
   'subjects',
+  'topics',
   'resources',
+  'assessments',
   'calendarEvents',
   'weeklySchedules',
   'shiftOverrides',
@@ -28,15 +30,20 @@ export interface ImportResult {
   total: number;
 }
 
-/** Serialize every table and trigger a JSON file download. */
+/** Serialize every table and trigger a JSON file download. Blobs stripped. */
 export async function exportAllData(): Promise<void> {
   const data: Record<string, unknown[]> = {};
   for (const table of BACKUP_TABLES) {
-    data[table] = await (db.table(table) as Table).toArray();
+    const rows = await (db.table(table) as Table).toArray();
+    if (table === 'resources') {
+      data[table] = (rows as Record<string, unknown>[]).map((r) => ({ ...r, blob: undefined }));
+    } else {
+      data[table] = rows;
+    }
   }
   const payload: BackupPayload = {
     app: 'personal-productivity-dashboard',
-    schemaVersion: 2,
+    schemaVersion: 5,
     exportedAt: new Date().toISOString(),
     data,
   };
@@ -85,10 +92,21 @@ export async function importAllData(file: File): Promise<ImportResult> {
     }
   }
 
-  const counts: Record<string, number> = {};
+   const counts: Record<string, number> = {};
   await db.transaction('rw', [...BACKUP_TABLES], async () => {
     for (const table of BACKUP_TABLES) {
-      const rows = knownKeys.includes(table) ? (data[table] as unknown[]) : [];
+      const raw = knownKeys.includes(table) ? (data[table] as unknown[]) : [];
+      let rows = raw;
+      if (table === 'resources' && Array.isArray(raw)) {
+        rows = (raw as Record<string, unknown>[]).map((r) => {
+          if (r && typeof r === 'object' && 'blob' in r) {
+            const { blob: _drop, ...rest } = r;
+            void _drop;
+            return rest;
+          }
+          return r;
+        });
+      }
       await (db.table(table) as Table).clear();
       if (rows.length > 0) {
         await (db.table(table) as Table).bulkPut(rows);
