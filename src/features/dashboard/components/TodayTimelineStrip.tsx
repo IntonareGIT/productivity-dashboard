@@ -1,60 +1,62 @@
 import React from 'react';
 import { format } from 'date-fns';
-import { Calendar, Clock, Briefcase, Plane, Coffee } from 'lucide-react';
+import { Calendar, Clock, Briefcase, Plane, Coffee, CalendarX } from 'lucide-react';
 import { Card } from '../../../components/ui/Card';
-import type { CalendarEvent, ShiftConfig, ShiftOverride } from '../../../types';
-import { resolveDay } from '../../shifts/shiftLogic';
+import type { CalendarEvent, ShiftOverride, WeeklySchedule } from '../../../types';
+import { buildShiftContext, resolveDay } from '../../shifts/shiftLogic';
 
 interface TodayTimelineStripProps {
   events: CalendarEvent[];
-  shiftConfig?: ShiftConfig;
-  todayOverride?: ShiftOverride;
+  overrides?: ShiftOverride[];
+  schedules?: WeeklySchedule[];
   onNavigateCalendar: () => void;
   onNavigateShifts: () => void;
 }
 
 /**
- * Full-width "today" strip: today's shift (from the shift tracker) merged
- * with today's calendar events on one horizontal timeline.
+ * Full-width "today" strip: today's shift (resolved from THIS week's
+ * independent roster record) merged with today's events on one timeline.
  */
 export const TodayTimelineStrip: React.FC<TodayTimelineStripProps> = ({
   events,
-  shiftConfig,
-  todayOverride,
+  overrides = [],
+  schedules = [],
   onNavigateCalendar,
   onNavigateShifts,
 }) => {
   const today = new Date();
 
-  // Resolve today's shift through the shared shift logic (Phase 2).
-  const day = shiftConfig
-    ? resolveDay(
-        shiftConfig,
-        todayOverride ? { [todayOverride.date]: todayOverride } : {},
-        today
-      )
-    : null;
+  // Week-specific lookup — an unassigned week resolves to 'unscheduled'.
+  const day = resolveDay(buildShiftContext(overrides, schedules), today);
 
-  const shiftIcon = day?.kind === 'pto' ? Plane : day?.kind === 'off' ? Coffee : Briefcase;
-  const ShiftIcon = shiftIcon;
+  const ShiftIcon =
+    day.kind === 'pto'
+      ? Plane
+      : day.kind === 'off'
+      ? Coffee
+      : day.kind === 'unscheduled'
+      ? CalendarX
+      : Briefcase;
 
-  const shiftLabel = !day
-    ? 'Loading schedule…'
-    : day.kind === 'pto'
-    ? 'Paid Time Off (PTO)'
-    : day.kind === 'off'
-    ? 'Scheduled Off Day'
-    : day.hasOverride
-    ? `${day.hours}h Custom Shift`
-    : `${day.hours}h Work Shift`;
+  const shiftLabel =
+    day.kind === 'pto'
+      ? 'Paid Time Off (PTO)'
+      : day.kind === 'off'
+      ? 'Scheduled Off Day'
+      : day.kind === 'unscheduled'
+      ? 'Week not scheduled'
+      : day.hasOverride
+      ? `${day.hours}h Custom Shift`
+      : `${day.hours}h Work Shift`;
 
-  const shiftTime = !day
-    ? ''
-    : day.kind === 'work'
-    ? `${day.startTime} – ${day.endTime}`
-    : day.kind === 'pto'
-    ? 'Full day paid'
-    : 'No shift today';
+  const shiftTime =
+    day.kind === 'work'
+      ? `${day.startTime} – ${day.endTime}`
+      : day.kind === 'pto'
+      ? 'Full day paid'
+      : day.kind === 'unscheduled'
+      ? 'No roster yet'
+      : 'No shift today';
 
   return (
     <Card className="col-span-1 md:col-span-3">
@@ -78,10 +80,12 @@ export const TodayTimelineStrip: React.FC<TodayTimelineStripProps> = ({
         <button
           onClick={onNavigateShifts}
           className={`p-3 rounded-xl border transition-all text-left flex flex-col justify-between min-h-[76px] ${
-            day?.kind === 'pto'
+            day.kind === 'pto'
               ? 'bg-amber-500/10 border-amber-500/30 hover:border-amber-500/60'
-              : day?.kind === 'off'
+              : day.kind === 'off'
               ? 'bg-bg-elevated/40 border-border/60 hover:border-border'
+              : day.kind === 'unscheduled'
+              ? 'bg-bg-elevated/30 border-dashed border-border-strong hover:border-accent'
               : 'bg-accent-subtle border-accent/30 hover:border-accent'
           }`}
         >
@@ -92,9 +96,9 @@ export const TodayTimelineStrip: React.FC<TodayTimelineStripProps> = ({
             </span>
             <span
               className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                day?.kind === 'pto'
+                day.kind === 'pto'
                   ? 'bg-amber-500'
-                  : day?.kind === 'off'
+                  : day.kind === 'off' || day.kind === 'unscheduled'
                   ? 'bg-content-tertiary'
                   : 'bg-accent'
               }`}
@@ -105,7 +109,7 @@ export const TodayTimelineStrip: React.FC<TodayTimelineStripProps> = ({
             <div className="text-xs text-content-secondary mt-0.5 flex items-center space-x-1">
               <Clock className="w-3 h-3 flex-shrink-0" />
               <span className="font-mono">{shiftTime}</span>
-              {day?.hasOverride && (
+              {day.hasOverride && (
                 <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-bg-elevated text-content-tertiary">
                   one-off
                 </span>

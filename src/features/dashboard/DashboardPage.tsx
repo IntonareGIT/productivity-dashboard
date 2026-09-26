@@ -22,13 +22,12 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
     [todayStr]
   ) || [];
 
-  const shiftConfig = useLiveQuery(() => db.shiftConfig.get('default'));
+  const schedules = useLiveQuery(() => db.weeklySchedules.toArray()) || [];
 
   // All overrides feed both today's strip and this week's hours card.
   const overrides = useLiveQuery(
     () => db.shiftOverrides.toArray()
   ) || [];
-  const todayOverride = overrides.find((o) => o.date === todayStr);
 
   const pendingResources = useLiveQuery(
     () => db.resources.toArray()
@@ -53,8 +52,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
         {/* Full-width "today" strip merging calendar events + work shift */}
         <TodayTimelineStrip
           events={events}
-          shiftConfig={shiftConfig}
-          todayOverride={todayOverride}
+          overrides={overrides}
+          schedules={schedules}
           onNavigateCalendar={() => onNavigate('calendar')}
           onNavigateShifts={() => onNavigate('shifts')}
         />
@@ -70,8 +69,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
 
         {/* Small card: this week's hours (live from the shift tracker) */}
         <WeeklyHoursCard
-          shiftConfig={shiftConfig}
           overrides={overrides}
+          schedules={schedules}
           onNavigateShifts={() => onNavigate('shifts')}
         />
 

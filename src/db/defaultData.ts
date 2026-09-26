@@ -1,14 +1,5 @@
 import { db } from './db';
-import type { PomodoroSettings, ShiftConfig, ThemeStatusMapping } from '../types';
-
-export const defaultShiftConfig: ShiftConfig = {
-  id: 'default',
-  shiftLengthHours: 9,
-  startTime: '09:00',
-  workingDays: [1, 2, 3, 4, 5], // Monday - Friday
-  offDays: [6, 0], // Saturday, Sunday
-  updatedAt: new Date().toISOString()
-};
+import type { PomodoroSettings, ThemeStatusMapping } from '../types';
 
 export const defaultPomodoroSettings: PomodoroSettings = {
   focusDuration: 25,
@@ -27,10 +18,9 @@ export const defaultThemeStatusMappings: ThemeStatusMapping[] = [
 ];
 
 export async function initializeDatabaseDefaults() {
-  const existingConfig = await db.shiftConfig.get('default');
-  if (!existingConfig) {
-    await db.shiftConfig.put(defaultShiftConfig);
-  }
+  // NOTE: no schedule seeding — weeks are assigned manually via
+  // weeklySchedules ("Add this week's schedule"); unknown weeks stay
+  // unscheduled by design.
 
   const existingMappings = await db.themeStatusMap.toArray();
   if (existingMappings.length === 0) {

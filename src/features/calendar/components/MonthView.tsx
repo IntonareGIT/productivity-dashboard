@@ -1,12 +1,13 @@
 import React, { useMemo } from 'react';
 import { addDays, format, isSameMonth, startOfMonth, startOfWeek } from 'date-fns';
 import type { CalendarEvent } from '../../../types';
+import type { DayKind } from '../../shifts/shiftLogic';
 import { CATEGORY_MAP } from '../categories';
 
 interface MonthViewProps {
   anchor: Date; // any date within the displayed month
   eventsByDate: Record<string, CalendarEvent[]>;
-  shiftKindByDate: Record<string, 'work' | 'off' | 'pto'>;
+  shiftKindByDate: Record<string, DayKind>;
   today: Date;
   onDayClick: (dateKey: string) => void;
   onEventClick: (event: CalendarEvent) => void;
@@ -14,7 +15,8 @@ interface MonthViewProps {
 
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-function tintClasses(kind: 'work' | 'off' | 'pto' | undefined): string {
+// Only real shift days get a tint; 'off' and 'unscheduled' stay clear.
+function tintClasses(kind: DayKind | undefined): string {
   if (kind === 'work') return 'bg-accent-subtle'; // subtle shift tint, not an event block
   if (kind === 'pto') return 'bg-amber-500/10';
   return '';

@@ -3,10 +3,8 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { addDays, addMonths, format, startOfMonth, startOfWeek } from 'date-fns';
 import { CalendarDays, ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { db } from '../../db/db';
-import { defaultShiftConfig } from '../../db/defaultData';
 import type { CalendarEvent } from '../../types';
-import { resolveDay } from '../shifts/shiftLogic';
-import { indexOverridesByDate } from '../shifts/shiftsRepo';
+import { buildShiftContext, resolveDay, type DayKind } from '../shifts/shiftLogic';
 import { CATEGORIES } from './categories';
 import { groupEventsByDate } from './eventsRepo';
 import { MonthView } from './components/MonthView';
@@ -35,15 +33,16 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ quickAddNonce = 0 })
   }, [quickAddNonce]);
 
   const events = useLiveQuery(() => db.calendarEvents.toArray()) ?? [];
-  const config = useLiveQuery(() => db.shiftConfig.get('default')) ?? defaultShiftConfig;
+  const schedules = useLiveQuery(() => db.weeklySchedules.toArray()) ?? [];
   const overrides = useLiveQuery(() => db.shiftOverrides.toArray()) ?? [];
 
   const eventsByDate = useMemo(() => groupEventsByDate(events), [events]);
 
   // Shift tint for every cell of the visible range (background only).
+  // Uses each date's OWN week record; unassigned weeks stay untinted.
   const shiftKindByDate = useMemo(() => {
-    const map: Record<string, 'work' | 'off' | 'pto'> = {};
-    const overridesByDate = indexOverridesByDate(overrides);
+    const map: Record<string, DayKind> = {};
+    const ctx = buildShiftContext(overrides, schedules);
     const rangeStart =
       view === 'month'
         ? startOfWeek(startOfMonth(anchor), { weekStartsOn: 1 })
@@ -51,10 +50,10 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ quickAddNonce = 0 })
     const count = view === 'month' ? 42 : 7;
     for (let i = 0; i < count; i++) {
       const d = addDays(rangeStart, i);
-      map[format(d, 'yyyy-MM-dd')] = resolveDay(config, overridesByDate, d).kind;
+      map[format(d, 'yyyy-MM-dd')] = resolveDay(ctx, d).kind;
     }
     return map;
-  }, [config, overrides, anchor, view]);
+  }, [overrides, schedules, anchor, view]);
 
   const rangeLabel =
     view === 'month'

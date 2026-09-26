@@ -2,12 +2,12 @@ import type { Table } from 'dexie';
 import { format } from 'date-fns';
 import { db } from './db';
 
-/** Every table in the Dexie schema (v2) — must match PROJECT.md. */
+/** Every table in the Dexie schema (v3) — must match PROJECT.md. */
 export const BACKUP_TABLES = [
   'subjects',
   'resources',
   'calendarEvents',
-  'shiftConfig',
+  'weeklySchedules',
   'shiftOverrides',
   'pomodoroSessions',
   'themeStatusMap',

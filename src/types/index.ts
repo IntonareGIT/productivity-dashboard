@@ -36,13 +36,16 @@ export interface CalendarEvent {
   createdAt: string;       // ISO 8601
 }
 
-export interface ShiftConfig {
-  id: string;              // 'default'
-  shiftLengthHours: number;// Default 9
-  startTime: string;       // Default "09:00"
-  workingDays: number[];   // [1, 2, 3, 4, 5] (Mon-Fri)
-  offDays: number[];       // [6, 0] (Sat, Sun)
-  updatedAt: string;
+/** One independent schedule record per roster week (Mon–Sun). Replaces the
+ *  old singleton ShiftConfig (dropped in schema v3). */
+export interface WeeklySchedule {
+  id: string;                // UUID primary key
+  weekStartDate: string;     // The Monday this week begins (YYYY-MM-DD)
+  offDays: number[];         // 0=Sun..6=Sat — the 2 off days that week
+  shiftStartTime: string;    // HH:mm, fixed for that week
+  shiftLengthHours: number;  // e.g. 9, fixed for that week
+  createdAt: string;         // ISO 8601
+  updatedAt: string;         // ISO 8601
 }
 
 export type ShiftOverrideType = 'pto' | 'custom_hours' | 'custom_off';

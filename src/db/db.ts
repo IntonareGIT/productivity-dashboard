@@ -3,7 +3,7 @@ import type {
   Subject,
   Resource,
   CalendarEvent,
-  ShiftConfig,
+  WeeklySchedule,
   ShiftOverride,
   PomodoroSession,
   ThemeStatusMapping,
@@ -14,7 +14,7 @@ export class ProductivityDB extends Dexie {
   subjects!: Table<Subject, string>;
   resources!: Table<Resource, string>;
   calendarEvents!: Table<CalendarEvent, string>;
-  shiftConfig!: Table<ShiftConfig, string>;
+  weeklySchedules!: Table<WeeklySchedule, string>;
   shiftOverrides!: Table<ShiftOverride, string>;
   pomodoroSessions!: Table<PomodoroSession, string>;
   themeStatusMap!: Table<ThemeStatusMapping, string>;
@@ -34,6 +34,11 @@ export class ProductivityDB extends Dexie {
     // v2 (Phase 5): singleton app settings rows (pomodoro durations).
     this.version(2).stores({
       appSettings: 'id'
+    });
+    // v3: per-week roster records replace the singleton shiftConfig.
+    this.version(3).stores({
+      weeklySchedules: 'id, weekStartDate',
+      shiftConfig: null // table dropped
     });
   }
 }

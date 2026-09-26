@@ -20,7 +20,9 @@ any new feature and keep it updated whenever the schema evolves.
 ## 1. Dexie.js Database Schema
 
 Database name: `ProductivityDashboardDB`
-Current version: `2` (v2 added `appSettings` for pomodoro durations — Phase 5)
+Current version: `4`
+(v3 replaced `shiftConfig` with `weeklySchedules`; v4 added the `subjectId`
+index on `calendarEvents`)
 Source: `src/db/db.ts` (interfaces in `src/types/index.ts`)
 
 ```typescript
@@ -28,13 +30,20 @@ db.version(1).stores({
   subjects:        'id, name, color, createdAt',
   resources:       'id, subjectId, title, dueDate, createdAt',
   calendarEvents:  'id, date, category, startTime, endTime',
-  shiftConfig:     'id',
+  shiftConfig:     'id',            // dropped in v3
   shiftOverrides:  'id, date, type',
   pomodoroSessions:'id, date, durationMinutes, completedAt',
   themeStatusMap:  'status'
 });
 db.version(2).stores({
   appSettings:     'id'   // singleton rows, e.g. id: 'pomodoro'
+});
+db.version(3).stores({
+  weeklySchedules: 'id, weekStartDate', // replaces shiftConfig
+  shiftConfig:     null                  // table dropped
+});
+db.version(4).stores({
+  calendarEvents:  'id, date, category, startTime, endTime, subjectId'
 });
 ```
 
@@ -69,35 +78,68 @@ export interface Resource {
 }
 ```
 
-### 1.3 `calendarEvents` — month/week view events
+### 1.3 `calendarEvents` — month/week view events (with recurrence, v4)
 
 ```typescript
 export type EventCategory = 'class' | 'deadline' | 'personal' | 'work';
+
+/** Recurrence rule stored ONCE on the parent event — occurrences are
+ *  computed dynamically for the visible range, never stored as rows.
+ *  Missing/undefined recurrenceType is treated as 'none'. */
+export type RecurrenceType = 'none' | 'daily' | 'weekly' | 'custom';
 
 export interface CalendarEvent {
   id: string;              // UUID primary key
   title: string;
   description?: string;
-  date: string;            // YYYY-MM-DD
+  date: string;            // anchor/first date (YYYY-MM-DD)
   startTime?: string;      // HH:mm (24-hour)
   endTime?: string;        // HH:mm (24-hour)
   category: EventCategory;
+  // --- recurrence (v4) ---
+  recurrenceType?: RecurrenceType;      // default 'none'
+  recurrenceInterval?: number | null;   // custom only: every N days (>=1)
+  recurrenceDaysOfWeek?: number[] | null; // weekly: 0=Sun..6=Sat (e.g. [1,3])
+  recurrenceEndDate?: string | null;    // optional inclusive end (YYYY-MM-DD)
+  recurrenceCount?: number | null;      // optional: stop after N occurrences
+  subjectId?: string | null;            // FK -> subjects.id; null = personal
   createdAt: string;       // ISO 8601
 }
 ```
 
-### 1.4 `shiftConfig` — singleton recurring-schedule settings
+Notes:
+- One row per series; editing/deleting a recurring event asks
+  *this only* / *this and future* / *all occurrences*. "This only" and
+  "future" splits are implemented by truncating `recurrenceEndDate` on the
+  parent and (when needed) cloning a continuation row — no occurrence rows
+  are ever generated.
+- `subjectId` is indexed (v4) so a Library subject can list its linked
+  lectures; linked events render with the subject's color on the Calendar.
+
+### 1.4 `weeklySchedules` — one independent record per roster week (v3)
+
+Replaces the old singleton `shiftConfig`. The schedule is fixed for a full
+week (Mon–Sun) and reassigned manually week to week; each week's record is
+fully independent — editing one week never affects any other week. A week
+with no record is **unscheduled** (never guessed from a previous week).
 
 ```typescript
-export interface ShiftConfig {
-  id: string;               // Singleton key: 'default'
-  shiftLengthHours: number; // Default: 9
-  startTime: string;        // Default: "09:00" (HH:mm)
-  workingDays: number[];    // 0=Sun..6=Sat; default [1,2,3,4,5] (Mon–Fri)
-  offDays: number[];        // default [6,0] (Sat, Sun)
-  updatedAt: string;        // ISO 8601
+export interface WeeklySchedule {
+  id: string;                // UUID primary key
+  weekStartDate: string;     // The Monday this week begins (YYYY-MM-DD)
+  offDays: number[];         // 0=Sun..6=Sat — the 2 off days that week
+  shiftStartTime: string;    // HH:mm, fixed for that week
+  shiftLengthHours: number;  // e.g. 9, fixed for that week
+  createdAt: string;         // ISO 8601
+  updatedAt: string;         // ISO 8601
 }
 ```
+
+Resolution rules for a date (see `shiftLogic.ts`):
+1. `shiftOverrides` still apply on top (PTO / custom hours / custom off),
+   exactly as before, whichever week's base schedule is active.
+2. Otherwise, look up the `weeklySchedules` row whose `weekStartDate`
+   equals that date's Monday. Missing row → kind `unscheduled`.
 
 ### 1.5 `shiftOverrides` — one-off date adjustments (PTO / custom hours)
 
@@ -222,10 +264,11 @@ Phase 5; `PomodoroSettings` above is the canonical shape.
 │   │   │       └── WeekView.tsx
 │   │   ├── shifts/              # Phase 2: weekly strip, PTO, overrides
 │   │   │   ├── ShiftsPage.tsx
-│   │   │   ├── shiftLogic.ts    # pure schedule resolution & summaries
-│   │   │   ├── shiftsRepo.ts    # Dexie mutations for config/overrides
+│   │   │   ├── shiftLogic.ts    # pure per-week resolution & summaries
+│   │   │   ├── shiftsRepo.ts    # weeklySchedules + override mutations
 │   │   │   └── components/
-│   │   │       └── DayOverrideModal.tsx
+│   │   │       ├── DayOverrideModal.tsx
+│   │   │       └── WeeklyScheduleModal.tsx  # add/edit ONE week
 │   │   ├── focus/               # Phase 5: pomodoro timer & session log
 │   │   │   ├── FocusPage.tsx     # large circular countdown + controls
 │   │   │   └── components/
@@ -233,7 +276,7 @@ Phase 5; `PomodoroSettings` above is the canonical shape.
 │   │   └── settings/            # Phase 6: theme map, shifts, export/import
 │   │       ├── SettingsPage.tsx
 │   │       └── components/
-│   │           ├── ShiftScheduleSettings.tsx
+│   │           ├── WeeklySchedulesSettings.tsx
 │   │           ├── PomodoroSettingsSection.tsx
 │   │           └── DataBackupSection.tsx
 │   ├── stores/
@@ -337,3 +380,18 @@ Phase 5; `PomodoroSettings` above is the canonical shape.
   TopBar separator hidden below sm, resource row action buttons enlarged on
   touch, week strip verified single-column below 768px. `DEPLOY.md` added
   (Netlify drag-drop/CLI/Git + Vercel CLI/Git, PWA install + offline notes).
+- **Weekly roster rework (schema v3, Part 1 of 2):** removed the singleton
+  `shiftConfig` and replaced it with `weeklySchedules` — one independent
+  record per Mon–Sun week (`weekStartDate`, `offDays`, `shiftStartTime`,
+  `shiftLengthHours`). `shiftLogic.ts` resolves each date from its own
+  week's record only, producing a new `unscheduled` state (with
+  `unscheduledCount` in summaries) when a week has no roster; PTO and
+  one-off overrides still layer on top unchanged. Shifts page: per-week
+  "Add/Edit this week's schedule" action, unscheduled banner, dashed
+  unscheduled day cells and legend entry. New `WeeklyScheduleModal`
+  (upsert keyed by `weekStartDate`) and a Settings "Weekly Schedules"
+  section that lists, adds, edits and deletes individual weeks (replacing
+  `ShiftScheduleSettings`). Dashboard today-strip + weekly-hours card and
+  Calendar shift tints now use the per-week context; `db/backup.ts` exports
+  `weeklySchedules` instead of the dropped table. No schedule is ever
+  guessed from another week.

@@ -2,12 +2,13 @@ import React, { useMemo } from 'react';
 import { addDays, format, startOfWeek } from 'date-fns';
 import { Plus } from 'lucide-react';
 import type { CalendarEvent } from '../../../types';
+import type { DayKind } from '../../shifts/shiftLogic';
 import { CATEGORY_MAP } from '../categories';
 
 interface WeekViewProps {
   anchor: Date; // any date within the displayed week
   eventsByDate: Record<string, CalendarEvent[]>;
-  shiftKindByDate: Record<string, 'work' | 'off' | 'pto'>;
+  shiftKindByDate: Record<string, DayKind>;
   today: Date;
   onDayClick: (dateKey: string) => void;
   onEventClick: (event: CalendarEvent) => void;
@@ -15,7 +16,7 @@ interface WeekViewProps {
 
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-function headerTint(kind: 'work' | 'off' | 'pto' | undefined): string {
+function headerTint(kind: DayKind | undefined): string {
   if (kind === 'work') return 'bg-accent-subtle';
   if (kind === 'pto') return 'bg-amber-500/10';
   return 'bg-bg-elevated/40';

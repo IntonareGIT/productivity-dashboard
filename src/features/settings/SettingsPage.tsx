@@ -2,7 +2,7 @@ import React from 'react';
 import { Card } from '../../components/ui/Card';
 import { Settings2, Palette } from 'lucide-react';
 import { useStatusThemeStore } from '../../stores/useStatusThemeStore';
-import { ShiftScheduleSettings } from './components/ShiftScheduleSettings';
+import { WeeklySchedulesSettings } from './components/WeeklySchedulesSettings';
 import { PomodoroSettingsSection } from './components/PomodoroSettingsSection';
 import { DataBackupSection } from './components/DataBackupSection';
 import type { UserStatus, ThemeMode, ColorScheme } from '../../types';
@@ -27,8 +27,8 @@ export const SettingsPage: React.FC = () => {
         </h1>
       </div>
 
-      {/* Recurring work schedule: off days, shift length, start time */}
-      <ShiftScheduleSettings />
+      {/* Per-week work rosters (each week is an independent record) */}
+      <WeeklySchedulesSettings />
 
       {/* Pomodoro durations and alerts */}
       <PomodoroSettingsSection />

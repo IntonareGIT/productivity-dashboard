@@ -1,32 +1,37 @@
 import React, { useMemo } from 'react';
 import { Briefcase, ArrowUpRight } from 'lucide-react';
 import { Card } from '../../../components/ui/Card';
-import type { ShiftConfig, ShiftOverride } from '../../../types';
-import { getWeekSummary } from '../../shifts/shiftLogic';
-import { indexOverridesByDate } from '../../shifts/shiftsRepo';
+import type { ShiftOverride, WeeklySchedule } from '../../../types';
+import { buildShiftContext, getWeekSummary, weekStartKeyFor } from '../../shifts/shiftLogic';
+import { indexSchedulesByWeek } from '../../shifts/shiftsRepo';
 
 interface WeeklyHoursCardProps {
-  shiftConfig?: ShiftConfig;
   overrides?: ShiftOverride[];
+  schedules?: WeeklySchedule[];
   onNavigateShifts: () => void;
 }
 
 /**
- * This week's worked vs scheduled hours, computed from the shift tracker
- * (default schedule + one-off overrides/PTO).
+ * This week's worked vs scheduled hours, computed from THIS week's roster
+ * record plus one-off overrides/PTO (unscheduled weeks contribute 0 hours).
  */
 export const WeeklyHoursCard: React.FC<WeeklyHoursCardProps> = ({
-  shiftConfig,
   overrides = [],
+  schedules = [],
   onNavigateShifts,
 }) => {
-  const summary = useMemo(() => {
-    if (!shiftConfig) return null;
-    return getWeekSummary(shiftConfig, indexOverridesByDate(overrides), new Date());
-  }, [shiftConfig, overrides]);
+  const summary = useMemo(
+    () => getWeekSummary(buildShiftContext(overrides, schedules), new Date()),
+    [overrides, schedules]
+  );
 
-  const scheduled = summary?.scheduledHours ?? 0;
-  const worked = summary?.workedHours ?? 0;
+  const weekRecord = useMemo(
+    () => indexSchedulesByWeek(schedules)[weekStartKeyFor(new Date())],
+    [schedules]
+  );
+
+  const scheduled = summary.scheduledHours;
+  const worked = summary.workedHours;
   const percentage = scheduled > 0 ? Math.min(100, (worked / scheduled) * 100) : 0;
 
   return (
@@ -53,7 +58,7 @@ export const WeeklyHoursCard: React.FC<WeeklyHoursCardProps> = ({
             </span>
           </div>
           <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-accent-subtle text-accent-text whitespace-nowrap">
-            {summary?.shiftCount ?? 0} shifts
+            {summary.shiftCount} shifts
           </span>
         </div>
 
@@ -69,12 +74,15 @@ export const WeeklyHoursCard: React.FC<WeeklyHoursCardProps> = ({
         <div className="flex items-center space-x-1.5 min-w-0">
           <Briefcase className="w-3.5 h-3.5 text-accent shrink-0" />
           <span className="truncate">
-            {shiftConfig?.shiftLengthHours ?? 9}h standard · {shiftConfig?.startTime ?? '09:00'}{' '}
-            start
+            {weekRecord
+              ? `${weekRecord.shiftLengthHours}h this week · ${weekRecord.shiftStartTime} start`
+              : summary.unscheduledCount > 0
+              ? 'This week is unscheduled'
+              : 'No roster assigned'}
           </span>
         </div>
         <span className="whitespace-nowrap font-semibold text-content-primary">
-          {summary?.ptoCount ?? 0} PTO
+          {summary.ptoCount} PTO
         </span>
       </div>
     </Card>

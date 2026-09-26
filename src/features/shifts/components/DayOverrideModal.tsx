@@ -2,11 +2,16 @@ import React, { useEffect, useState } from 'react';
 import { format } from 'date-fns';
 import { Modal } from '../../../components/ui/Modal';
 import { clearOverrideForDate, setOverrideForDate } from '../shiftsRepo';
-import type { ShiftConfig, ShiftOverride, ShiftOverrideType } from '../../../types';
+import type { BaseDayKind } from '../shiftLogic';
+import type { ShiftOverride, ShiftOverrideType } from '../../../types';
 
 interface DayOverrideModalProps {
   date: Date | null;            // null = closed
-  config: ShiftConfig;
+  /** Base state for this date WITHOUT the override (from the week's record). */
+  baseKind: BaseDayKind;
+  /** That week's shift start/length (when it has a record). */
+  baseStartTime?: string;
+  baseHours?: number;
   existingOverride?: ShiftOverride;
   onClose: () => void;
 }
@@ -20,22 +25,24 @@ const actionButton =
  */
 export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
   date,
-  config,
+  baseKind,
+  baseStartTime = '09:00',
+  baseHours = 9,
   existingOverride,
   onClose,
 }) => {
-  const [hours, setHours] = useState<number>(config.shiftLengthHours);
-  const [startTime, setStartTime] = useState<string>(config.startTime);
+  const [hours, setHours] = useState<number>(baseHours);
+  const [startTime, setStartTime] = useState<string>(baseStartTime);
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
 
   // Re-initialize the form whenever a different date (or override) opens.
   useEffect(() => {
     if (!date) return;
-    setHours(existingOverride?.shiftLengthHours ?? config.shiftLengthHours);
-    setStartTime(existingOverride?.startTime ?? config.startTime);
+    setHours(existingOverride?.shiftLengthHours ?? baseHours);
+    setStartTime(existingOverride?.startTime ?? baseStartTime);
     setNote(existingOverride?.note ?? '');
-  }, [date, existingOverride, config]);
+  }, [date, existingOverride, baseHours, baseStartTime]);
 
   if (!date) return null;
 
@@ -64,7 +71,13 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
     }
   };
 
-  const isWorkDefault = config.workingDays.includes(date.getDay());
+  const isWorkDefault = baseKind === 'work';
+  const baseDescription =
+    baseKind === 'work'
+      ? 'This date is a work day in this week’s schedule'
+      : baseKind === 'off'
+      ? 'This date is an off day in this week’s schedule'
+      : 'This week has no schedule assigned yet';
 
   return (
     <Modal
@@ -74,7 +87,9 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
       subtitle={
         existingOverride
           ? 'This date has a one-off override'
-          : 'Following the default schedule'
+          : baseKind === 'unscheduled'
+          ? 'Week unscheduled — overrides still apply'
+          : 'Following this week’s schedule'
       }
     >
       <div className="space-y-4">
@@ -116,9 +131,9 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
               onClick={clear}
               className={`${actionButton} bg-bg-elevated/50 border-border hover:border-accent text-accent`}
             >
-              <span className="block">Restore default schedule</span>
+              <span className="block">Clear override</span>
               <span className="block text-xs font-normal text-content-tertiary mt-0.5">
-                {isWorkDefault ? 'This is normally a work day' : 'This is normally an off day'}
+                {baseDescription}
               </span>
             </button>
           )}
