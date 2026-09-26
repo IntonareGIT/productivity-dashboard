@@ -20,7 +20,7 @@ any new feature and keep it updated whenever the schema evolves.
 ## 1. Dexie.js Database Schema
 
 Database name: `ProductivityDashboardDB`
-Current version: `1`
+Current version: `2` (v2 added `appSettings` for pomodoro durations — Phase 5)
 Source: `src/db/db.ts` (interfaces in `src/types/index.ts`)
 
 ```typescript
@@ -32,6 +32,9 @@ db.version(1).stores({
   shiftOverrides:  'id, date, type',
   pomodoroSessions:'id, date, durationMinutes, completedAt',
   themeStatusMap:  'status'
+});
+db.version(2).stores({
+  appSettings:     'id'   // singleton rows, e.g. id: 'pomodoro'
 });
 ```
 
@@ -139,13 +142,27 @@ export interface ThemeStatusMapping {
 }
 ```
 
-### Related non-persisted settings type
+### 1.8 `appSettings` — singleton settings rows (schema v2)
 
-`PomodoroSettings` (`focusDuration`, `shortBreakDuration`,
-`longBreakDuration`, `cyclesBeforeLongBreak`, `soundEnabled`,
-`notificationEnabled`) is defined in `src/types/index.ts` for Phase 5/6. It
-will be persisted once Settings storage lands (plan: a singleton row in an
-`appSettings` table — schema bump required, documented here first).
+```typescript
+export interface PomodoroSettings {
+  focusDuration: number;        // Minutes, default: 25
+  shortBreakDuration: number;   // Minutes, default: 5
+  longBreakDuration: number;    // Minutes, default: 15
+  cyclesBeforeLongBreak: number;// Default: 4
+  soundEnabled: boolean;
+  notificationEnabled: boolean;
+}
+
+export interface PomodoroSettingsRow extends PomodoroSettings {
+  id: string;               // Singleton key: 'pomodoro'
+}
+```
+
+### Related settings note
+
+Pomodoro durations persist in `appSettings` (row `id: 'pomodoro'`) since
+Phase 5; `PomodoroSettings` above is the canonical shape.
 
 ---
 
@@ -202,11 +219,14 @@ will be persisted once Settings storage lands (plan: a singleton row in an
 │   │   │   └── components/
 │   │   │       └── DayOverrideModal.tsx
 │   │   ├── focus/               # Phase 5: pomodoro timer & session log
-│   │   │   └── FocusPage.tsx
+│   │   │   ├── FocusPage.tsx     # large circular countdown + controls
+│   │   │   └── components/
+│   │   │       └── SessionLog.tsx  # collapsed Dexie session history
 │   │   └── settings/            # Phase 6: theme map, shifts, export/import
 │   │       ├── SettingsPage.tsx
 │   │       └── components/
-│   │           └── ShiftScheduleSettings.tsx
+│   │           ├── ShiftScheduleSettings.tsx
+│   │           └── PomodoroSettingsSection.tsx
 │   ├── stores/
 │   │   ├── useStatusThemeStore.ts   # status/theme/colorScheme (Zustand)
 │   │   └── usePomodoroStore.ts      # active timer state (Zustand)
@@ -281,3 +301,16 @@ will be persisted once Settings storage lands (plan: a singleton row in an
   library page filters subjects (name/description/notes) and shows
   cross-subject resource matches. Resource due dates feed the Dashboard
   deadlines card (already live-queried there).
+- **Phase 5 — Pomodoro & Focus:** schema bump to **v2** — added `appSettings`
+  (singleton row `id: 'pomodoro'` holding `PomodoroSettings`), documented in
+  §1.8. Rewrote `usePomodoroStore` as a timestamp-based singleton engine
+  (one module-level interval, accurate after tab throttling) implementing
+  25/5/longer-after-4 with per-user durations, synthesized two-tone chime
+  (WebAudio, offline), browser notifications on phase end, focus sessions
+  logged to `pomodoroSessions` (date/duration/focus target), phase skip and
+  cycle tracking. Focus page: large circular SVG countdown, phase chips,
+  cycle dots, focus-target input, start/pause/reset/skip; collapsed
+  `<details>` session log below. Settings: Pomodoro section (durations,
+  cycles, sound/notification toggles) persisted + applied live. Dashboard
+  mini-widget now reads the shared engine (no local interval) with
+  Active/Paused/Idle status.

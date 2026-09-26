@@ -6,7 +6,8 @@ import type {
   ShiftConfig,
   ShiftOverride,
   PomodoroSession,
-  ThemeStatusMapping
+  ThemeStatusMapping,
+  PomodoroSettingsRow
 } from '../types';
 
 export class ProductivityDB extends Dexie {
@@ -17,6 +18,7 @@ export class ProductivityDB extends Dexie {
   shiftOverrides!: Table<ShiftOverride, string>;
   pomodoroSessions!: Table<PomodoroSession, string>;
   themeStatusMap!: Table<ThemeStatusMapping, string>;
+  appSettings!: Table<PomodoroSettingsRow, string>;
 
   constructor() {
     super('ProductivityDashboardDB');
@@ -28,6 +30,10 @@ export class ProductivityDB extends Dexie {
       shiftOverrides: 'id, date, type',
       pomodoroSessions: 'id, date, durationMinutes, completedAt',
       themeStatusMap: 'status'
+    });
+    // v2 (Phase 5): singleton app settings rows (pomodoro durations).
+    this.version(2).stores({
+      appSettings: 'id'
     });
   }
 }

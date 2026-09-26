@@ -80,3 +80,8 @@ export interface PomodoroSettings {
   soundEnabled: boolean;
   notificationEnabled: boolean;
 }
+
+/** Dexie row in `appSettings` (schema v2) — singleton id: 'pomodoro'. */
+export interface PomodoroSettingsRow extends PomodoroSettings {
+  id: string;
+}

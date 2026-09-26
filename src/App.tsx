@@ -8,17 +8,26 @@ import { ShiftsPage } from './features/shifts/ShiftsPage';
 import { FocusPage } from './features/focus/FocusPage';
 import { SettingsPage } from './features/settings/SettingsPage';
 import { useStatusThemeStore } from './stores/useStatusThemeStore';
+import { usePomodoroStore } from './stores/usePomodoroStore';
 import { initializeDatabaseDefaults } from './db/defaultData';
+import { db } from './db/db';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const initTheme = useStatusThemeStore((s) => s.initTheme);
+  const loadPomodoroSettings = usePomodoroStore((s) => s.loadSettings);
 
   useEffect(() => {
-    initializeDatabaseDefaults().then(() => {
+    initializeDatabaseDefaults().then(async () => {
       initTheme();
+      // Apply stored pomodoro durations to the timer engine.
+      const row = await db.appSettings.get('pomodoro');
+      if (row) {
+        const { id: _id, ...settings } = row;
+        loadPomodoroSettings(settings);
+      }
     });
-  }, [initTheme]);
+  }, [initTheme, loadPomodoroSettings]);
 
   const renderContent = () => {
     switch (activeTab) {
