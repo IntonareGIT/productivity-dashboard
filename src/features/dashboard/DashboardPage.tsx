@@ -37,6 +37,10 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
     () => db.resources.toArray()
   ) || [];
 
+  const assessments = useLiveQuery(() => db.assessments.toArray()) || [];
+  const subjects = useLiveQuery(() => db.subjects.toArray()) || [];
+  const subjectName = (id: string) => subjects.find((s) => s.id === id)?.name ?? null;
+
   return (
     <div className="space-y-5 animate-in fade-in duration-200">
       {/* Welcome Banner */}
@@ -68,6 +72,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
         {/* Small card: upcoming deadlines */}
         <UpcomingDeadlinesCard
           resources={pendingResources}
+          assessments={assessments}
+          subjectName={subjectName}
           onNavigateLibrary={() => onNavigate('library')}
         />
 

@@ -25,6 +25,17 @@ export const SessionLog: React.FC = () => {
     .filter((s) => s.sessionType === 'focus')
     .reduce((sum, s) => sum + s.durationMinutes, 0);
 
+  const subjects = useLiveQuery(() => db.subjects.toArray()) ?? [];
+  const topics = useLiveQuery(() => db.topics.toArray()) ?? [];
+
+  const linkedLabel = (session: { focusSubject: string; subjectId?: string | null; topicId?: string | null }): string => {
+    if (!session.subjectId) return session.focusSubject;
+    const subject = subjects.find((x) => x.id === session.subjectId);
+    if (!subject) return session.focusSubject;
+    const topic = session.topicId ? topics.find((t) => t.id === session.topicId) : null;
+    return topic ? `${subject.name} › ${topic.title}` : subject.name;
+  };
+
   return (
     <details className="group rounded-2xl border border-border bg-bg-surface">
       <summary className="flex items-center justify-between px-4 sm:px-5 py-4 cursor-pointer list-none select-none min-h-[56px]">
@@ -57,7 +68,7 @@ export const SessionLog: React.FC = () => {
                     {format(new Date(session.completedAt), 'MMM d, HH:mm')}
                   </span>
                   <span className="text-content-primary truncate">
-                    {session.focusSubject}
+                    {linkedLabel(session)}
                   </span>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">

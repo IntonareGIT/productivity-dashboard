@@ -334,14 +334,17 @@ Phase 5; `PomodoroSettings` above is the canonical shape.
 │   │   │       ├── UpcomingDeadlinesCard.tsx
 │   │   │       ├── WeeklyHoursCard.tsx
 │   │   │       └── StatsCard.tsx     # Phase 6: days studied, focus hours
-│   │   ├── library/             # Phase 4: subjects, notes, resources
-│   │   │   ├── LibraryPage.tsx
-│   │   │   ├── libraryRepo.ts   # subject/resource CRUD (cascade delete)
+│   │   ├── library/             # topics, resources, assessments (schema v5)
+│   │   │   ├── LibraryPage.tsx    # subject grid + global search (grouped)
+│   │   │   ├── libraryRepo.ts   # subject/topic/resource/assessment CRUD
 │   │   │   ├── palette.ts       # fixed 12-color subject palette
 │   │   │   └── components/
 │   │   │       ├── SubjectModal.tsx
-│   │   │       ├── ResourceModal.tsx
-│   │   │       └── SubjectDetail.tsx   # two-pane notes + resources
+│   │   │       ├── ResourceModal.tsx  # link OR file upload (Blob)
+│   │   │       ├── TopicModal.tsx
+│   │   │       ├── AssessmentModal.tsx
+│   │   │       ├── MarkdownNotes.tsx   # markdown/LaTeX/code renderer
+│   │   │       └── SubjectDetail.tsx   # progress + topics + two-pane detail
 │   │   ├── calendar/            # Phase 3: month/week views & events
 │   │   │   ├── CalendarPage.tsx
 │   │   │   ├── categories.ts    # fixed (theme-independent) category colors
@@ -483,3 +486,25 @@ Phase 5; `PomodoroSettings` above is the canonical shape.
   Calendar shift tints now use the per-week context; `db/backup.ts` exports
   `weeklySchedules` instead of the dropped table. No schedule is ever
   guessed from another week.
+
+- **Topic-based Study Library (schema v5):** restructured the Library from one
+  notes blob per subject into `subjects -> topics -> resources`. New `topics`
+  table (title, Markdown/LaTeX/code notes, status Not started / Studying /
+  Confident, manual order) with a `TopicModal`. `resources` gained `topicId`,
+  `kind: 'link' | 'file'` and file metadata + Blob (PDF/image/doc uploads are
+  stored in IndexedDB and opened via object URLs with View / Download);
+  `Subject.notes` is legacy. The v5 Dexie upgrade migrates each subject's
+  legacy notes and subject-level resources into a default "General" topic.
+  New `assessments` table (exam / quiz / assignment / project, date, optional
+  weight, upcoming/done) feeds the Dashboard's Upcoming Deadlines card
+  alongside resource due dates. Subject page: overall progress bar ("N of M
+  topics Confident"), topic grid with status pills, two-pane detail (left =
+  selected topic's rendered notes, right = that topic's resources),
+  assessments section, and per-subject focus stats (week/month minutes from
+  linked `pomodoroSessions`, which now carry optional `subjectId`/`topicId`).
+  Focus page: free-text target replaced by subject + topic selectors (label
+  stays editable and prefilled); SessionLog resolves linked names. Library
+  search spans topic titles/notes, resource titles and assessment names,
+  grouped by subject. `db/backup.ts` exports all 10 tables (schemaVersion 5,
+  file blobs stripped from JSON). Cascade delete covers topics, resources,
+  assessments, linked events; pomodoro sessions are unlinked, not deleted.

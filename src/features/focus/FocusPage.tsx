@@ -1,6 +1,8 @@
 import React from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Timer, Play, Pause, RotateCcw, SkipForward } from 'lucide-react';
 import { usePomodoroStore, type PomodoroPhase } from '../../stores/usePomodoroStore';
+import { db } from '../../db/db';
 import { SessionLog } from './components/SessionLog';
 
 const PHASE_LABELS: Record<PomodoroPhase, string> = {
@@ -38,7 +40,28 @@ export const FocusPage: React.FC = () => {
     skipPhase,
     setPhase,
     setSubject,
+    focusSubjectId,
+    focusTopicId,
+    setFocusTarget,
   } = usePomodoroStore();
+
+  const subjects = useLiveQuery(() => db.subjects.toArray()) ?? [];
+  const allTopics = useLiveQuery(() => db.topics.toArray()) ?? [];
+  const selectedSubject = focusSubjectId ? subjects.find((s) => s.id === focusSubjectId) ?? null : null;
+  const subjectTopics = focusSubjectId
+    ? allTopics.filter((t) => t.subjectId === focusSubjectId).sort((a, b) => a.order - b.order)
+    : [];
+  const selectedTopic = focusTopicId ? subjectTopics.find((t) => t.id === focusTopicId) ?? null : null;
+
+  const handleSubjectChange = (id: string) => {
+    const s = id ? subjects.find((x) => x.id === id) : null;
+    setFocusTarget(id || null, null, s ? s.name : 'General Study');
+  };
+  const handleTopicChange = (id: string) => {
+    const t = id ? subjectTopics.find((x) => x.id === id) : null;
+    const label = t && selectedSubject ? `${selectedSubject.name} — ${t.title}` : selectedSubject ? selectedSubject.name : 'General Study';
+    setFocusTarget(focusSubjectId, id || null, label);
+  };
 
   const progress = totalDuration > 0 ? timeLeft / totalDuration : 0;
   const statusText = isRunning
@@ -142,18 +165,48 @@ export const FocusPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Focus target */}
-        <label className="w-full mt-6">
-          <span className="block text-xs text-content-secondary mb-1.5 text-center">
+        {/* Focus target: optional subject + topic selector (persisted on focus sessions) */}
+        <div className="w-full mt-6 space-y-2">
+          <span className="block text-xs text-content-secondary text-center">
             What are you focusing on?
           </span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <select
+              value={focusSubjectId ?? ''}
+              onChange={(e) => handleSubjectChange(e.target.value)}
+              aria-label="Focus subject"
+              className="w-full bg-bg-elevated/50 border border-border rounded-xl px-3 py-3 text-sm text-content-primary outline-none focus:border-accent"
+            >
+              <option value="">No subject (general)</option>
+              {subjects.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+            <select
+              value={focusTopicId ?? ''}
+              onChange={(e) => handleTopicChange(e.target.value)}
+              disabled={!focusSubjectId}
+              aria-label="Focus topic"
+              className="w-full bg-bg-elevated/50 border border-border rounded-xl px-3 py-3 text-sm text-content-primary outline-none focus:border-accent disabled:opacity-50"
+            >
+              <option value="">{focusSubjectId ? 'Whole subject' : 'Select a subject first'}</option>
+              {subjectTopics.map((t) => (
+                <option key={t.id} value={t.id}>{t.title}</option>
+              ))}
+            </select>
+          </div>
           <input
             value={currentSubject}
             onChange={(e) => setSubject(e.target.value)}
             placeholder="e.g. Graph algorithms problem set"
             className="w-full bg-bg-elevated/50 border border-border rounded-xl px-4 py-3 text-sm text-content-primary text-center outline-none focus:border-accent placeholder:text-content-tertiary"
           />
-        </label>
+          {(selectedSubject || selectedTopic) && (
+            <p className="text-[11px] text-content-tertiary text-center">
+              Sessions will be linked to {selectedSubject?.name}{selectedTopic ? ` › ${selectedTopic.title}` : ''}
+            </p>
+          )}
+        </div>
 
         {/* Controls */}
         <div className="flex items-center justify-center gap-3 mt-5 w-full">

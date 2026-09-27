@@ -15,6 +15,8 @@ interface PomodoroStoreState {
   currentPhase: PomodoroPhase;
   completedFocusCycles: number;
   currentSubject: string;     // "what was focused on"
+  focusSubjectId: string | null; // optional link to a subject (v5)
+  focusTopicId: string | null;   // optional link to a topic (v5)
   settings: PomodoroSettings;
   lastEvent: string | null;
 
@@ -24,6 +26,8 @@ interface PomodoroStoreState {
   skipPhase: () => void;
   setPhase: (phase: PomodoroPhase) => void;
   setSubject: (subject: string) => void;
+  /** Subject/topic picker: stores FKs (persisted on focus sessions) + label. */
+  setFocusTarget: (subjectId: string | null, topicId: string | null, label: string) => void;
   loadSettings: (settings: PomodoroSettings) => void;
 }
 
@@ -110,6 +114,8 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
         id: newId(),
         date: format(now, 'yyyy-MM-dd'),
         focusSubject: s.currentSubject.trim() || 'General Study',
+        subjectId: s.focusSubjectId ?? null,
+        topicId: s.focusTopicId ?? null,
         durationMinutes: settings.focusDuration,
         sessionType: 'focus',
         completedAt: now.toISOString(),
@@ -167,6 +173,8 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
     currentPhase: 'focus',
     completedFocusCycles: 0,
     currentSubject: 'General Study',
+    focusSubjectId: null,
+    focusTopicId: null,
     settings: defaultPomodoroSettings,
     lastEvent: null,
 
@@ -240,6 +248,9 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
     },
 
     setSubject: (subject) => set({ currentSubject: subject }),
+
+    setFocusTarget: (subjectId, topicId, label) =>
+      set({ focusSubjectId: subjectId, focusTopicId: topicId, currentSubject: label }),
 
     loadSettings: (settings) => {
       const s = get();
