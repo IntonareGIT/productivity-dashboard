@@ -6,6 +6,7 @@
  */
 import { build } from 'esbuild';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -35,6 +36,20 @@ await build({
       setup(b) {
         b.onResolve({ filter: /db\/defaultData$/ }, () => ({ path: 'defaults', namespace: 'defaults' }));
         b.onResolve({ filter: /^zustand$/ }, () => ({ path: 'zustand-stub', namespace: 'zustand-stub' }));
+        // db stub: records every uiState write so we can assert the write policy.
+        b.onResolve({ filter: /db\/db$/ }, () => ({ path: 'db-stub', namespace: 'db-stub' }));
+        b.onLoad({ filter: /.*/, namespace: 'db-stub' }, () => ({
+          contents: `
+          // Recorded on globalThis so writes survive a simulated reload (the
+          // stub module is re-instantiated on each import).
+          globalThis.__uiWrites = globalThis.__uiWrites || [];
+          export const db = {
+            uiState: {
+              async put(row) { globalThis.__uiWrites.push(row); return row.id; },
+            },
+          };`,
+          loader: 'js',
+        }));
         b.onLoad({ filter: /.*/, namespace: 'defaults' }, () => ({ contents: defaultsStub, loader: 'js' }));
         b.onLoad({ filter: /.*/, namespace: 'zustand-stub' }, () => ({
           contents: `
@@ -90,6 +105,7 @@ const importFresh = async () => {
   const mod = await import(`file://${outFile.replace(/\\/g, '/')}?t=${Date.now()}${Math.random()}`);
   return mod.useStatusThemeStore;
 };
+const uiWrites = () => (globalThis.__uiWrites ||= []);
 
 // ---- 1. First run with nothing saved falls back to Studying -------------
 {
@@ -171,6 +187,108 @@ const importFresh = async () => {
     [...ls.keys()].every((k) => ['pd.status', 'pd.themeOverride', 'pd.colorScheme'].includes(k)),
     [...ls.keys()].join(','));
 }
+
+// ---- 8. uiState is written ONLY on explicit user actions ----------------
+{
+  const w = uiWrites();
+  w.length = 0;
+  const useStore = await importFresh();
+
+  // Startup / mapping changes / remote applies must NOT write uiState.
+  useStore.getState().setMappings([{ status: 'Studying', theme: 'working', colorScheme: 'dark' }]);
+  useStore.getState().applyRemoteUiState('Playing', 'studying');
+  check('8 startup/mapping/remote did not write uiState', w.length === 0, `wrote ${w.length}`);
+
+  useStore.getState().setStatus('Working');
+  check('8 picking a status wrote one row', w.length === 1 && w[0].status === 'Working' && w[0].id === 'current');
+  check('8 status pick clears the override in the row', w[0].themeOverride === null);
+
+  w.length = 0;
+  useStore.getState().setThemeOverride('researching');
+  check('8 picking an override wrote one row', w.length === 1 && w[0].themeOverride === 'researching');
+  check('8 override row keeps the current status', w[0].status === 'Working');
+
+  w.length = 0;
+  useStore.getState().toggleColorScheme();
+  check('8 light/dark does NOT write uiState', w.length === 0, `wrote ${w.length}`);
+
+  w.length = 0;
+  useStore.getState().clearThemeOverride();
+  check('8 "Back to status theme" wrote a cleared row', w.length === 1 && w[0].themeOverride === null);
+}
+
+// ---- 9. An incoming synced value is applied, never echoed back ---------
+{
+  const w = uiWrites();
+  w.length = 0;
+  const useStore = await importFresh();
+  useStore.getState().applyRemoteUiState('Researching', 'working');
+  const s = useStore.getState();
+  check('9 remote status applied', s.currentStatus === 'Researching');
+  check('9 remote override applied', s.currentTheme === 'working', s.currentTheme);
+  check('9 remote value refreshes the localStorage cache', ls.get('pd.status') === 'Researching');
+  check('9 remote apply did NOT write back to Dexie', w.length === 0, `wrote ${w.length}`);
+  check('9 remote apply did not change light/dark', s.colorScheme !== undefined);
+}
+
+// ---- 10. Remote value survives a reload (cache primed) -----------------
+{
+  const useStore = await importFresh();
+  useStore.getState().applyRemoteUiState('Playing', 'studying');
+  const useStore2 = await importFresh();
+  const s = useStore2.getState();
+  check('10 remote status cached for next load', s.currentStatus === 'Playing', s.currentStatus);
+  check('10 remote override cached for next load', s.currentTheme === 'studying', s.currentTheme);
+  check('10 applied to <html> on load', attrs['data-theme'] === 'studying', String(attrs['data-theme']));
+}
+
+// ---- 11. Invalid remote values fall back safely -----------------------
+{
+  const useStore = await importFresh();
+  const w = uiWrites();
+  w.length = 0;
+  useStore.getState().applyRemoteUiState('Nonsense', 'chartreuse');
+  const s = useStore.getState();
+  check('11 invalid status falls back to Studying', s.currentStatus === 'Studying', s.currentStatus);
+  check('11 invalid override falls back to the mapping', s.themeOverride === null && s.currentTheme === 'studying');
+  check('11 invalid remote apply did not write back', w.length === 0);
+}
+
+// ---- 12. "Reset to default" reverts a deleted mapping immediately -------
+{
+  const useStore = await importFresh();
+  // A synced row sets Studying -> playing.
+  useStore.getState().setMappings([{ status: 'Studying', theme: 'playing', colorScheme: 'dark' }]);
+  check('12 custom mapping active', useStore.getState().mappings.Studying.theme === 'playing');
+
+  // "Reset to default" deletes the row; the live query then returns [].
+  useStore.getState().setMappings([]);
+  check('12 deleted mapping reverts to the code default at once',
+    useStore.getState().mappings.Studying.theme === 'studying',
+    useStore.getState().mappings.Studying.theme);
+  check('12 theme re-applied to <html> immediately', attrs['data-theme'] === 'studying', String(attrs['data-theme']));
+
+  // A later partial update must not resurrect the deleted row.
+  useStore.getState().setMappings([{ status: 'Working', theme: 'researching', colorScheme: 'dark' }]);
+  check('12 partial update keeps the reset intact',
+    useStore.getState().mappings.Studying.theme === 'studying' &&
+    useStore.getState().mappings.Working.theme === 'researching');
+}
+
+// ---- 13. initializeDatabaseDefaults() writes NO synced-table rows -------
+{
+  // defaultData is stubbed in the theme bundle, so assert on the source text
+  // instead: the function body must not touch a synced table.
+  const src = await readFile(new URL('../src/db/defaultData.ts', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('export async function initializeDatabaseDefaults'));
+  const syncedWrites = body.match(/db\.(uiState|appSettings|themeStatusMap)\b/g) ?? [];
+  check('13 initializeDatabaseDefaults() writes no synced-table row', syncedWrites.length === 0,
+    `references: ${syncedWrites.join(',')}`);
+  check('13 initializeDatabaseDefaults() still seeds aiProviders', /db\.aiProviders\.put/.test(body));
+  check('13 pomodoro defaults remain a documented in-memory fallback',
+    /defaultPomodoroSettings/.test(body) || /no pomodoro seeding/.test(body));
+}
+
 
 rmSync(outDir, { recursive: true, force: true });
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);

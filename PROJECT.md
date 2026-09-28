@@ -67,6 +67,9 @@ db.version(7).stores({
   chatSessions:     'id, updatedAt, providerId',
   chatMessages:     'id, sessionId, createdAt',
 });
+db.version(8).stores({
+  uiState:          'id',   // single row, key 'current'
+});
 ```
 
 Indexed fields are listed; `tags`, `notes`, etc. are stored but not indexed.
@@ -297,6 +300,26 @@ export interface PomodoroSettingsRow extends PomodoroSettings {
   id: string;               // Singleton key: 'pomodoro'
 }
 ```
+
+### 1.9 `uiState` — synced UI state, one row (schema v8)
+
+```typescript
+export interface UiState {
+  id: string;                // Always the literal 'current'
+  status: UserStatus;
+  themeOverride: ThemeMode | null;  // null = follow the status mapping
+  updatedAt: string;         // ISO 8601
+}
+```
+
+The two preferences that should **follow the user between devices**: the current
+status and any theme override. Light/dark is deliberately absent — it is a
+per-device preference (see §1.13.1).
+
+A fixed key is used so two devices writing concurrently converge on the same row
+instead of creating duplicates, and so "nothing saved yet" is unambiguous. The
+row is written **only** by an explicit user action; it is never seeded and never
+written at startup (see §1.13.1).
 
 ### Related settings note
 
@@ -548,9 +571,10 @@ primary key — never `++id` and never `@id`. This is deliberate:
   The only `.upgrade()` in the codebase is the historical schema v5 one, which
   predates sync.
 
-`themeStatusMap` (keyed on `status`) and `appSettings` (keyed on the literal
-`'pomodoro'`) keep their natural keys. These are deterministic, so two devices
-seeding independently converge on the same row rather than duplicating it.
+`themeStatusMap` (keyed on `status`), `appSettings` (keyed on the literal
+`'pomodoro'`) and `uiState` (keyed on the literal `'current'`) keep their natural
+keys. These are deterministic, so two devices writing concurrently converge on
+the same row rather than duplicating it.
 
 **Unsynced tables.** `aiProviders` is excluded so API keys never leave the
 device — each device configures its own key. Nothing else is device-specific.
@@ -561,14 +585,16 @@ above 20 MB because that first sync is slow.
 
 **Seeding rules** (`src/db/defaultData.ts`):
 
-- `themeStatusMap` and `appSettings` are **not seeded at all**. They are synced
-  tables, and a client writing defaults can overwrite an account's real values.
+- `themeStatusMap`, `appSettings` and `uiState` are **not seeded at all**. They
+  are synced tables, and a client writing defaults can overwrite an account's
+  real values — this is exactly the bug a fresh device hits on first load.
   Their code defaults (`defaultThemeStatusMappings`, `defaultPomodoroSettings`)
   are merged **in memory** instead: the DB row wins, the code default is the
   fallback. A row is written only when the user changes the setting, and
   **"Reset to default"** deletes the row so the code default applies again.
-- The pomodoro row is only seeded on a device that is *not* signed in, so a
-  fresh local start still works.
+- Nothing is seeded on a signed-*out* device either. `defaultPomodoroSettings`
+  is the in-memory fallback at both read sites (`App.tsx` and
+  `PomodoroSettingsSection.tsx`), so a local start still works.
 - `aiProviders` is still seeded (it is unsynced, so it cannot reach another
   account) and uses a fixed id.
 
@@ -578,21 +604,42 @@ intercepted. Offline use is unaffected.
 
 ### 1.13.1 Status / theme: what is per-device vs synced
 
-These are two separate concerns and were previously conflated, which caused
-lost selections and cross-device theme leakage.
+Three separate concerns, previously conflated, which caused lost selections and
+cross-device theme leakage.
 
-**Per-device UI preference — `localStorage`, never synced.** Keys
-`pd.status`, `pd.themeOverride`, `pd.colorScheme`:
+| Preference | Where it lives | Synced? |
+| --- | --- | --- |
+| Light/dark | `localStorage` (`pd.colorScheme`) | **No** — per device |
+| Current status + theme override | `localStorage` cache + Dexie `uiState` | **Yes** |
+| Status → theme mapping | Dexie `themeStatusMap` | **Yes** |
 
-| Preference | Notes |
-| --- | --- |
-| Current status | Fallback `'Studying'` when nothing is saved |
-| Theme override | "Override colors"; `null` = follow the mapped theme |
-| Light/dark | Was previously written into the synced mapping row |
+**Light/dark is per-device only.** It lives in `localStorage` and is never
+written to Dexie, so one device's brightness choice never overrides another's.
+A `window` `storage` listener in the store propagates it to other tabs of the
+same browser (the event only fires in *other* tabs, which is the desired
+direction).
 
-They are read **synchronously at module load** and `applyToDocument()` runs
-before React mounts, so there is no flash of the default theme. Every change
-writes straight back.
+**Current status and theme override follow the user across devices** via the
+single `uiState` row (key `'current'`, schema v8):
+
+- **Write policy.** The row is written **only** by an explicit user action —
+  `setStatus`, `setThemeOverride`, or `clearThemeOverride` ("Back to status
+  theme"). It is **never** written at startup and **never** seeded, so a fresh
+  device cannot push its fallback over the account's real value. A missing row
+  falls back to `'Studying'` and its mapped theme.
+- **Read policy.** `useUiState()` (`src/hooks/useUiState.ts`) is a
+  `useLiveQuery` on `db.uiState.get('current')`, so a change arriving from sync
+  (or another tab) updates the store and applies the theme immediately, with no
+  reload.
+- **No write loops.** Incoming values are applied via `applyRemoteUiState()`,
+  which updates the store and the localStorage cache but **does not** call the
+  persistence helper. Applying a remote value therefore can never echo it back.
+  The hook also de-dupes by `status|override` signature so the effect is
+  idempotent without blocking genuine remote changes.
+- **No flash.** `localStorage` is read **synchronously at module load** and
+  `applyToDocument()` runs before React mounts, so first paint uses the cached
+  value. The synced row wins once it arrives. (A brief mismatch is possible
+  when the cache and the row disagree; the row is authoritative.)
 
 **Synced — Dexie `themeStatusMap`.** The status → theme mapping, read through
 `useThemeStatusMap()` (`src/hooks/useThemeStatusMap.ts`), a `useLiveQuery` on
@@ -601,19 +648,34 @@ device's sync, updates the store and re-applies the theme with no reload.
 
 Store rules (`src/stores/useStatusThemeStore.ts`):
 
-- `setStatus` persists the status, **clears any override**, and applies the
-  newly mapped theme.
-- `setThemeOverride` applies a theme without changing the status; it persists
-  until the user next picks a status.
-- `clearThemeOverride` re-applies the active status's mapped theme — this is
-  what the "Back to status theme" button calls.
-- `toggleColorScheme` is per-device only; it no longer writes the synced row.
-- `setMappings` merges rows over the code defaults, **ignores a row's
-  `colorScheme`** (legacy, so a synced row cannot flip another device's
-  light/dark), skips unknown values, and re-applies the active status's theme
-  **unless an override is active**.
+- `setStatus` persists the status, **clears any override**, writes the `uiState`
+  row, and applies the newly mapped theme.
+- `setThemeOverride` applies a theme without changing the status, writes the
+  `uiState` row, and persists until the user next picks a status.
+- `clearThemeOverride` re-applies the active status's mapped theme and writes a
+  cleared `uiState` row — this is what "Back to status theme" calls.
+- `toggleColorScheme` is per-device only; it writes localStorage and never
+  touches Dexie.
+- `applyRemoteUiState` applies an incoming synced status/override without
+  writing back (see above).
+- `setMappings` **rebuilds from `defaultThemeStatusMappings` on every call**
+  rather than merging into the previous store value, so a mapping deleted by
+  "Reset to default" reverts immediately instead of lingering until a reload.
+  It **ignores a row's `colorScheme`** (legacy, so a synced row cannot flip
+  another device's light/dark), skips unknown values, and re-applies the active
+  status's theme **unless an override is active**.
 - Existing `colorScheme` values on stored rows are neither migrated nor
   rewritten, and no `Version.upgrade()` is used on synced tables.
+
+**Manual verification** (no automation is available for this):
+
+1. Sign in on two profiles, open the app in both.
+2. Pick a status in profile A → it appears in profile B within ~20 s.
+3. Set an override in A → it appears in B; "Back to status theme" in A clears
+   it in both.
+4. Toggle light/dark in A → B is unchanged.
+5. Open a **fresh** device profile signed into the same account → it must show
+   the account's status/override and must not overwrite the row on first load.
 
 
 **Settings → Sync** offers sign in, the signed-in email, live status
@@ -763,6 +825,7 @@ the same conversation open.
 │   │           └── DataBackupSection.tsx
 │   ├── hooks/
 │   │   └── useThemeStatusMap.ts    # live status->theme mapping (synced) + save/reset
+│   │   └── useUiState.ts           # live synced status/override row (no write-back)
 │   ├── stores/
 │   │   ├── useStatusThemeStore.ts   # per-device status/override/scheme + mapping (Zustand)
 │   │   ├── usePomodoroStore.ts      # active timer state (Zustand)

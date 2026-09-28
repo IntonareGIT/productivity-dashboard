@@ -58,12 +58,14 @@ export function makeDefaultAiProvider(): AiProvider {
 /**
  * First-run seeding. Safe to run on every launch.
  *
- * `themeStatusMap` and `appSettings` are deliberately NOT seeded. They are
- * synced tables, and writing defaults from a client can overwrite an
+ * `themeStatusMap`, `uiState` and `appSettings` are deliberately NOT seeded.
+ * They are synced tables, and writing defaults from a client can overwrite an
  * account's real values. Their code defaults are merged in memory instead (see
  * `defaultThemeStatusMappings` / `defaultPomodoroSettings`), and a row is
  * written only when the user changes the setting. "Reset to default" deletes
- * the row.
+ * the row. The `uiState` row is the exception that proves the rule: it is
+ * written only by an explicit status/override choice, never at startup, so a
+ * fresh device cannot push its fallback over the account's value.
  *
  * `aiProviders` IS seeded: it is an unsynced table, so it stays per-device and
  * cannot reach another account. It uses a fixed id so a re-seed can never
@@ -73,16 +75,11 @@ export async function initializeDatabaseDefaults() {
   // NOTE: no schedule seeding — weeks are assigned manually via
   // weeklySchedules ("Add this week's schedule"); unknown weeks stay
   // unscheduled by design.
-
-  // Unsigned users still need working defaults, so only write the pomodoro row
-  // when this device has never had one AND is not going to sync.
-  // Users who sign in get the account's values via the live query instead.
-  if (!db.cloud?.currentUser?.value?.isLoggedIn) {
-    const existingPomodoro = await db.appSettings.get('pomodoro');
-    if (!existingPomodoro) {
-      await db.appSettings.put({ id: 'pomodoro', ...defaultPomodoroSettings });
-    }
-  }
+  //
+  // NOTE: no pomodoro seeding either. `appSettings` is synced, so a seed here
+  // would race the account's real value; `defaultPomodoroSettings` is the
+  // in-memory fallback until the live query returns a real row (or the user
+  // saves).
 
   const existingProviders = await db.aiProviders.toArray();
   if (existingProviders.length === 0) {

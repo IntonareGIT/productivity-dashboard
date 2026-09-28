@@ -13,7 +13,8 @@ import type {
   ThemeStatusMapping,
   PomodoroSettingsRow,
   ChatSession,
-  ChatMessageRow
+  ChatMessageRow,
+  UiState
 } from '../types';
 import { newId } from '../utils/id';
 import { BLOB_MODE, DEXIE_CLOUD_URL, UNSYNCED_TABLES } from './cloudConfig';
@@ -32,6 +33,7 @@ export class ProductivityDB extends Dexie {
   aiProviders!: Table<AiProvider, string>;
   chatSessions!: Table<ChatSession, string>;
   chatMessages!: Table<ChatMessageRow, string>;
+  uiState!: Table<UiState, string>;
 
   constructor() {
     // The Dexie Cloud addon is attached here; without it db.cloud is undefined.
@@ -112,6 +114,12 @@ export class ProductivityDB extends Dexie {
     this.version(7).stores({
       chatSessions: 'id, updatedAt, providerId',
       chatMessages: 'id, sessionId, createdAt',
+    });
+    // v8: synced UI state (single row, key 'current') holding the current
+    // status and any theme override. Schema addition only — no primary key is
+    // changed and no .upgrade() is used on a synced table.
+    this.version(8).stores({
+      uiState: 'id',
     });
   }
 }

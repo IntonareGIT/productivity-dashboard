@@ -200,3 +200,23 @@ export interface ChatMessageRow {
   createdAt: string;   // ISO 8601
 }
 
+/**
+ * Synced UI state (schema v8) — a single row with the fixed key 'current'.
+ *
+ * Holds the two preferences that follow the user across devices: the current
+ * status and any theme override. Light/dark is deliberately NOT here; it is a
+ * per-device preference in localStorage, so one device's brightness choice
+ * never overrides another's.
+ *
+ * A fixed key is used so two devices writing concurrently converge on the same
+ * row rather than creating duplicates, and so a missing row is unambiguous.
+ */
+export interface UiState {
+  id: string;          // always 'current'
+  status: UserStatus;
+  /** Manual "Override colors" theme, or null when following the mapping. */
+  themeOverride: ThemeMode | null;
+  updatedAt: string;   // ISO 8601
+}
+
+

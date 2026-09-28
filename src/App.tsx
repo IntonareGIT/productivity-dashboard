@@ -17,6 +17,7 @@ import { providerIsReady } from './features/ai/aiProviderRepo';
 import { useAssistantStore } from './stores/useAssistantStore';
 import { useStatusThemeStore } from './stores/useStatusThemeStore';
 import { useThemeStatusMap } from './hooks/useThemeStatusMap';
+import { useUiState } from './hooks/useUiState';
 import { defaultPomodoroSettings } from './db/defaultData';
 import { usePomodoroStore } from './stores/usePomodoroStore';
 import { initializeDatabaseDefaults } from './db/defaultData';
@@ -44,6 +45,8 @@ export const App: React.FC = () => {
   const refreshAssistantProvider = useAssistantStore((s) => s.refreshProvider);
   // Live status -> theme mapping (synced); re-applies the theme when it changes.
   useThemeStatusMap();
+  // Live synced UI state (current status + theme override).
+  useUiState();
 
   // Reactive: true once a default provider exists with base URL, key and model.
   // Keeps the launcher/panel disabled-state correct after Settings edits.

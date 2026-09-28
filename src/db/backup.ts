@@ -17,6 +17,7 @@ export const BACKUP_TABLES = [
   'aiProviders',
   'chatSessions',
   'chatMessages',
+  'uiState',
 ] as const;
 
 export type BackupTable = (typeof BACKUP_TABLES)[number];
