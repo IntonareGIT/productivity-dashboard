@@ -67,11 +67,29 @@ globalThis.__S = {
   pomodoroSessions: new Map(), themeStatusMap: new Map(), appSettings: new Map(),
   aiProviders: new Map(), chatSessions: new Map(), chatMessages: new Map(),
 };
-// setStatus writes the theme onto <html>; the store also reads/writes
-// localStorage, so both are shimmed just enough for this harness.
+// The Dexie Cloud addon wires rxjs fromEvent() against `document` and `window`
+// at import time, but only when those globals exist — in Node they don't, and
+// the addon then takes its own `of({})` no-DOM path. So we must NOT define
+// document/window here; a partial shim is worse than none. The only DOM-ish
+// global the stores touch directly is document.documentElement (setStatus),
+// which we provide as a bare object; the addon's `typeof document !== 'undefined'`
+// check sees it, so we also give it event methods.
 globalThis.document = {
+  visibilityState: 'visible',
+  addEventListener: () => {},
+  removeEventListener: () => {},
   documentElement: { setAttribute: () => {}, classList: { add: () => {}, remove: () => {}, toggle: () => {} } },
 };
+globalThis.window = {
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  location: { href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:' },
+};
+if (typeof globalThis.CustomEvent === 'undefined') {
+  globalThis.CustomEvent = class CustomEvent {
+    constructor(type, init) { this.type = type; this.detail = init?.detail; }
+  };
+}
 globalThis.localStorage = {
   _m: new Map(),
   getItem(k) { return this._m.has(k) ? this._m.get(k) : null; },

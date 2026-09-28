@@ -7,6 +7,7 @@ dist-ssr
 *.log
 *.txt
 !tsconfig*.json
+*.flag
 build.flag
 tsc.flag
 
@@ -24,3 +25,11 @@ tsc.flag
 .env*
 
 package-lock.json
+
+dexie-cloud.json
+
+dexie-cloud.key
+
+dexie-cloud.json
+
+dexie-cloud.key

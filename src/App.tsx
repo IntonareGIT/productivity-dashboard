@@ -103,7 +103,11 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    initializeDatabaseDefaults().then(async () => {
+    // Seeding is gated on sign-in state (see defaultData.ts):
+    //  - never signed in  -> seed now, a fresh local start
+    //  - signed in         -> wait for the first sync to finish, so this device
+    //                         can only fill gaps, never overwrite synced rows.
+    const applySettings = async () => {
       initTheme();
       // Apply stored pomodoro durations to the timer engine.
       const row = await db.appSettings.get('pomodoro');
@@ -111,7 +115,37 @@ export const App: React.FC = () => {
         const { id: _id, ...settings } = row;
         loadPomodoroSettings(settings);
       }
+    };
+
+    const cloud = db.cloud;
+    if (!cloud) {
+      // No addon (should not happen) or no config: plain local start.
+      initializeDatabaseDefaults().then(applySettings);
+      return;
+    }
+
+    if (!cloud.currentUserId) {
+      // Never signed in: safe to seed defaults locally.
+      initializeDatabaseDefaults().then(applySettings);
+      return;
+    }
+
+    // Signed in. Wait for the first sync to complete before seeding, so a
+    // device that just signed in pulls the account's settings first.
+    let cancelled = false;
+    const sub = cloud.events.syncComplete.subscribe(async () => {
+      if (cancelled) return;
+      await initializeDatabaseDefaults();
+      await applySettings();
     });
+    // Safety net: seed gaps once the DB is open even if offline, so a signed-in
+    // user is never left without the theme/pomodoro defaults. Because seeding
+    // is insert-if-missing, synced rows always win on the next successful sync.
+    initializeDatabaseDefaults().then(applySettings);
+    return () => {
+      cancelled = true;
+      sub.unsubscribe();
+    };
   }, [initTheme, loadPomodoroSettings]);
 
   const renderContent = () => {

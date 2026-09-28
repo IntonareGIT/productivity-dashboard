@@ -32,7 +32,13 @@ export default defineConfig({
         ]
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,webmanifest}']
+        // Only same-origin build assets are precached, so Dexie Cloud requests
+        // (a different origin) are never served from, or written to, the cache.
+        // Keeping runtimeCaching empty means Workbox registers no fetch handler
+        // for cross-origin traffic, so sync requests always hit the network —
+        // or fail cleanly while offline, rather than returning stale data.
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,webmanifest}'],
+        runtimeCaching: []
       }
     })
   ],

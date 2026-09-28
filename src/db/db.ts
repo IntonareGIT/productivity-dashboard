@@ -1,4 +1,5 @@
 import Dexie, { type Table } from 'dexie';
+import dexieCloud from 'dexie-cloud-addon';
 import type {
   AiProvider,
   Assessment,
@@ -15,6 +16,7 @@ import type {
   ChatMessageRow
 } from '../types';
 import { newId } from '../utils/id';
+import { BLOB_MODE, DEXIE_CLOUD_URL, UNSYNCED_TABLES } from './cloudConfig';
 
 export class ProductivityDB extends Dexie {
   subjects!: Table<Subject, string>;
@@ -32,7 +34,10 @@ export class ProductivityDB extends Dexie {
   chatMessages!: Table<ChatMessageRow, string>;
 
   constructor() {
-    super('ProductivityDashboardDB');
+    // The Dexie Cloud addon is attached here; without it db.cloud is undefined.
+    // With no dexie-cloud.key present (fresh clone / CI) the addon stays in
+    // anonymous mode and the app works entirely locally.
+    super('ProductivityDashboardDB', { addons: [dexieCloud] });
     this.version(1).stores({
       subjects: 'id, name, color, createdAt',
       resources: 'id, subjectId, title, dueDate, createdAt',
@@ -112,3 +117,17 @@ export class ProductivityDB extends Dexie {
 }
 
 export const db = new ProductivityDB();
+
+/**
+ * Enable cross-device sync.
+ *
+ * The URL comes from the committed `cloudConfig.ts` (NOT from the gitignored
+ * `dexie-cloud.json`, which does not exist on the build server). `aiProviders`
+ * is excluded so API keys never leave the device. Blobs in `resources` (uploaded
+ * files) use lazy offloading, so their bytes are uploaded on first sync.
+ */
+db.cloud?.configure({
+  databaseUrl: DEXIE_CLOUD_URL,
+  unsyncedTables: [...UNSYNCED_TABLES],
+  blobMode: BLOB_MODE,
+});

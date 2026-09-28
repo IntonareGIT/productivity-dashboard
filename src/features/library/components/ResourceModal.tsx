@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { FileUp } from 'lucide-react';
 import { Modal } from '../../../components/ui/Modal';
 import { saveResource } from '../libraryRepo';
+import { LARGE_BLOB_WARNING_BYTES } from '../../../db/cloudConfig';
 import type { Resource, ResourceKind } from '../../../types';
 
 interface ResourceModalProps {
@@ -123,9 +124,26 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
                 type="file"
                 accept=".pdf,.doc,.docx,.txt,.md,image/*"
                 className="hidden"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                onChange={(e) => {
+                  const picked = e.target.files?.[0] ?? null;
+                  setFile(picked);
+                  // Warn on large uploads: Dexie Cloud offloads blobs on first
+                  // sync, so a very large file makes that sync slow.
+                  setError(
+                    picked && picked.size > LARGE_BLOB_WARNING_BYTES
+                      ? `This file is ${formatBytes(picked.size)}. Files over ${formatBytes(
+                          LARGE_BLOB_WARNING_BYTES
+                        )} are allowed, but the first sync will be slow and it counts against your sync quota.`
+                      : ''
+                  );
+                }}
               />
             </span>
+            {file && file.size > LARGE_BLOB_WARNING_BYTES && (
+              <p className="mt-1.5 text-[11px] text-amber-500">
+                Large file ({formatBytes(file.size)}) — the first sync may take a while.
+              </p>
+            )}
           </label>
         )}
 
