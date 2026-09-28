@@ -1,44 +1,62 @@
-import { addDays, format, isWithinInterval, startOfDay, startOfWeek } from 'date-fns';
+import { addDays, format, isWithinInterval, startOfDay, startOfWeek, subDays } from 'date-fns';
 import { db } from '../../db/db';
-import type { Assessment, Resource, Subject, Topic } from '../../types';
+import type { Assessment, AssessmentType, Resource, Subject, Topic, TopicStatus, UserStatus } from '../../types';
 import { occursOn } from '../calendar/recurrence';
 import { buildShiftContext, dayEndTime, resolveDay, toDateKey } from '../shifts/shiftLogic';
 import { saveWeeklySchedule } from '../shifts/shiftsRepo';
 import { usePomodoroStore } from '../../stores/usePomodoroStore';
+import {
+  DAY_NAMES,
+  ToolError,
+  normalizeHours,
+  normalizeOffDays,
+  normalizeTime,
+  type ToolExecution,
+} from './toolRuntime';
+import {
+  EXTENDED_TOOL_SPECS,
+  describeExtendedToolCall,
+  executeExtendedTool,
+} from './toolsExtended';
 import type { ToolSpec } from './types';
 
 /**
  * Callable functions exposed to the assistant. Each one performs a REAL
  * operation against Dexie / the app stores — never a mock.
+ *
+ * `toolsExtended.ts` holds the library/calendar/status functions; the two
+ * modules are merged here so the model sees one flat tool list and the
+ * dispatcher stays a single switch.
  */
 
-export class ToolError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ToolError';
-  }
-}
+export { ToolError } from './toolRuntime';
+export type { ToolExecution } from './toolRuntime';
 
-export interface ToolExecution {
-  ok: boolean;
-  /** One-line human summary (shown in the chat transcript + toast). */
-  summary: string;
-  /** JSON payload handed back to the model. */
-  data: unknown;
-  /** Optional toast metadata for the visible confirmation (#9). */
-  toast?: { kind: 'success' | 'info' | 'error'; title: string; description?: string };
-}
 
 /** Function names that change stored data. */
 export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   'addOrUpdateWeeklySchedule',
   'startPomodoroSession',
   'stopPomodoroSession',
+  'setStatus',
+  'addCalendarEvent',
+  'addResourceLink',
+  'createSubject',
+  'createTopic',
+  'markTopicStatus',
+  'addTopicNote',
+  'addAssessment',
+  'addPTO',
+  'addOneOffShiftException',
+  'deleteCalendarEvent',
 ]);
 
 /** Destructive / schedule-affecting tools requiring explicit user confirmation. */
 export const CONFIRMATION_TOOL_NAMES: ReadonlySet<string> = new Set([
   'addOrUpdateWeeklySchedule',
+  'addPTO',
+  'addOneOffShiftException',
+  'deleteCalendarEvent',
 ]);
 
 export const TOOL_SPECS: ToolSpec[] = [
@@ -127,6 +145,7 @@ export const TOOL_SPECS: ToolSpec[] = [
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
+  ...EXTENDED_TOOL_SPECS,
 ];
 
 /* ---------------- Read-only functions ---------------- */
@@ -320,39 +339,6 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
 
 /* ---------------- Mutating functions ---------------- */
 
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-function normalizeOffDays(raw: unknown): number[] {
-  if (!Array.isArray(raw)) {
-    throw new ToolError('"offDays" must be an array of weekday numbers (0=Sun … 6=Sat).');
-  }
-  const days = raw
-    .map((d) => Number(d))
-    .filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
-  if (days.length === 0) {
-    throw new ToolError('Provide at least one off day (0=Sun … 6=Sat).');
-  }
-  return [...new Set(days)].sort((a, b) => a - b);
-}
-
-function normalizeTime(raw: unknown): string {
-  const value = String(raw ?? '').trim();
-  const match = value.match(/^(\d{1,2}):(\d{2})$/);
-  if (!match) throw new ToolError(`"${value}" is not a valid HH:mm time.`);
-  const hh = Number(match[1]);
-  const mm = Number(match[2]);
-  if (hh > 23 || mm > 59) throw new ToolError(`"${value}" is not a valid HH:mm time.`);
-  return `${String(hh).padStart(2, '0')}:${match[2]}`;
-}
-
-function normalizeHours(raw: unknown): number {
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0 || value > 24) {
-    throw new ToolError('"shiftLengthHours" must be a number between 1 and 24.');
-  }
-  return Math.round(value * 100) / 100;
-}
-
 async function addOrUpdateWeeklySchedule(args: Record<string, unknown>): Promise<ToolExecution> {
   const weekStartDate = args.weekStartDate
     ? format(startOfWeek(new Date(`${String(args.weekStartDate)}T00:00:00`), { weekStartsOn: 1 }), 'yyyy-MM-dd')
@@ -446,14 +432,8 @@ export function describeToolCall(name: string, argsJson: string): string {
       return `Start a ${String(args.durationMinutes ?? '?')}-minute focus timer.`;
     case 'stopPomodoroSession':
       return 'Stop the running focus timer.';
-    case 'getTodaysSchedule':
-      return "Read today's shift, events and focus time.";
-    case 'getUpcomingDeadlines':
-      return `Read pending deadlines for the next ${String(args.days ?? 14)} day(s).`;
-    case 'searchLibrary':
-      return `Search the library for “${String(args.query ?? '')}”.`;
     default:
-      return `Run ${name}.`;
+      return describeExtendedToolCall(name, args);
   }
 }
 
@@ -485,7 +465,11 @@ export async function executeTool(name: string, argsJson: string): Promise<ToolE
       return startPomodoroSession(args);
     case 'stopPomodoroSession':
       return stopPomodoroSession();
-    default:
+    default: {
+      // Library / calendar / status functions live in toolsExtended.ts.
+      const extended = await executeExtendedTool(name, args);
+      if (extended) return extended;
       throw new ToolError(`Unknown function “${name}”.`);
+    }
   }
 }

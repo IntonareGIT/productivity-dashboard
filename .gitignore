@@ -5,11 +5,10 @@ dist-ssr
 
 # scratch build/verification output
 *.log
+*.txt
+!tsconfig*.json
 build.flag
 tsc.flag
-tsc.txt
-build.txt
-push.txt
 
 *.local
 .vscode/*

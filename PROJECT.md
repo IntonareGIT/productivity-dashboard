@@ -348,28 +348,74 @@ the same assistant: typing a query appends a dynamic
 `Open AI assistant` is a permanent palette command. Selecting either calls
 `useAssistantStore.getState().ask()` / `.setOpen(true)`.
 
-`src/features/ai/tools.ts` exposes six callable functions. Each performs a
-**real** Dexie/store operation and returns a payload that is fed back to the
-model so it can confirm the outcome in plain language:
+`src/features/ai/tools.ts` and `toolsExtended.ts` expose the callable
+functions. Each performs a **real** Dexie/store operation and returns a
+structured result that is fed back to the model so it can report accurately
+what happened. Shared argument validation lives in `toolRuntime.ts`.
+
+**Lookup — always call these first (read-only)**
+
+| Function | Arguments | Returns |
+| --- | --- | --- |
+| `listSubjects` | — | `id`, `name`, `term` for every subject |
+| `listTopics` | `subjectId` | `id`, `title`, `status` for each topic |
+| `getWeekSchedule` | `weekStartDate` | Per-day resolved schedule incl. PTO + one-off exceptions |
+
+**Read-only**
+
+| Function | Arguments | Returns |
+| --- | --- | --- |
+| `getTodaysSchedule` | — | Today's shift/day-off, events, minutes focused |
+| `getUpcomingDeadlines` | `days` | Assessments + resource due dates in the window |
+| `searchLibrary` | `query` | Topics, notes, resources, assessments by text |
+| `getFocusStats` | `range` (`today`/`week`/`month`) | Total focus time, broken down per subject |
+| `getSubjectProgress` | `subjectId` | Topics by status, % confident, next assessment |
+| `getCurrentStatus` | — | Active status and theme |
+
+**Writes — run immediately, each raises a visible toast**
 
 | Function | Arguments | Real effect |
 | --- | --- | --- |
-| `getTodaysSchedule` | — | Today's shift/day-off, calendar events, minutes focused |
-| `getUpcomingDeadlines` | `days` | Assessments + resource due dates in the window |
-| `searchLibrary` | `query` | Topics, notes, resources, assessments by text |
-| `addOrUpdateWeeklySchedule` | `weekStartDate`, `offDays`, `shiftStartTime`, `shiftLengthHours` | Upserts the roster week via `saveWeeklySchedule` |
-| `startPomodoroSession` | `durationMinutes` | Starts a real timer in `usePomodoroStore` |
+| `setStatus` | `status` | Switches status/theme via `useStatusThemeStore` |
+| `addCalendarEvent` | `title`, `date`, `time`, `category`, `recurrence` | `saveEvent` |
+| `addResourceLink` | `topicId`, `title`, `url` | `saveResource` (kind `link`) |
+| `createSubject` | `name` | `saveSubject` |
+| `createTopic` | `subjectId`, `title` | `saveTopic` |
+| `markTopicStatus` | `topicId`, `status` | Updates the topic row |
+| `addTopicNote` | `topicId`, `title`, `content` | Appends to topic notes |
+| `addAssessment` | `subjectId`, `type`, `date`, `weight` | `saveAssessment` |
+| `startPomodoroSession` | `durationMinutes` | Starts a real timer |
 | `stopPomodoroSession` | — | Stops the running timer |
+
+**Writes — require an explicit Confirm button before running**
+
+| Function | Arguments | Confirm text states |
+| --- | --- | --- |
+| `addOrUpdateWeeklySchedule` | `weekStartDate`, `offDays`, `shiftStartTime`, `shiftLengthHours` | The full roster being written |
+| `addPTO` | `date` | The date and that it replaces the current shift |
+| `addOneOffShiftException` | `date`, `startTime`, `hours` | New start/end and that it replaces the shift |
+| `deleteCalendarEvent` | `eventId` | That it is permanent and cannot be undone |
+
+`CONFIRMATION_TOOL_NAMES` holds exactly those four. They **pause** in the chat
+UI and require Confirm/Cancel before `executeTool` runs — the assistant never
+applies them on its own, even when the request seems unambiguous.
+
+**ID discipline.** The system prompt instructs the model to call
+`listSubjects` / `listTopics` before any function that needs an id, and never
+to guess one. `requireSubject()` / `requireTopic()` reject an unknown id with
+a message telling the model to look it up. If a name matches more than one
+subject or topic, the model is instructed to ask the user which one is meant.
+Duplicate `createSubject` / `createTopic` calls are rejected rather than
+silently duplicating.
 
 Safety model:
 
 - Every action raises a **visible toast** (`useToastStore` / `Toaster`) with a
   one-line summary, so nothing happens silently.
-- `MUTATING_TOOL_NAMES` marks tools that change stored data.
-- `CONFIRMATION_TOOL_NAMES` currently holds `addOrUpdateWeeklySchedule`:
-  schedule-affecting calls **pause** in the chat UI and require an explicit
-  Confirm/Cancel before `executeTool` runs. The assistant never applies a
-  roster change on its own, even when the request seems unambiguous.
+- `MUTATING_TOOL_NAMES` marks every tool that changes stored data.
+- Arguments are validated up front: dates must be `yyyy-MM-dd`, times `HH:mm`,
+  weights 0–100, hours 1–24, enums checked against their allowed values. A bad
+  argument returns a clear error the model can report instead of writing junk.
 
 ### Assistant messages must be stored and replayed verbatim
 
@@ -405,7 +451,10 @@ Regression coverage: `node scripts/verify-thought-signature.mjs` drives the real
 `chatCompletion()` against a mock Gemini endpoint that returns HTTP 400 on an
 unsigned tool call, covering single tool calls, two calls in one turn, chained
 calls, an unsigned provider, legacy history without `raw`, and a confirmed
-gated call.
+gated call. `node scripts/verify-chat-history.mjs` covers the persistence
+rules and `node scripts/verify-extended-tools.mjs` covers every callable
+function (writes reaching Dexie, argument validation, confirmation gating, and
+the confirmation wording).
 
 ### Scope: this is Part 1
 
@@ -568,7 +617,9 @@ the same conversation open.
 │   │   │   ├── aiProviderRepo.ts # provider CRUD + getDefaultProvider()
 │   │   │   ├── aiClient.ts      # OpenAI-compatible chat/completions + tool loop
 │   │   │   ├── chatRepo.ts      # chat sessions/messages (Dexie, verbatim raw)
-│   │   │   ├── tools.ts         # 6 callable functions (real Dexie ops)
+│   │   │   ├── toolRuntime.ts   # shared ToolError + argument validation
+│   │   │   ├── tools.ts         # original tools + merged spec list/dispatch
+│   │   │   ├── toolsExtended.ts # library/calendar/status functions
 │   │   │   ├── types.ts         # ToolSpec / ChatMessage
 │   │   │   └── components/
 │   │   │       ├── AssistantLauncher.tsx   # floating bottom-right button
@@ -769,3 +820,20 @@ the same conversation open.
   panel's Expand button; expanding pushes `/assistant` onto the history stack
   and remembers the originating tab so Back returns there. Under 768px the
   bubble panel now fills the viewport rather than floating.
+
+- **Expanded assistant function set:** the callable surface grew from six to
+  twenty-three functions, split across `tools.ts` (original) and the new
+  `toolsExtended.ts`, with shared validation in `toolRuntime.ts`. New lookup
+  functions `listSubjects` and `listTopics` give the model real ids;
+  read-only reports `getWeekSchedule`, `getFocusStats`, `getSubjectProgress`
+  and `getCurrentStatus`; immediate writes `setStatus`, `addCalendarEvent`,
+  `addResourceLink`, `createSubject`, `createTopic`, `markTopicStatus`,
+  `addTopicNote` and `addAssessment`; and confirmation-gated writes `addPTO`,
+  `addOneOffShiftException` and `deleteCalendarEvent` alongside the existing
+  `addOrUpdateWeeklySchedule`. The system prompt now groups the functions by
+  risk, instructs the model to look ids up rather than guess and to ask the
+  user when a name is ambiguous, and every function validates its arguments
+  (date/time format, enum membership, weight and hour ranges) so a bad request
+  returns a clear error instead of writing bad data. The function-calling loop,
+  the confirmation gate and the verbatim `raw` message storage/replay are
+  unchanged.
