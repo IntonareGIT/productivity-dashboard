@@ -4,6 +4,7 @@ import { Settings2, Palette } from 'lucide-react';
 import { useStatusThemeStore } from '../../stores/useStatusThemeStore';
 import { WeeklySchedulesSettings } from './components/WeeklySchedulesSettings';
 import { PomodoroSettingsSection } from './components/PomodoroSettingsSection';
+import { AiProvidersSettings } from './components/AiProvidersSettings';
 import { DataBackupSection } from './components/DataBackupSection';
 import type { UserStatus, ThemeMode, ColorScheme } from '../../types';
 
@@ -32,6 +33,9 @@ export const SettingsPage: React.FC = () => {
 
       {/* Pomodoro durations and alerts */}
       <PomodoroSettingsSection />
+
+      {/* AI Providers (configurable OpenAI-compatible models) */}
+      <AiProvidersSettings />
 
       {/* Theme to Status Mapping Section */}
       <Card

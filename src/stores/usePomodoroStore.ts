@@ -17,6 +17,8 @@ interface PomodoroStoreState {
   currentSubject: string;     // "what was focused on"
   focusSubjectId: string | null; // optional link to a subject (v5)
   focusTopicId: string | null;   // optional link to a topic (v5)
+  /** Custom length for the running focus phase (AI-started sessions). */
+  focusDurationOverride: number | null;
   settings: PomodoroSettings;
   lastEvent: string | null;
 
@@ -28,6 +30,10 @@ interface PomodoroStoreState {
   setSubject: (subject: string) => void;
   /** Subject/topic picker: stores FKs (persisted on focus sessions) + label. */
   setFocusTarget: (subjectId: string | null, topicId: string | null, label: string) => void;
+  /** Start a focus phase with an explicit length (used by the AI assistant). */
+  startFocusWithDuration: (minutes: number) => void;
+  /** Stop the running timer and return it to idle. */
+  stopTimer: () => void;
   loadSettings: (settings: PomodoroSettings) => void;
 }
 
@@ -116,7 +122,7 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
         focusSubject: s.currentSubject.trim() || 'General Study',
         subjectId: s.focusSubjectId ?? null,
         topicId: s.focusTopicId ?? null,
-        durationMinutes: settings.focusDuration,
+        durationMinutes: s.focusDurationOverride ?? settings.focusDuration,
         sessionType: 'focus',
         completedAt: now.toISOString(),
       };
@@ -148,6 +154,7 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
       totalDuration: nextDur,
       timeLeft: nextDur,
       completedFocusCycles: cycles,
+      focusDurationOverride: null,
       lastEvent: `${eventTitle} — ${eventBody}`,
     });
   };
@@ -175,6 +182,7 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
     currentSubject: 'General Study',
     focusSubjectId: null,
     focusTopicId: null,
+    focusDurationOverride: null,
     settings: defaultPomodoroSettings,
     lastEvent: null,
 
@@ -218,6 +226,7 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
         currentPhase: phase,
         totalDuration: dur,
         timeLeft: dur,
+        focusDurationOverride: null,
       });
     },
 
@@ -251,6 +260,31 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
 
     setFocusTarget: (subjectId, topicId, label) =>
       set({ focusSubjectId: subjectId, focusTopicId: topicId, currentSubject: label }),
+
+    startFocusWithDuration: (minutes) => {
+      const clamped = Math.min(180, Math.max(1, Math.round(minutes)));
+      stopEngine();
+      set({
+        currentPhase: 'focus',
+        isRunning: false,
+        endsAt: null,
+        totalDuration: clamped * 60,
+        timeLeft: clamped * 60,
+        focusDurationOverride: clamped,
+      });
+      get().startTimer();
+    },
+
+    stopTimer: () => {
+      stopEngine();
+      const s = get();
+      set({
+        isRunning: false,
+        endsAt: null,
+        timeLeft: s.totalDuration,
+        focusDurationOverride: null,
+      });
+    },
 
     loadSettings: (settings) => {
       const s = get();

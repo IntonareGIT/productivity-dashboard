@@ -1,5 +1,6 @@
 import Dexie, { type Table } from 'dexie';
 import type {
+  AiProvider,
   Assessment,
   Subject,
   Topic,
@@ -24,6 +25,7 @@ export class ProductivityDB extends Dexie {
   pomodoroSessions!: Table<PomodoroSession, string>;
   themeStatusMap!: Table<ThemeStatusMapping, string>;
   appSettings!: Table<PomodoroSettingsRow, string>;
+  aiProviders!: Table<AiProvider, string>;
 
   constructor() {
     super('ProductivityDashboardDB');
@@ -91,6 +93,11 @@ export class ProductivityDB extends Dexie {
           }
         }
       });
+    // v6: configurable AI providers for the global assistant (Part 1 of the
+    // AI feature — PDF-based subject Q&A is a later phase, out of scope here).
+    this.version(6).stores({
+      aiProviders: 'id, label, isDefault',
+    });
   }
 }
 

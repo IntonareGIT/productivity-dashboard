@@ -20,11 +20,12 @@ any new feature and keep it updated whenever the schema evolves.
 ## 1. Dexie.js Database Schema
 
 Database name: `ProductivityDashboardDB`
-Current version: `5`
+Current version: `6`
 (v3 replaced `shiftConfig` with `weeklySchedules`; v4 added the `subjectId`
 index on `calendarEvents`; v5 adds topic-based library: `topics`,
 `assessments`, topic-level `resources` with file blobs, and
-`subjectId`/`topicId` links on `pomodoroSessions`)
+`subjectId`/`topicId` links on `pomodoroSessions`; v6 adds `aiProviders`,
+the configurable AI provider table backing the global assistant)
 Source: `src/db/db.ts` (interfaces in `src/types/index.ts`)
 
 ```typescript
@@ -57,6 +58,9 @@ db.version(5).upgrade(async (tx) => {
   // One default topic per subject carries the legacy subject.notes;
   // legacy subject-level resources are attached to that topic
   // (keeping subjectId denormalized for fast dashboard queries).
+});
+db.version(6).stores({
+  aiProviders:      'id, label, isDefault',
 });
 ```
 
@@ -294,6 +298,81 @@ export interface PomodoroSettingsRow extends PomodoroSettings {
 Pomodoro durations persist in `appSettings` (row `id: 'pomodoro'`) since
 Phase 5; `PomodoroSettings` above is the canonical shape.
 
+### 1.9 `aiProviders` — configurable AI models (schema v6)
+
+```typescript
+export interface AiProvider {
+  id: string;
+  label: string;        // User-facing name, e.g. "Gemini Flash"
+  baseUrl: string;      // OpenAI-compatible root, no /chat/completions suffix
+  apiKey: string;       // Empty on first run — user must paste a key
+  modelName: string;    // e.g. 'gemini-2.0-flash'
+  isDefault: boolean;   // Exactly one provider is default at a time
+  createdAt: string;    // ISO 8601
+  updatedAt: string;    // ISO 8601
+}
+```
+
+**No vendor is hardcoded in feature code.** Every AI feature resolves its
+endpoint through `getDefaultProvider()` in
+`src/features/ai/aiProviderRepo.ts`, which returns the `isDefault` row (falling
+back to the oldest row). Switching providers is therefore a Settings-only
+change — no code edits. `buildChatCompletionsUrl()` appends
+`/chat/completions` and `stripChatCompletionsSuffix()` tolerates a pasted URL
+that already includes it.
+
+On first run `initializeDatabaseDefaults()` seeds exactly one default row
+pointing at Gemini's OpenAI-compatible endpoint
+(`https://generativelanguage.googleapis.com/v1beta/openai`, model
+`gemini-2.0-flash`) with an **empty apiKey**, so the assistant stays disabled
+until the user supplies a key. Any OpenAI-compatible endpoint (OpenRouter,
+Groq, Ollama, LM Studio, …) can be added via "+ Add model".
+
+`providerIsReady()` requires base URL, API key and model name to be non-empty;
+when it returns false the launcher/panel are disabled with a pointer to
+Settings. Keys are stored in plain IndexedDB like all other local data.
+
+---
+
+## 1.10 Global AI Assistant (function calling)
+`AssistantLauncher` (floating, bottom-right, every page) opens
+`AssistantPanel`. Both are mounted once in `App.tsx` alongside the
+`Toaster`. The Ctrl+K command palette also routes natural-language input into
+the same assistant: typing a query appends a dynamic
+`Ask Assistant: "<query>"` action to the filtered command list, and
+`Open AI assistant` is a permanent palette command. Selecting either calls
+`useAssistantStore.getState().ask()` / `.setOpen(true)`.
+
+`src/features/ai/tools.ts` exposes six callable functions. Each performs a
+**real** Dexie/store operation and returns a payload that is fed back to the
+model so it can confirm the outcome in plain language:
+
+| Function | Arguments | Real effect |
+| --- | --- | --- |
+| `getTodaysSchedule` | — | Today's shift/day-off, calendar events, minutes focused |
+| `getUpcomingDeadlines` | `days` | Assessments + resource due dates in the window |
+| `searchLibrary` | `query` | Topics, notes, resources, assessments by text |
+| `addOrUpdateWeeklySchedule` | `weekStartDate`, `offDays`, `shiftStartTime`, `shiftLengthHours` | Upserts the roster week via `saveWeeklySchedule` |
+| `startPomodoroSession` | `durationMinutes` | Starts a real timer in `usePomodoroStore` |
+| `stopPomodoroSession` | — | Stops the running timer |
+
+Safety model:
+
+- Every action raises a **visible toast** (`useToastStore` / `Toaster`) with a
+  one-line summary, so nothing happens silently.
+- `MUTATING_TOOL_NAMES` marks tools that change stored data.
+- `CONFIRMATION_TOOL_NAMES` currently holds `addOrUpdateWeeklySchedule`:
+  schedule-affecting calls **pause** in the chat UI and require an explicit
+  Confirm/Cancel before `executeTool` runs. The assistant never applies a
+  roster change on its own, even when the request seems unambiguous.
+
+### Scope: this is Part 1
+
+PDF-based subject Q&A is **Part 2 and intentionally out of scope** for this
+pass. It requires a separate text-extraction pipeline (PDF → chunked text,
+plus embeddings/indexing) before the assistant can meaningfully reference
+uploaded lecture files in `resources`.
+
 ---
 
 ## 2. Folder Structure
@@ -364,15 +443,26 @@ Phase 5; `PomodoroSettings` above is the canonical shape.
 │   │   │   ├── FocusPage.tsx     # large circular countdown + controls
 │   │   │   └── components/
 │   │   │       └── SessionLog.tsx  # collapsed Dexie session history
+│   │   ├── ai/                  # global AI assistant (schema v6, Part 1)
+│   │   │   ├── aiProviderRepo.ts # provider CRUD + getDefaultProvider()
+│   │   │   ├── aiClient.ts      # OpenAI-compatible chat/completions + tool loop
+│   │   │   ├── tools.ts         # 6 callable functions (real Dexie ops)
+│   │   │   ├── types.ts         # ToolSpec / ChatMessage
+│   │   │   └── components/
+│   │   │       ├── AssistantLauncher.tsx  # floating bottom-right button
+│   │   │       └── AssistantPanel.tsx     # chat UI + confirmation gate
 │   │   └── settings/            # Phase 6: theme map, shifts, export/import
 │   │       ├── SettingsPage.tsx
 │   │       └── components/
 │   │           ├── WeeklySchedulesSettings.tsx
 │   │           ├── PomodoroSettingsSection.tsx
+│   │           ├── AiProvidersSettings.tsx  # add/edit/default/test providers
 │   │           └── DataBackupSection.tsx
 │   ├── stores/
 │   │   ├── useStatusThemeStore.ts   # status/theme/colorScheme (Zustand)
-│   │   └── usePomodoroStore.ts      # active timer state (Zustand)
+│   │   ├── usePomodoroStore.ts      # active timer state (Zustand)
+│   │   ├── useAssistantStore.ts     # chat transcript, tool loop, confirmation
+│   │   └── useToastStore.ts         # transient action-confirmation toasts
 │   ├── styles/
 │   │   ├── index.css             # Tailwind layers + base styles
 │   │   └── themes.css            # 4 themes x light/dark CSS variables
@@ -508,3 +598,26 @@ Phase 5; `PomodoroSettings` above is the canonical shape.
   grouped by subject. `db/backup.ts` exports all 10 tables (schemaVersion 5,
   file blobs stripped from JSON). Cascade delete covers topics, resources,
   assessments, linked events; pomodoro sessions are unlinked, not deleted.
+
+- **Global AI Assistant (schema v6, AI Part 1):** added the `aiProviders`
+  table (label, baseUrl, apiKey, modelName, isDefault) and a Settings "AI
+  Providers" section that lists providers, adds/edits/deletes them via
+  "+ Add model", marks one default and offers a per-provider "Test
+  Connection". First run seeds one default Gemini row against its
+  OpenAI-compatible endpoint with an empty `apiKey`; until a key is present
+  every AI affordance is disabled with a pointer to Settings. No vendor is
+  hardcoded in feature code — `getDefaultProvider()` is the single lookup, so
+  switching providers is a Settings-only change. A floating `AssistantLauncher`
+  (bottom-right, every page) opens `AssistantPanel`, and the Ctrl+K command
+  palette feeds natural-language queries into the same assistant via a dynamic
+  `Ask Assistant: "<query>"` action plus an "Open AI assistant" command. The
+  assistant uses OpenAI-style function calling over six tools that perform
+  real Dexie/store operations and return their result to the model for a
+  plain-language confirmation: `getTodaysSchedule`, `getUpcomingDeadlines`,
+  `searchLibrary`, `addOrUpdateWeeklySchedule`, `startPomodoroSession` and
+  `stopPomodoroSession`. Every executed action raises a visible toast, and
+  `addOrUpdateWeeklySchedule` is confirmation-gated in the chat UI so roster
+  changes never apply without explicit approval. `db/backup.ts` exports
+  `aiProviders` (schemaVersion 6). **Scope note:** this is Part 1 only —
+  PDF-based subject Q&A is a later phase requiring a separate text-extraction
+  and indexing pipeline before uploaded lecture files can be referenced.

@@ -136,3 +136,20 @@ export interface PomodoroSettings {
 export interface PomodoroSettingsRow extends PomodoroSettings {
   id: string;
 }
+
+/**
+ * Configurable AI provider (schema v6) — the global assistant always reads
+ * whichever row is marked `isDefault`. Feature code never hardcodes a vendor:
+ * any OpenAI-compatible endpoint works by changing baseUrl/modelName.
+ */
+export interface AiProvider {
+  id: string;          // UUID primary key
+  label: string;       // Display name, e.g. "Gemini Flash", "OpenRouter Free"
+  baseUrl: string;     // OpenAI-compatible base URL (no trailing /chat/completions)
+  apiKey: string;      // Secret key; empty = not configured yet
+  modelName: string;   // Model id sent in the request body
+  isDefault: boolean;  // Exactly one provider is default at a time
+  createdAt: string;   // ISO 8601
+  updatedAt: string;   // ISO 8601
+}
+

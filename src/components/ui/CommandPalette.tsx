@@ -11,11 +11,13 @@ import {
   Play,
   Search,
   Settings2,
+  Sparkles,
   Timer,
 } from 'lucide-react';
 import { db } from '../../db/db';
 import { setOverrideForDate, clearOverrideForDate } from '../../features/shifts/shiftsRepo';
 import { usePomodoroStore } from '../../stores/usePomodoroStore';
+import { useAssistantStore } from '../../stores/useAssistantStore';
 import type { NavTab } from '../layout/Sidebar';
 
 interface CommandPaletteProps {
@@ -110,6 +112,17 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
           });
         },
       },
+      {
+        id: 'toggle-ai-assistant',
+        group: 'AI Assistant',
+        label: 'Open AI assistant',
+        hint: 'Assistant',
+        icon: Sparkles,
+        run: () => {
+          onClose();
+          useAssistantStore.getState().setOpen(true);
+        },
+      },
     ];
 
     const navItems: { id: NavTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
@@ -137,11 +150,27 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const trimmed = query.trim();
+
     if (!q) return commands;
-    return commands.filter(
+
+    const matched = commands.filter(
       (c) => c.label.toLowerCase().includes(q) || c.group.toLowerCase().includes(q)
     );
-  }, [commands, query]);
+
+    const askAssistantCommand: Command = {
+      id: 'ai-assistant-ask',
+      group: 'AI Assistant',
+      label: `Ask Assistant: "${trimmed}"`,
+      icon: Sparkles,
+      run: () => {
+        onClose();
+        useAssistantStore.getState().ask(trimmed);
+      },
+    };
+
+    return [...matched, askAssistantCommand];
+  }, [commands, query, onClose]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {

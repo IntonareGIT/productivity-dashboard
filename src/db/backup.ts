@@ -2,7 +2,7 @@ import type { Table } from 'dexie';
 import { format } from 'date-fns';
 import { db } from './db';
 
-/** Every table in the Dexie schema (v5) — must match PROJECT.md. */
+/** Every table in the Dexie schema (v6) — must match PROJECT.md. */
 export const BACKUP_TABLES = [
   'subjects',
   'topics',
@@ -14,6 +14,7 @@ export const BACKUP_TABLES = [
   'pomodoroSessions',
   'themeStatusMap',
   'appSettings',
+  'aiProviders',
 ] as const;
 
 export type BackupTable = (typeof BACKUP_TABLES)[number];
@@ -37,13 +38,16 @@ export async function exportAllData(): Promise<void> {
     const rows = await (db.table(table) as Table).toArray();
     if (table === 'resources') {
       data[table] = (rows as Record<string, unknown>[]).map((r) => ({ ...r, blob: undefined }));
+    } else if (table === 'aiProviders') {
+      // API keys never leave the device in a JSON backup — re-enter on restore.
+      data[table] = (rows as Record<string, unknown>[]).map((r) => ({ ...r, apiKey: '' }));
     } else {
       data[table] = rows;
     }
   }
   const payload: BackupPayload = {
     app: 'personal-productivity-dashboard',
-    schemaVersion: 5,
+    schemaVersion: 6,
     exportedAt: new Date().toISOString(),
     data,
   };
@@ -106,6 +110,13 @@ export async function importAllData(file: File): Promise<ImportResult> {
           }
           return r;
         });
+      }
+      if (table === 'aiProviders' && Array.isArray(raw)) {
+        // Keys are stripped on export; keep the local device's keys intact on
+        // import by forcing an empty key for rows coming from the file.
+        rows = (raw as Record<string, unknown>[]).map((r) =>
+          r && typeof r === 'object' ? { ...r, apiKey: '' } : r
+        );
       }
       await (db.table(table) as Table).clear();
       if (rows.length > 0) {
