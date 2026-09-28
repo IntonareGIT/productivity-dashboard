@@ -366,6 +366,42 @@ Safety model:
   Confirm/Cancel before `executeTool` runs. The assistant never applies a
   roster change on its own, even when the request seems unambiguous.
 
+### Assistant messages must be stored and replayed verbatim
+
+Gemini 3 attaches a `thought_signature` to every tool call. In the
+OpenAI-compatible response it arrives at
+`tool_calls[i].extra_content.google.thought_signature`, and Gemini rejects the
+follow-up request with **HTTP 400 "Function call is missing a
+thought_signature in functionCall parts"** if it is absent.
+
+So the assistant message is kept exactly as the provider returned it:
+
+- `chatCompletion()` returns `raw` — `choices[0].message`, untouched.
+- The store stores it on `ChatMessage.raw`.
+- `toWire()` forwards `raw` verbatim for any assistant turn that has tool
+  calls, instead of rebuilding it from `id`/`name`/`arguments`. Rebuilding is
+  what silently dropped the signature and caused the 400.
+
+This holds for every turn of the tool loop: multiple tool calls in one turn,
+and chained calls after results, each keep their own signature. Providers that
+send no signature (OpenRouter, Groq, Ollama, …) are unaffected — the message
+is sent as-is and **no placeholder values are invented**.
+
+Two related invariants the same loop depends on:
+
+- A tool result must carry a matching `tool_call_id`. A confirmation-gated call
+  stores its `callId` on `pending` so the result written after the user
+  approves stays paired.
+- History is trimmed with `trimHistory()`, never a bare `slice(-N)`, which
+  could cut between a `tool_calls` message and the results answering it.
+  `trimHistory()` walks back to the parent turn so the sequence is never split.
+
+Regression coverage: `node scripts/verify-thought-signature.mjs` drives the real
+`chatCompletion()` against a mock Gemini endpoint that returns HTTP 400 on an
+unsigned tool call, covering single tool calls, two calls in one turn, chained
+calls, an unsigned provider, legacy history without `raw`, and a confirmed
+gated call.
+
 ### Scope: this is Part 1
 
 PDF-based subject Q&A is **Part 2 and intentionally out of scope** for this

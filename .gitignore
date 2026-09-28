@@ -3,6 +3,12 @@ dist
 dist-ssr
 *.tsbuildinfo
 
+# scratch build/verification output
+*.log
+build.flag
+tsc.txt
+build.txt
+
 *.local
 .vscode/*
 !.vscode/extensions.json

@@ -16,6 +16,40 @@ import { toast } from './useToastStore';
 
 const MAX_TOOL_ROUNDS = 4;
 
+/**
+ * Cap retained history without ever splitting a tool-call sequence.
+ *
+ * A naive `slice(-N)` can cut between an assistant message carrying
+ * `tool_calls` and the `tool` messages answering it. Providers reject that
+ * sequence (unpaired tool_call_id / missing thought_signature), so we walk
+ * backwards and, on hitting an orphaned tool result, pull its parent
+ * assistant turn back in as well.
+ */
+function trimHistory(transcript: ChatMessage[], max: number): ChatMessage[] {
+  if (transcript.length <= max) return transcript;
+
+  const answered = new Set(
+    transcript.filter((m) => m.role === 'tool' && m.toolCallId).map((m) => m.toolCallId as string)
+  );
+
+  let start = transcript.length - max;
+  // Extend backwards until the cut point is not the middle of a tool sequence.
+  for (let guard = 0; guard < transcript.length; guard += 1) {
+    const m = transcript[start];
+    if (m && m.role === 'tool' && m.toolCallId) {
+      const parent = transcript.findIndex(
+        (c) => c.role === 'assistant' && c.toolCalls?.some((tc) => tc.id === m.toolCallId)
+      );
+      // -1 means the parent already fell out of the window; drop the orphan
+      // result too rather than sending an unanswerable sequence.
+      start = parent >= 0 ? parent : start + 1;
+    }
+    if (start === 0 || !answered.has((transcript[start - 1]?.toolCallId ?? ''))) break;
+  }
+
+  return transcript.slice(Math.max(0, start));
+}
+
 function systemPrompt(now: Date): string {
   return [
     'You are a helpful in-app assistant for a personal productivity dashboard.',
@@ -44,6 +78,12 @@ interface PendingCall {
   name: string;
   argsText: string;
   description: string;
+  /**
+   * Id of the gated tool call this confirmation resolves. Required so the tool
+   * result we append afterwards carries a matching `tool_call_id` — Gemini
+   * rejects an unpaired tool message.
+   */
+  callId: string;
 }
 
 interface AssistantState {
@@ -145,10 +185,15 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
             break;
           }
 
+          // Keep the provider's message object verbatim. Gemini 3 rejects the
+          // follow-up request with HTTP 400 "Function call is missing a
+          // thought_signature" if we rebuild this and drop
+          // extra_content.google.thought_signature.
           const assistantMsg: ChatMessage = {
             role: 'assistant',
             content: result.content,
             toolCalls: result.toolCalls,
+            raw: result.raw,
           };
           transcript = [...transcript, assistantMsg];
 
@@ -161,6 +206,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
                 name: first.name,
                 argsText: first.arguments,
                 description: describeToolCall(first.name, first.arguments),
+                callId: first.id,
               },
             });
             pushView({ role: 'tool', toolName: first.name, text: describeToolCall(first.name, first.arguments), pending: true });
@@ -197,7 +243,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
           }
         }
 
-        set({ history: transcript.slice(-40) });
+        set({ history: trimHistory(transcript, 40) });
       } catch (err) {
         pushView({
           role: 'assistant',
@@ -223,6 +269,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         const toolMsg: ChatMessage = {
           role: 'tool',
           content: JSON.stringify({ ok: true, result: exec.data }),
+          toolCallId: pending.callId,
           name: pending.name,
           display: exec.summary,
         };
@@ -248,7 +295,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         const reply = followUp.content.trim() || exec.summary;
         pushView({ role: 'assistant', text: reply });
         const replyMsg: ChatMessage = { role: 'assistant', content: reply };
-        set({ history: [...transcript, replyMsg].slice(-40) });
+        set({ history: trimHistory([...transcript, replyMsg], 40) });
       } catch (err) {
         pushView({
           role: 'assistant',

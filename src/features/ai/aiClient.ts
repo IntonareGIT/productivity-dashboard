@@ -21,19 +21,42 @@ export class AiRequestError extends Error {
 export interface ChatCompletionResult {
   content: string;
   toolCalls: ToolCall[];
+  /**
+   * `choices[0].message` verbatim. When tool calls are present this MUST be
+   * echoed back unchanged on the next request so provider-specific fields
+   * (Gemini's `thought_signature`, etc.) survive. See ChatMessage.raw.
+   */
+  raw: Record<string, unknown>;
 }
 
 interface WireMessage {
   role: string;
-  content: string | null;
+  content?: string | null;
   tool_calls?: { id: string; type: 'function'; function: { name: string; arguments: string } }[];
   tool_call_id?: string;
   name?: string;
+  [key: string]: unknown;
 }
 
+/**
+ * Serialize stored messages for the wire.
+ *
+ * Assistant turns that requested tools are forwarded VERBATIM from `raw` when
+ * we have it. Rebuilding them would strip unknown fields such as Gemini's
+ * `extra_content.google.thought_signature`, which makes the follow-up request
+ * fail with HTTP 400. Providers that send no signature simply have nothing
+ * extra to carry, so passing the message through as-is is correct for them
+ * too — we never synthesize placeholder values.
+ */
 function toWire(messages: ChatMessage[]): WireMessage[] {
   return messages.map((m) => {
     if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+      if (m.raw) {
+        // Unchanged pass-through of the provider's own message object.
+        return { ...m.raw } as WireMessage;
+      }
+      // Fallback for histories that predate signature capture (e.g. restored
+      // from an older backup) and never went through a provider response.
       return {
         role: 'assistant',
         content: m.content ? m.content : null,
@@ -154,5 +177,5 @@ export async function chatCompletion(opts: {
     });
   }
 
-  return { content: readContent(message.content), toolCalls };
+  return { content: readContent(message.content), toolCalls, raw: message };
 }
