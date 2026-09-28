@@ -28,7 +28,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 pb-16 md:pb-0">
-        <TopBar />
+        <TopBar onSelectTab={onSelectTab} />
         <main className="flex-1 p-4 md:p-6 max-w-7xl w-full mx-auto overflow-y-auto">
           {children}
         </main>

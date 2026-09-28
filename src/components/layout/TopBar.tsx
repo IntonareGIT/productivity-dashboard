@@ -10,9 +10,15 @@ import {
   Gamepad2 
 } from 'lucide-react';
 import { useStatusThemeStore } from '../../stores/useStatusThemeStore';
+import { ProfileMenu } from './ProfileMenu';
+import type { NavTab } from './Sidebar';
 import type { UserStatus } from '../../types';
 
-export const TopBar: React.FC = () => {
+interface TopBarProps {
+  onSelectTab: (tab: NavTab) => void;
+}
+
+export const TopBar: React.FC<TopBarProps> = ({ onSelectTab }) => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
@@ -45,10 +51,10 @@ export const TopBar: React.FC = () => {
         </span>
       </div>
 
-      {/* Right side: Status Selector Pill & Color Mode Toggle */}
+      {/* Right side: Status Selector Pill & Color Mode Toggle (desktop only) */}
       <div className="flex items-center space-x-2 sm:space-x-3">
-        {/* Status Dropdown Pill */}
-        <div className="relative">
+        {/* Status Dropdown Pill — hidden under 768px; the profile menu has it. */}
+        <div className="relative hidden md:block">
           <button
             onClick={() => setDropdownOpen(!dropdownOpen)}
             className="flex items-center space-x-2 px-3 py-1.5 rounded-full text-xs font-medium bg-bg-elevated hover:bg-border transition-colors border border-border"
@@ -90,11 +96,11 @@ export const TopBar: React.FC = () => {
           )}
         </div>
 
-        {/* Light/Dark Toggle */}
+        {/* Light/Dark Toggle — desktop only; the profile menu has it on mobile. */}
         <button
           onClick={toggleColorScheme}
           aria-label="Toggle Light/Dark Theme"
-          className="p-1.5 rounded-lg text-content-secondary hover:text-content-primary hover:bg-bg-elevated transition-colors border border-transparent hover:border-border"
+          className="hidden md:inline-flex p-1.5 rounded-lg text-content-secondary hover:text-content-primary hover:bg-bg-elevated transition-colors border border-transparent hover:border-border"
         >
           {colorScheme === 'dark' ? (
             <Sun className="w-4 h-4 text-amber-400" />
@@ -102,6 +108,9 @@ export const TopBar: React.FC = () => {
             <Moon className="w-4 h-4 text-slate-700" />
           )}
         </button>
+
+        {/* Profile avatar + menu — visible at every width. */}
+        <ProfileMenu onNavigate={onSelectTab} />
       </div>
     </header>
   );

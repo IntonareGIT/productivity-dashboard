@@ -635,7 +635,8 @@ the same conversation open.
 │   │   ├── layout/
 │   │   │   ├── AppLayout.tsx    # sidebar + top bar + content + bottom nav
 │   │   │   ├── Sidebar.tsx      # desktop collapsible nav (md+)
-│   │   │   ├── TopBar.tsx       # clock + status selector + light/dark toggle
+│   │   │   ├── TopBar.tsx       # clock + status pill (md+) + ProfileMenu
+│   │   │   ├── ProfileMenu.tsx  # avatar + account/status/theme menu
 │   │   │   └── BottomNav.tsx    # mobile nav (< md)
 │   │   └── ui/
 │   │       ├── Card.tsx
@@ -712,6 +713,8 @@ the same conversation open.
 │   │           ├── AiProvidersSettings.tsx  # add/edit/default/test providers
 │   │           ├── ChatHistorySettings.tsx   # clear all chat history
 │   │           ├── SyncSettings.tsx          # Dexie Cloud sign in / status / out
+│   │           ├── SyncAccountPanel.tsx      # shared account+sync UI (menu + settings)
+│   │           ├── useCloudAccount.ts        # single source of truth for account state
 │   │           └── DataBackupSection.tsx
 │   ├── stores/
 │   │   ├── useStatusThemeStore.ts   # status/theme/colorScheme (Zustand)
@@ -932,3 +935,33 @@ the same conversation open.
   Sync adds sign in, live status, and a guarded sign out (acknowledgement
   checkbox, export-first option, blocked while sync is incomplete).
   **`dexie-cloud.key` is a secret: never commit it.**
+
+### 1.14 Profile menu (top bar)
+
+`src/components/layout/ProfileMenu.tsx` — an avatar button at the far right of
+the top bar that opens Account / Current status / Theme, plus a Settings link.
+
+- **Avatar.** First letter of the account email when signed in, a generic
+  person icon otherwise, with a small dot for sync state (green synced, pulsing
+  syncing, amber offline, red error, neutral signed out) and an accessible
+  `aria-label` that states the signed-in email.
+- **Layout.** A dropdown anchored to the avatar on desktop; a full-width bottom
+  sheet under 768px. Closes on outside click, on Escape (returning focus to the
+  trigger), and after any option that navigates. Uses `menu` / `menuitem` /
+  `menuitemradio` roles for keyboard and screen-reader support.
+- **Shared account state.** Both the menu and Settings → Sync render
+  `SyncAccountPanel`, which reads one `useCloudAccount()` hook
+  (`src/features/settings/components/useCloudAccount.ts`). There is a single
+  subscription to the Dexie Cloud observables and no duplicated account state
+  or sign-out rules. Settings keeps the diagnostics disclosure; the menu does
+  not.
+- **Status.** The four statuses as radio items; picking one calls the same
+  `setStatus()` the top-bar pill uses, so the mapped theme is applied.
+- **Theme.** Swatches call `updateMapping(currentStatus, theme, colorScheme)`,
+  which applies immediately and persists until the next status change — at which
+  point that status's mapped theme takes over, matching existing behaviour. A
+  light/dark toggle and a "Change status to theme mapping" link (which navigates
+  to Settings) sit below.
+- **Top bar.** The status pill and the standalone light/dark button are now
+  `hidden md:*`, since the menu provides both on small screens. The avatar stays
+  visible at every width, and `TopBar` receives `onSelectTab` to navigate.
