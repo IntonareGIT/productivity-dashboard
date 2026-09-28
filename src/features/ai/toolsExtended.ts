@@ -113,7 +113,7 @@ export const EXTENDED_TOOL_SPECS: ToolSpec[] = [
     type: 'function',
     function: {
       name: 'getCurrentStatus',
-      description: 'The user status currently selected in the top bar, and the theme it maps to.',
+      description: 'The currently selected status (Studying/Working/Researching/Playing) and the theme it maps to.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },

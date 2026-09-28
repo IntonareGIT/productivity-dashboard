@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card } from '../../components/ui/Card';
-import { Settings2, Palette } from 'lucide-react';
+import { Settings2, Palette, Check } from 'lucide-react';
 import { useStatusThemeStore } from '../../stores/useStatusThemeStore';
 import { WeeklySchedulesSettings } from './components/WeeklySchedulesSettings';
 import { PomodoroSettingsSection } from './components/PomodoroSettingsSection';
@@ -11,9 +11,17 @@ import { DataBackupSection } from './components/DataBackupSection';
 import type { UserStatus, ThemeMode, ColorScheme } from '../../types';
 
 export const SettingsPage: React.FC = () => {
-  const { mappings, updateMapping } = useStatusThemeStore();
+  const { mappings, updateMapping, currentStatus, setStatus } = useStatusThemeStore();
 
   const statuses: UserStatus[] = ['Studying', 'Working', 'Researching', 'Playing'];
+  /** Swatch per status, matching the profile menu. */
+  const STATUS_SWATCH: Record<UserStatus, string> = {
+    Studying: 'bg-indigo-500',
+    Working: 'bg-zinc-500',
+    Researching: 'bg-teal-500',
+    Playing: 'bg-amber-500',
+  };
+
   const themeOptions: { value: ThemeMode; label: string; desc: string }[] = [
     { value: 'studying', label: 'Cool Blue / Indigo', desc: 'Default for Studying' },
     { value: 'working', label: 'Neutral Slate / Graphite', desc: 'Default for Working' },
@@ -48,8 +56,38 @@ export const SettingsPage: React.FC = () => {
       {/* Theme to Status Mapping Section */}
       <Card
         title="Status to Theme Mapping"
-        subtitle="Map which color theme automatically activates when you switch your status in the top bar"
+        subtitle="Choose your current status, and map each status to the theme it activates"
       >
+        {/* Current status selector — the same store action the profile menu uses,
+            so changing status here and there stay in sync. */}
+        <div className="mb-4 pb-4 border-b border-border/40">
+          <p className="text-xs font-semibold text-content-primary mb-1.5">Current status</p>
+          <p className="text-[11px] text-content-tertiary mb-2">
+            Selecting a status applies its mapped theme immediately.
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {statuses.map((s) => {
+              const active = currentStatus === s;
+              return (
+                <button
+                  key={s}
+                  onClick={() => void setStatus(s)}
+                  aria-pressed={active}
+                  className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-xs font-medium transition-colors ${
+                    active
+                      ? 'border-accent bg-accent-subtle text-accent-text'
+                      : 'border-border text-content-secondary hover:bg-bg-elevated hover:text-content-primary'
+                  }`}
+                >
+                  <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${STATUS_SWATCH[s]}`} />
+                  <span className="flex-1 text-left">{s}</span>
+                  {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="space-y-4 divide-y divide-border/40">
           {statuses.map((status) => {
             const current = mappings[status] || {

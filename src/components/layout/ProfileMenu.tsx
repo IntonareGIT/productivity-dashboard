@@ -6,19 +6,18 @@ import { SyncAccountPanel } from '../../features/settings/components/SyncAccount
 import type { NavTab } from '../layout/Sidebar';
 import type { ThemeMode, UserStatus } from '../../types';
 
-const STATUSES: { value: UserStatus; color: string }[] = [
-  { value: 'Studying', color: 'bg-indigo-500' },
-  { value: 'Working', color: 'bg-zinc-500' },
-  { value: 'Researching', color: 'bg-teal-500' },
-  { value: 'Playing', color: 'bg-amber-500' },
-];
-
 const THEMES: { value: ThemeMode; label: string; swatch: string }[] = [
   { value: 'studying', label: 'Indigo', swatch: 'bg-indigo-500' },
   { value: 'working', label: 'Slate', swatch: 'bg-zinc-500' },
   { value: 'researching', label: 'Teal', swatch: 'bg-teal-500' },
   { value: 'playing', label: 'Amber', swatch: 'bg-amber-500' },
 ];
+
+const STATUSES: UserStatus[] = ['Studying', 'Working', 'Researching', 'Playing'];
+
+/** Swatch class for a theme, so each status can show the theme it maps to. */
+const themeSwatch = (t: ThemeMode) =>
+  THEMES.find((x) => x.value === t)?.swatch ?? 'bg-content-tertiary';
 
 const DOT: Record<string, string> = {
   ok: 'bg-emerald-500',
@@ -47,8 +46,12 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ onNavigate }) => {
 
   const { state } = useCloudAccount();
   const {
-    currentStatus, setStatus, currentTheme, colorScheme, toggleColorScheme, updateMapping,
+    currentStatus, setStatus, currentTheme, colorScheme, toggleColorScheme, updateMapping, mappings,
   } = useStatusThemeStore();
+
+  // An override is active when the visible theme differs from the one the
+  // current status maps to.
+  const overrideActive = currentTheme !== (mappings[currentStatus]?.theme ?? 'studying');
 
   // Close on outside click and on Escape (returns focus to the trigger).
   useEffect(() => {
@@ -77,6 +80,10 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ onNavigate }) => {
 
   const initial = state.signedIn && state.email ? state.email.charAt(0).toUpperCase() : null;
 
+  // The top bar no longer names the status, so surface it on the avatar.
+  const who = state.signedIn && state.email ? state.email : 'not signed in';
+  const avatarLabel = `Profile, ${currentStatus}${state.signedIn ? `, ${who}` : ''} — ${state.status}`;
+
   const sectionTitle = 'px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider font-semibold text-content-tertiary';
   const row = 'w-full text-left px-3 py-2 text-xs flex items-center gap-2.5 rounded-lg transition-colors';
 
@@ -87,8 +94,10 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ onNavigate }) => {
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={state.signedIn ? `Account menu, signed in as ${state.email}` : 'Account menu, not signed in'}
-        className="relative w-9 h-9 rounded-full bg-bg-elevated border border-border hover:border-accent transition-colors flex items-center justify-center text-xs font-semibold text-content-primary"
+        aria-label={avatarLabel}
+        title={avatarLabel}
+        // Ring is tinted with the active theme's swatch.
+        className={`relative w-9 h-9 rounded-full bg-bg-elevated border-2 ${themeSwatch(currentTheme)} hover:brightness-110 transition-[filter] flex items-center justify-center text-xs font-semibold text-content-primary`}
       >
         {initial ? initial : <UserRound className="w-4 h-4 text-content-secondary" />}
         <span
@@ -117,50 +126,74 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ onNavigate }) => {
               <SyncAccountPanel variant="plain" showDiagnostics={false} />
             </div>
 
-            {/* (b) Current status */}
-            <div className={`${sectionTitle} border-t border-border/60 pt-3`}>Current status</div>
-            {STATUSES.map((s) => (
-              <button
-                key={s.value}
-                role="menuitemradio"
-                aria-checked={currentStatus === s.value}
-                onClick={() => void setStatus(s.value)}
-                className={`${row} ${
-                  currentStatus === s.value
-                    ? 'bg-accent-subtle text-accent-text font-medium'
-                    : 'text-content-secondary hover:bg-bg-elevated hover:text-content-primary'
-                }`}
-              >
-                <span className={`w-2 h-2 rounded-full shrink-0 ${s.color}`} />
-                <span className="flex-1">{s.value}</span>
-                {currentStatus === s.value && <Check className="w-3.5 h-3.5 shrink-0" />}
-              </button>
-            ))}
+            {/* (b) + (c) + (d) Mood and theme */}
+            <div className={`${sectionTitle} border-t border-border/60 pt-3`}>Mood and theme</div>
+            {STATUSES.map((s) => {
+              // Each status shows the swatch of the theme it is mapped to.
+              const mapped = mappings[s]?.theme ?? 'studying';
+              const active = currentStatus === s;
+              return (
+                <button
+                  key={s}
+                  role="menuitemradio"
+                  aria-checked={active}
+                  onClick={() => void setStatus(s)}
+                  className={`${row} ${
+                    active
+                      ? 'bg-accent-subtle text-accent-text font-medium'
+                      : 'text-content-secondary hover:bg-bg-elevated hover:text-content-primary'
+                  }`}
+                >
+                  <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${themeSwatch(mapped)}`} />
+                  <span className="flex-1">{s}</span>
+                  {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+                </button>
+              );
+            })}
 
-            {/* (c) Theme */}
-            <div className={`${sectionTitle} border-t border-border/60 pt-3`}>Theme</div>
-            <div className="grid grid-cols-2 gap-1.5 px-3">
+            {/* Override colors — applies a theme without changing the status. */}
+            <div className="px-3 pt-2.5 pb-1 text-[10px] uppercase tracking-wider font-semibold text-content-tertiary">
+              Override colors
+            </div>
+            <div className="grid grid-cols-4 gap-1.5 px-3">
               {THEMES.map((t) => (
                 <button
                   key={t.value}
                   role="menuitemradio"
                   aria-checked={currentTheme === t.value}
+                  title={t.label}
+                  aria-label={`Override colors with ${t.label} theme`}
                   onClick={() => {
-                    // Applies immediately and persists until the status changes,
-                    // at which point that status's mapped theme takes over.
+                    // Applies immediately, leaves the status alone, and stays
+                    // until the user next picks a status.
                     void updateMapping(currentStatus, t.value, colorScheme);
                   }}
-                  className={`flex items-center gap-2 px-2 py-2 rounded-lg text-xs border transition-colors ${
+                  className={`flex items-center justify-center p-2 rounded-lg border transition-colors ${
                     currentTheme === t.value
-                      ? 'border-accent bg-accent-subtle text-accent-text font-medium'
-                      : 'border-border text-content-secondary hover:bg-bg-elevated'
+                      ? 'border-accent bg-accent-subtle'
+                      : 'border-border hover:bg-bg-elevated'
                   }`}
                 >
-                  <span className={`w-3.5 h-3.5 rounded-full shrink-0 ${t.swatch}`} />
-                  {t.label}
+                  <span className={`w-5 h-5 rounded-full shrink-0 ${t.swatch}`} />
                 </button>
               ))}
             </div>
+
+            {overrideActive && (
+              <div className="mx-3 mt-2 rounded-lg border border-accent/40 bg-accent-subtle px-2.5 py-2">
+                <p className="text-[11px] text-content-primary">
+                  Using custom theme — not the “{currentStatus}” theme.
+                </p>
+                <button
+                  role="menuitem"
+                  onClick={() => void setStatus(currentStatus)}
+                  className="mt-1.5 text-[11px] font-semibold text-accent underline underline-offset-2"
+                >
+                  Back to status theme
+                </button>
+              </div>
+            )}
+
             <button
               role="menuitem"
               onClick={toggleColorScheme}

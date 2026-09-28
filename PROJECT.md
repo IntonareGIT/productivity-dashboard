@@ -635,7 +635,7 @@ the same conversation open.
 │   │   ├── layout/
 │   │   │   ├── AppLayout.tsx    # sidebar + top bar + content + bottom nav
 │   │   │   ├── Sidebar.tsx      # desktop collapsible nav (md+)
-│   │   │   ├── TopBar.tsx       # clock + status pill (md+) + ProfileMenu
+│   │   │   ├── TopBar.tsx       # clock + light/dark toggle + ProfileMenu
 │   │   │   ├── ProfileMenu.tsx  # avatar + account/status/theme menu
 │   │   │   └── BottomNav.tsx    # mobile nav (< md)
 │   │   └── ui/
@@ -939,12 +939,14 @@ the same conversation open.
 ### 1.14 Profile menu (top bar)
 
 `src/components/layout/ProfileMenu.tsx` — an avatar button at the far right of
-the top bar that opens Account / Current status / Theme, plus a Settings link.
+the top bar that opens Account / **Mood and theme**, plus a Settings link.
 
 - **Avatar.** First letter of the account email when signed in, a generic
   person icon otherwise, with a small dot for sync state (green synced, pulsing
-  syncing, amber offline, red error, neutral signed out) and an accessible
-  `aria-label` that states the signed-in email.
+  syncing, amber offline, red error, neutral signed out). Since the top bar no
+  longer names the status, the avatar's `aria-label` and `title` read e.g.
+  "Profile, Studying — Synced", and its **ring is tinted with the active theme's
+  swatch**.
 - **Layout.** A dropdown anchored to the avatar on desktop; a full-width bottom
   sheet under 768px. Closes on outside click, on Escape (returning focus to the
   trigger), and after any option that navigates. Uses `menu` / `menuitem` /
@@ -955,13 +957,29 @@ the top bar that opens Account / Current status / Theme, plus a Settings link.
   subscription to the Dexie Cloud observables and no duplicated account state
   or sign-out rules. Settings keeps the diagnostics disclosure; the menu does
   not.
-- **Status.** The four statuses as radio items; picking one calls the same
-  `setStatus()` the top-bar pill uses, so the mapped theme is applied.
-- **Theme.** Swatches call `updateMapping(currentStatus, theme, colorScheme)`,
-  which applies immediately and persists until the next status change — at which
-  point that status's mapped theme takes over, matching existing behaviour. A
-  light/dark toggle and a "Change status to theme mapping" link (which navigates
-  to Settings) sit below.
-- **Top bar.** The status pill and the standalone light/dark button are now
-  `hidden md:*`, since the menu provides both on small screens. The avatar stays
-  visible at every width, and `TopBar` receives `onSelectTab` to navigate.
+
+**"Mood and theme" section** (replaces the old separate Status / Theme rows):
+
+- The four statuses as radio rows, each showing a **swatch of the theme it is
+  currently mapped to** (read from `mappings[status]`, not a hardcoded colour).
+  Picking one calls `setStatus()`, which sets the status and applies its mapped
+  theme — the same action the removed top-bar pill used.
+- **"Override colors"**: a row of theme swatches that applies a theme
+  immediately *without changing the status*, via
+  `updateMapping(currentStatus, theme, colorScheme)`. It stays until the user
+  next picks a status.
+- When an override is active (`currentTheme !== mappings[currentStatus].theme`),
+  a "Using custom theme" note appears with a **"Back to status theme"** button
+  that re-applies the current status's mapped theme.
+- The light/dark toggle and the "Change status to theme mapping" link remain in
+  this section.
+
+**Status can be changed in exactly two places:** the profile menu, and the
+"Current status" selector at the top of the **Settings → Status to Theme
+Mapping** card. Both call the same `setStatus()` store action, so they cannot
+drift out of sync.
+
+**Top bar.** The status pill/dropdown was removed entirely (all leftover state,
+markup and `lucide-react` imports deleted). What remains is the clock, the
+light/dark toggle, and the profile avatar at every width.
+
