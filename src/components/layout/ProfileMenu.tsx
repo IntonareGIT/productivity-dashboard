@@ -46,7 +46,8 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ onNavigate }) => {
 
   const { state } = useCloudAccount();
   const {
-    currentStatus, setStatus, currentTheme, colorScheme, toggleColorScheme, updateMapping, mappings,
+    currentStatus, setStatus, currentTheme, colorScheme, toggleColorScheme, mappings, themeOverride,
+    setThemeOverride, clearThemeOverride,
   } = useStatusThemeStore();
 
   // An override is active when the visible theme differs from the one the
@@ -137,7 +138,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ onNavigate }) => {
                   key={s}
                   role="menuitemradio"
                   aria-checked={active}
-                  onClick={() => void setStatus(s)}
+                  onClick={() => setStatus(s)}
                   className={`${row} ${
                     active
                       ? 'bg-accent-subtle text-accent-text font-medium'
@@ -163,11 +164,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ onNavigate }) => {
                   aria-checked={currentTheme === t.value}
                   title={t.label}
                   aria-label={`Override colors with ${t.label} theme`}
-                  onClick={() => {
-                    // Applies immediately, leaves the status alone, and stays
-                    // until the user next picks a status.
-                    void updateMapping(currentStatus, t.value, colorScheme);
-                  }}
+                  onClick={() => setThemeOverride(t.value)}
                   className={`flex items-center justify-center p-2 rounded-lg border transition-colors ${
                     currentTheme === t.value
                       ? 'border-accent bg-accent-subtle'
@@ -186,7 +183,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ onNavigate }) => {
                 </p>
                 <button
                   role="menuitem"
-                  onClick={() => void setStatus(currentStatus)}
+                  onClick={clearThemeOverride}
                   className="mt-1.5 text-[11px] font-semibold text-accent underline underline-offset-2"
                 >
                   Back to status theme

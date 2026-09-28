@@ -1,7 +1,8 @@
 import React from 'react';
 import { Card } from '../../components/ui/Card';
-import { Settings2, Palette, Check } from 'lucide-react';
-import { useStatusThemeStore } from '../../stores/useStatusThemeStore';
+import { Settings2, Palette, Check, RotateCcw } from 'lucide-react';
+import { useStatusThemeStore, defaultMappingFor } from '../../stores/useStatusThemeStore';
+import { useThemeStatusMap } from '../../hooks/useThemeStatusMap';
 import { WeeklySchedulesSettings } from './components/WeeklySchedulesSettings';
 import { PomodoroSettingsSection } from './components/PomodoroSettingsSection';
 import { AiProvidersSettings } from './components/AiProvidersSettings';
@@ -11,7 +12,8 @@ import { DataBackupSection } from './components/DataBackupSection';
 import type { UserStatus, ThemeMode, ColorScheme } from '../../types';
 
 export const SettingsPage: React.FC = () => {
-  const { mappings, updateMapping, currentStatus, setStatus } = useStatusThemeStore();
+  const { mappings, currentStatus, setStatus } = useStatusThemeStore();
+  const { rows, saveMapping, resetMapping } = useThemeStatusMap();
 
   const statuses: UserStatus[] = ['Studying', 'Working', 'Researching', 'Playing'];
   /** Swatch per status, matching the profile menu. */
@@ -90,11 +92,10 @@ export const SettingsPage: React.FC = () => {
 
         <div className="space-y-4 divide-y divide-border/40">
           {statuses.map((status) => {
-            const current = mappings[status] || {
-              status,
-              theme: status.toLowerCase() as ThemeMode,
-              colorScheme: 'dark' as ColorScheme,
-            };
+            // Effective value: the synced DB row if one exists, else the code
+            // default. `isDefault` drives the "Reset to default" affordance.
+            const current = mappings[status] ?? defaultMappingFor(status);
+            const isDefault = !rows?.some((r) => r.status === status);
 
             return (
               <div
@@ -114,13 +115,7 @@ export const SettingsPage: React.FC = () => {
                 <div className="flex items-center space-x-3">
                   <select
                     value={current.theme}
-                    onChange={(e) =>
-                      updateMapping(
-                        status,
-                        e.target.value as ThemeMode,
-                        current.colorScheme
-                      )
-                    }
+                    onChange={(e) => void saveMapping(status, e.target.value as ThemeMode)}
                     className="bg-bg-elevated border border-border text-content-primary text-xs rounded-xl px-3 py-2 outline-none focus:border-accent cursor-pointer"
                   >
                     {themeOptions.map((opt) => (
@@ -130,20 +125,17 @@ export const SettingsPage: React.FC = () => {
                     ))}
                   </select>
 
-                  <select
-                    value={current.colorScheme}
-                    onChange={(e) =>
-                      updateMapping(
-                        status,
-                        current.theme,
-                        e.target.value as ColorScheme
-                      )
-                    }
-                    className="bg-bg-elevated border border-border text-content-primary text-xs rounded-xl px-3 py-2 outline-none focus:border-accent cursor-pointer"
-                  >
-                    <option value="dark">Dark Mode</option>
-                    <option value="light">Light Mode</option>
-                  </select>
+                  {isDefault ? (
+                    <span className="text-[11px] text-content-tertiary px-1">Default</span>
+                  ) : (
+                    <button
+                      onClick={() => void resetMapping(status)}
+                      className="inline-flex items-center gap-1.5 px-3 min-h-[44px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      Reset to default
+                    </button>
+                  )}
                 </div>
               </div>
             );

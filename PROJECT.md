@@ -559,17 +559,62 @@ device — each device configures its own key. Nothing else is device-specific.
 so bytes are offloaded to remote storage on first sync. The upload UI warns
 above 20 MB because that first sync is slow.
 
-**Seeding rules** (`src/db/defaultData.ts`) — synced tables must never be
-blindly populated, or a fresh device would overwrite synced rows with defaults:
+**Seeding rules** (`src/db/defaultData.ts`):
 
-1. Insert a default row **only when that row is missing**; never overwrite.
-2. Only fixed/deterministic primary keys.
-3. Run on first run when signed out, and again on the first `syncComplete`
-   after signing in.
+- `themeStatusMap` and `appSettings` are **not seeded at all**. They are synced
+  tables, and a client writing defaults can overwrite an account's real values.
+  Their code defaults (`defaultThemeStatusMappings`, `defaultPomodoroSettings`)
+  are merged **in memory** instead: the DB row wins, the code default is the
+  fallback. A row is written only when the user changes the setting, and
+  **"Reset to default"** deletes the row so the code default applies again.
+- The pomodoro row is only seeded on a device that is *not* signed in, so a
+  fresh local start still works.
+- `aiProviders` is still seeded (it is unsynced, so it cannot reach another
+  account) and uses a fixed id.
 
 **Service worker.** `vite-plugin-pwa` precaches only same-origin build assets
 and `runtimeCaching` is empty, so Dexie Cloud requests are never cached or
 intercepted. Offline use is unaffected.
+
+### 1.13.1 Status / theme: what is per-device vs synced
+
+These are two separate concerns and were previously conflated, which caused
+lost selections and cross-device theme leakage.
+
+**Per-device UI preference — `localStorage`, never synced.** Keys
+`pd.status`, `pd.themeOverride`, `pd.colorScheme`:
+
+| Preference | Notes |
+| --- | --- |
+| Current status | Fallback `'Studying'` when nothing is saved |
+| Theme override | "Override colors"; `null` = follow the mapped theme |
+| Light/dark | Was previously written into the synced mapping row |
+
+They are read **synchronously at module load** and `applyToDocument()` runs
+before React mounts, so there is no flash of the default theme. Every change
+writes straight back.
+
+**Synced — Dexie `themeStatusMap`.** The status → theme mapping, read through
+`useThemeStatusMap()` (`src/hooks/useThemeStatusMap.ts`), a `useLiveQuery` on
+`db.themeStatusMap`. A change made in Settings, or arriving from another
+device's sync, updates the store and re-applies the theme with no reload.
+
+Store rules (`src/stores/useStatusThemeStore.ts`):
+
+- `setStatus` persists the status, **clears any override**, and applies the
+  newly mapped theme.
+- `setThemeOverride` applies a theme without changing the status; it persists
+  until the user next picks a status.
+- `clearThemeOverride` re-applies the active status's mapped theme — this is
+  what the "Back to status theme" button calls.
+- `toggleColorScheme` is per-device only; it no longer writes the synced row.
+- `setMappings` merges rows over the code defaults, **ignores a row's
+  `colorScheme`** (legacy, so a synced row cannot flip another device's
+  light/dark), skips unknown values, and re-applies the active status's theme
+  **unless an override is active**.
+- Existing `colorScheme` values on stored rows are neither migrated nor
+  rewritten, and no `Version.upgrade()` is used on synced tables.
+
 
 **Settings → Sync** offers sign in, the signed-in email, live status
 (synced / syncing / offline / error) and sign out. Signing out erases the local
@@ -645,7 +690,7 @@ the same conversation open.
 │   │   ├── db.ts                # Dexie instance, table definitions, db.cloud.configure()
 │   │   ├── cloudConfig.ts       # Dexie Cloud URL, unsyncedTables, blobMode
 │   │   ├── backup.ts            # export/import all tables as one JSON file
-│   │   └── defaultData.ts       # first-run seeding (insert-if-missing only)
+│   │   └── defaultData.ts       # aiProviders seed + code defaults (synced tables not seeded)
 │   ├── components/
 │   │   ├── layout/ ... (as above)
 │   │   └── ui/
@@ -716,8 +761,10 @@ the same conversation open.
 │   │           ├── SyncAccountPanel.tsx      # shared account+sync UI (menu + settings)
 │   │           ├── useCloudAccount.ts        # single source of truth for account state
 │   │           └── DataBackupSection.tsx
+│   ├── hooks/
+│   │   └── useThemeStatusMap.ts    # live status->theme mapping (synced) + save/reset
 │   ├── stores/
-│   │   ├── useStatusThemeStore.ts   # status/theme/colorScheme (Zustand)
+│   │   ├── useStatusThemeStore.ts   # per-device status/override/scheme + mapping (Zustand)
 │   │   ├── usePomodoroStore.ts      # active timer state (Zustand)
 │   │   ├── useAssistantStore.ts     # chat transcript, tool loop, confirmation
 │   │   └── useToastStore.ts         # transient action-confirmation toasts

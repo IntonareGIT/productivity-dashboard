@@ -16,9 +16,19 @@ import { AssistantPage } from './features/ai/components/AssistantPage';
 import { providerIsReady } from './features/ai/aiProviderRepo';
 import { useAssistantStore } from './stores/useAssistantStore';
 import { useStatusThemeStore } from './stores/useStatusThemeStore';
+import { useThemeStatusMap } from './hooks/useThemeStatusMap';
+import { defaultPomodoroSettings } from './db/defaultData';
 import { usePomodoroStore } from './stores/usePomodoroStore';
 import { initializeDatabaseDefaults } from './db/defaultData';
 import { db } from './db/db';
+import type { PomodoroSettingsRow, PomodoroSettings } from './types';
+
+/** Drop the singleton `id` from an appSettings row. */
+function stripId(row: PomodoroSettingsRow): PomodoroSettings {
+  const { id: _id, ...settings } = row;
+  void _id;
+  return settings;
+}
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
@@ -30,9 +40,10 @@ export const App: React.FC = () => {
   // Bumped whenever "New event" runs from the palette; CalendarPage opens
   // its event modal for today when this changes.
   const [quickAddEventNonce, setQuickAddEventNonce] = useState(0);
-  const initTheme = useStatusThemeStore((s) => s.initTheme);
   const loadPomodoroSettings = usePomodoroStore((s) => s.loadSettings);
   const refreshAssistantProvider = useAssistantStore((s) => s.refreshProvider);
+  // Live status -> theme mapping (synced); re-applies the theme when it changes.
+  useThemeStatusMap();
 
   // Reactive: true once a default provider exists with base URL, key and model.
   // Keeps the launcher/panel disabled-state correct after Settings edits.
@@ -108,13 +119,10 @@ export const App: React.FC = () => {
     //  - signed in         -> wait for the first sync to finish, so this device
     //                         can only fill gaps, never overwrite synced rows.
     const applySettings = async () => {
-      initTheme();
-      // Apply stored pomodoro durations to the timer engine.
+      // Apply stored pomodoro durations to the timer engine (falls back to the
+      // code defaults when the synced row has not arrived yet).
       const row = await db.appSettings.get('pomodoro');
-      if (row) {
-        const { id: _id, ...settings } = row;
-        loadPomodoroSettings(settings);
-      }
+      loadPomodoroSettings(row ? stripId(row) : defaultPomodoroSettings);
     };
 
     const cloud = db.cloud;
@@ -148,7 +156,7 @@ export const App: React.FC = () => {
       cancelled = true;
       sub.unsubscribe();
     };
-  }, [initTheme, loadPomodoroSettings]);
+  }, [loadPomodoroSettings]);
 
   const renderContent = () => {
     switch (activeTab) {
