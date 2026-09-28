@@ -130,4 +130,8 @@ db.cloud?.configure({
   databaseUrl: DEXIE_CLOUD_URL,
   unsyncedTables: [...UNSYNCED_TABLES],
   blobMode: BLOB_MODE,
+  // This app ships its own service worker (vite-plugin-pwa generateSW) for
+  // offline precaching. The addon's service-worker transport expects a
+  // Dexie-Cloud-specific worker, so opt out and use plain fetch/WebSocket.
+  tryUseServiceWorker: false,
 });

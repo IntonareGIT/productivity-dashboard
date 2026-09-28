@@ -577,6 +577,16 @@ database, so it requires an explicit acknowledgement checkbox, offers an
 "Export backup first" button, and is blocked entirely while sync is
 incomplete (offline, syncing or error) to avoid losing unpushed changes.
 
+> **Login state must be read from `db.cloud.currentUser.value.isLoggedIn`,**
+> never from `db.cloud.currentUserId`. `currentUserId` is a non-empty string
+> even for the anonymous/private realm, so testing it for truthiness reports a
+> never-signed-in user as signed in and "synced" (the local database is trivially
+> in sync with itself). The panel also carries a Diagnostics disclosure showing
+> logged-in yes/no, the user id, the cloud host and `window.location.origin`.
+> `tryUseServiceWorker: false` is set because this app ships its own
+> vite-plugin-pwa service worker; the addon's SW transport needs a
+> Dexie-Cloud-specific worker.
+
 ### Conflict resolution for same-key rows
 
 Dexie Cloud is **server-authoritative**: the server re-executes operations with

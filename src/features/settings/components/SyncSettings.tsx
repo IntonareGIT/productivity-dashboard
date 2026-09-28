@@ -3,24 +3,25 @@ import { Cloud, CloudOff, Download, LogIn, LogOut, RefreshCw, TriangleAlert } fr
 import { Card } from '../../../components/ui/Card';
 import { db } from '../../../db/db';
 import { exportAllData } from '../../../db/backup';
-import { UNSYNCED_TABLES } from '../../../db/cloudConfig';
+import { DEXIE_CLOUD_URL, UNSYNCED_TABLES } from '../../../db/cloudConfig';
 import { toast } from '../../../stores/useToastStore';
 
 interface CloudState {
   signedIn: boolean;
   email: string | null;
-  /** Human label: Synced / Syncing / Offline / Sync error / Local only. */
+  /** Human label. Never claims "Synced" while signed out. */
   status: string;
   tone: 'ok' | 'busy' | 'warn' | 'error' | 'muted';
   /** True while the cloud still has work to push or pull. */
   pendingWork: boolean;
+  /** Login or sync error, shown on screen rather than swallowed. */
   errorMessage: string | null;
 }
 
 const IDLE: CloudState = {
   signedIn: false,
   email: null,
-  status: 'Local only',
+  status: 'Not signed in',
   tone: 'muted',
   pendingWork: false,
   errorMessage: null,
@@ -37,22 +38,50 @@ export const SyncSettings: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [confirmingOut, setConfirmingOut] = useState(false);
   const [ackErase, setAckErase] = useState(false);
+  // Login/sign-out/sync failures are shown in the panel, not only as a toast.
+  const [localError, setLocalError] = useState<string | null>(null);
+  // Diagnostics: the addon's real user id, cloud host and this page's origin.
+  const [diag, setDiag] = useState({ userId: '—', cloudHost: '—', origin: '—', loggedIn: false });
 
   useEffect(() => {
     const cloud = db.cloud;
     if (!cloud) return;
 
+    // Static diagnostics: which cloud we are pointed at, and where from.
+    try {
+      setDiag((d) => ({
+        ...d,
+        cloudHost: new URL(DEXIE_CLOUD_URL).host,
+        origin: typeof window !== 'undefined' ? window.location.origin : '—',
+      }));
+    } catch {
+      setDiag((d) => ({ ...d, cloudHost: 'invalid URL' }));
+    }
+
     const read = () => {
-      const userId = cloud.currentUserId;
-      const email = cloud.currentUser?.value?.email ?? null;
+      const user = cloud.currentUser?.value;
+      // IMPORTANT: `cloud.currentUserId` is a non-empty string even for the
+      // anonymous/private realm, so it must NOT be used as the signed-in test.
+      // `isLoggedIn` is the addon's real flag and is only true after login.
+      const signedIn = user?.isLoggedIn === true;
+      const email = signedIn ? (user?.email ?? null) : null;
       const sync = cloud.syncState?.value;
 
-      if (!userId) {
-        setState({ ...IDLE, email });
+      if (!signedIn) {
+        // Anonymous: local-only. Never report a sync phase as if it were synced.
+        setState({ ...IDLE, errorMessage: null });
+        setDiag((d) => ({
+          ...d,
+          loggedIn: false,
+          // Still report the realm/userId the addon assigned, so it is visible
+          // that an anonymous identity exists (and is not a real login).
+          userId: user?.userId ?? '—',
+        }));
         return;
       }
 
       // phase: initial | not-in-sync | pushing | pulling | in-sync | error | offline
+      setDiag((d) => ({ ...d, loggedIn: true, userId: user?.userId ?? '—' }));
       switch (sync?.phase) {
         case 'in-sync':
           setState({ signedIn: true, email, status: 'Synced', tone: 'ok', pendingWork: false, errorMessage: null });
@@ -90,10 +119,17 @@ export const SyncSettings: React.FC = () => {
 
   const signIn = async () => {
     setBusy(true);
+    setLocalError(null);
     try {
+      // login() drives the addon's own email + code dialog. On success the
+      // addon begins syncing, but we ask for an explicit sync too so the first
+      // pull completes promptly and the panel leaves "Syncing…".
       await db.cloud?.login();
-    } catch {
-      toast('error', 'Sign-in failed', 'Could not reach Dexie Cloud. Check your connection.');
+      await db.cloud?.sync().catch(() => undefined);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Could not reach Dexie Cloud.';
+      setLocalError(message);
+      toast('error', 'Sign-in failed', message);
     } finally {
       setBusy(false);
     }
@@ -101,12 +137,15 @@ export const SyncSettings: React.FC = () => {
 
   const signOut = async () => {
     setBusy(true);
+    setLocalError(null);
     try {
       await db.cloud?.logout({ force: true });
       setConfirmingOut(false);
       setAckErase(false);
-    } catch {
-      toast('error', 'Sign-out failed', 'Try again, or clear site data in your browser.');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Try again, or clear site data in your browser.';
+      setLocalError(message);
+      toast('error', 'Sign-out failed', message);
     } finally {
       setBusy(false);
     }
@@ -114,10 +153,13 @@ export const SyncSettings: React.FC = () => {
 
   const syncNow = async () => {
     setBusy(true);
+    setLocalError(null);
     try {
       await db.cloud?.sync();
-    } catch {
-      toast('error', 'Sync failed', 'You appear to be offline. Changes are kept locally.');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'You appear to be offline. Changes are kept locally.';
+      setLocalError(message);
+      toast('error', 'Sync failed', message);
     } finally {
       setBusy(false);
     }
@@ -144,15 +186,17 @@ export const SyncSettings: React.FC = () => {
               <p className="text-xs text-content-secondary truncate">Signed in as {state.email}</p>
             )}
             {!state.signedIn && (
-              <p className="text-xs text-content-secondary">Not signed in — data stays on this device only.</p>
+              <p className="text-xs text-content-secondary">
+                Not signed in — data stays on this device only. Sign in to enable sync.
+              </p>
             )}
           </div>
         </div>
 
-        {state.errorMessage && (
+        {(localError || state.errorMessage) && (
           <p className="text-xs text-rose-500 flex items-start gap-1.5">
             <TriangleAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-            {state.errorMessage}
+            {localError ?? state.errorMessage}
           </p>
         )}
 
@@ -219,6 +263,30 @@ export const SyncSettings: React.FC = () => {
         <p className="text-[11px] text-content-tertiary">
           Never synced (kept per-device): {UNSYNCED_TABLES.join(', ')}.
         </p>
+
+        <details className="text-[11px] text-content-tertiary">
+          <summary className="cursor-pointer select-none">Diagnostics</summary>
+          <dl className="mt-1.5 space-y-0.5 font-mono break-all">
+            <div className="flex gap-1.5">
+              <dt>logged in:</dt>
+              <dd className={diag.loggedIn ? 'text-emerald-500' : 'text-amber-500'}>
+                {diag.loggedIn ? 'yes' : 'no'}
+              </dd>
+            </div>
+            <div className="flex gap-1.5">
+              <dt>user id:</dt>
+              <dd>{diag.userId}</dd>
+            </div>
+            <div className="flex gap-1.5">
+              <dt>cloud:</dt>
+              <dd>{diag.cloudHost}</dd>
+            </div>
+            <div className="flex gap-1.5">
+              <dt>origin:</dt>
+              <dd>{diag.origin}</dd>
+            </div>
+          </dl>
+        </details>
       </div>
     </Card>
   );

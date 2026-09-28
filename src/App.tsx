@@ -124,8 +124,10 @@ export const App: React.FC = () => {
       return;
     }
 
-    if (!cloud.currentUserId) {
-      // Never signed in: safe to seed defaults locally.
+    // `currentUserId` is a non-empty string even for the anonymous realm, so
+    // the real test is the addon's isLoggedIn flag.
+    if (!cloud.currentUser?.value?.isLoggedIn) {
+      // Not logged in (anonymous): safe to seed defaults locally.
       initializeDatabaseDefaults().then(applySettings);
       return;
     }
