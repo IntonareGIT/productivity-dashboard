@@ -10,7 +10,9 @@ import type {
   ShiftOverride,
   PomodoroSession,
   ThemeStatusMapping,
-  PomodoroSettingsRow
+  PomodoroSettingsRow,
+  ChatSession,
+  ChatMessageRow
 } from '../types';
 import { newId } from '../utils/id';
 
@@ -26,6 +28,8 @@ export class ProductivityDB extends Dexie {
   themeStatusMap!: Table<ThemeStatusMapping, string>;
   appSettings!: Table<PomodoroSettingsRow, string>;
   aiProviders!: Table<AiProvider, string>;
+  chatSessions!: Table<ChatSession, string>;
+  chatMessages!: Table<ChatMessageRow, string>;
 
   constructor() {
     super('ProductivityDashboardDB');
@@ -97,6 +101,12 @@ export class ProductivityDB extends Dexie {
     // AI feature — PDF-based subject Q&A is a later phase, out of scope here).
     this.version(6).stores({
       aiProviders: 'id, label, isDefault',
+    });
+    // v7: persistent assistant chat history. Messages are stored with their
+    // raw provider payload so Gemini thought_signatures survive a reload.
+    this.version(7).stores({
+      chatSessions: 'id, updatedAt, providerId',
+      chatMessages: 'id, sessionId, createdAt',
     });
   }
 }

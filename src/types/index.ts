@@ -153,3 +153,50 @@ export interface AiProvider {
   updatedAt: string;   // ISO 8601
 }
 
+/**
+ * A chat conversation with the assistant (schema v7).
+ *
+ * `providerId` pins the session to the provider that produced it. Gemini's
+ * `thought_signature` is provider-specific, so replaying one provider's
+ * messages against another is invalid — the app starts a fresh session
+ * instead of resending them.
+ */
+export interface ChatSession {
+  id: string;          // UUID primary key
+  title: string;       // Derived from the first user message
+  providerId: string | null; // FK -> AiProvider.id that this session belongs to
+  createdAt: string;   // ISO 8601
+  updatedAt: string;   // ISO 8601 (bumped on every stored message)
+}
+
+/**
+ * One stored chat message (schema v7).
+ *
+ * `raw` is the message object EXACTLY as sent to / received from the provider
+ * and must be replayed verbatim on later turns — see ChatMessage.raw in
+ * src/features/ai/types.ts for the Gemini thought_signature constraint. The
+ * normalized fields exist only for rendering and filtering; they are never a
+ * substitute for `raw`.
+ *
+ * API keys are never written here: only request/response message payloads are
+ * persisted, and the Authorization header is not part of a message.
+ */
+export interface ChatMessageRow {
+  id: string;          // UUID primary key
+  sessionId: string;   // FK -> ChatSession.id
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;     // Text for the UI; '' for pure tool-call turns
+  /** Full message object as sent/received, including extra_content. */
+  raw: Record<string, unknown>;
+  /** Tool-call ids this message requests (assistant turns). */
+  toolCallIds?: string[];
+  /** The tool call this message answers (tool turns). */
+  toolCallId?: string | null;
+  /** Function name, for the "action" chips in the UI. */
+  toolName?: string | null;
+  /** Short human summary of a tool result (UI only). */
+  display?: string | null;
+  error?: boolean;
+  createdAt: string;   // ISO 8601
+}
+

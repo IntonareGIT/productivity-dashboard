@@ -5,6 +5,7 @@ import { useStatusThemeStore } from '../../stores/useStatusThemeStore';
 import { WeeklySchedulesSettings } from './components/WeeklySchedulesSettings';
 import { PomodoroSettingsSection } from './components/PomodoroSettingsSection';
 import { AiProvidersSettings } from './components/AiProvidersSettings';
+import { ChatHistorySettings } from './components/ChatHistorySettings';
 import { DataBackupSection } from './components/DataBackupSection';
 import type { UserStatus, ThemeMode, ColorScheme } from '../../types';
 
@@ -36,6 +37,9 @@ export const SettingsPage: React.FC = () => {
 
       {/* AI Providers (configurable OpenAI-compatible models) */}
       <AiProvidersSettings />
+
+      {/* Assistant conversation history */}
+      <ChatHistorySettings />
 
       {/* Theme to Status Mapping Section */}
       <Card

@@ -6,8 +6,10 @@ dist-ssr
 # scratch build/verification output
 *.log
 build.flag
+tsc.flag
 tsc.txt
 build.txt
+push.txt
 
 *.local
 .vscode/*

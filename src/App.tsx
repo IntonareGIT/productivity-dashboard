@@ -12,6 +12,7 @@ import { FocusPage } from './features/focus/FocusPage';
 import { SettingsPage } from './features/settings/SettingsPage';
 import { AssistantLauncher } from './features/ai/components/AssistantLauncher';
 import { AssistantPanel } from './features/ai/components/AssistantPanel';
+import { AssistantPage } from './features/ai/components/AssistantPage';
 import { providerIsReady } from './features/ai/aiProviderRepo';
 import { useAssistantStore } from './stores/useAssistantStore';
 import { useStatusThemeStore } from './stores/useStatusThemeStore';
@@ -22,6 +23,10 @@ import { db } from './db/db';
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // True while the full-page assistant (/assistant) is shown.
+  const [assistantPage, setAssistantPage] = useState(false);
+  // Tab to restore when leaving the full-page assistant.
+  const [returnTab, setReturnTab] = useState<NavTab>('dashboard');
   // Bumped whenever "New event" runs from the palette; CalendarPage opens
   // its event modal for today when this changes.
   const [quickAddEventNonce, setQuickAddEventNonce] = useState(0);
@@ -42,9 +47,43 @@ export const App: React.FC = () => {
   // The assistant's "not configured" affordances jump straight to Settings.
   const openAssistantSettings = useCallback(() => {
     setPaletteOpen(false);
+    setAssistantPage(false);
     useAssistantStore.getState().setOpen(false);
     setActiveTab('settings');
   }, []);
+
+  // Expand the bubble into the full-page assistant, remembering where to return.
+  const openAssistantPage = useCallback(() => {
+    setReturnTab(activeTab);
+    setPaletteOpen(false);
+    useAssistantStore.getState().setOpen(true);
+    setAssistantPage(true);
+    window.history.pushState({ assistant: true }, '', '/assistant');
+  }, [activeTab]);
+
+  const closeAssistantPage = useCallback(() => {
+    setAssistantPage(false);
+    setActiveTab(returnTab);
+  }, [returnTab]);
+
+  // Collapse the full page back into the floating bubble.
+  const collapseToBubble = useCallback(() => {
+    setAssistantPage(false);
+    setActiveTab(returnTab);
+    useAssistantStore.getState().setOpen(true);
+  }, [returnTab]);
+
+  // Browser back closes the full-page assistant rather than leaving the app.
+  useEffect(() => {
+    const onPop = () => {
+      if (assistantPage) {
+        setAssistantPage(false);
+        setActiveTab(returnTab);
+      }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [assistantPage, returnTab]);
 
   // Global Ctrl/Cmd+K shortcut for the command palette.
   useEffect(() => {
@@ -96,20 +135,30 @@ export const App: React.FC = () => {
 
   return (
     <AppLayout activeTab={activeTab} onSelectTab={setActiveTab}>
-      {renderContent()}
-      <CommandPalette
-        open={paletteOpen}
-        onClose={() => setPaletteOpen(false)}
-        onNavigate={setActiveTab}
-        onNewEvent={handleNewEventFromPalette}
-      />
+      {assistantPage ? (
+        <AssistantPage
+          onOpenSettings={openAssistantSettings}
+          onExit={closeAssistantPage}
+          onCollapse={collapseToBubble}
+        />
+      ) : (
+        <>
+          {renderContent()}
+          <CommandPalette
+            open={paletteOpen}
+            onClose={() => setPaletteOpen(false)}
+            onNavigate={setActiveTab}
+            onNewEvent={handleNewEventFromPalette}
+          />
 
-      {/* Global AI assistant: floating launcher (every page) + chat panel. */}
-      <AssistantLauncher configured={assistantConfigured} onOpenSettings={openAssistantSettings} />
-      <AssistantPanel onOpenSettings={openAssistantSettings} />
+          {/* Global AI assistant: floating launcher (every page) + chat panel. */}
+          <AssistantLauncher configured={assistantConfigured} onOpenSettings={openAssistantSettings} />
+          <AssistantPanel onOpenSettings={openAssistantSettings} onExpand={openAssistantPage} />
 
-      {/* Action confirmations raised by the assistant's function calls. */}
-      <Toaster />
+          {/* Action confirmations raised by the assistant's function calls. */}
+          <Toaster />
+        </>
+      )}
     </AppLayout>
   );
 };

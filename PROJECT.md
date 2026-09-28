@@ -20,12 +20,13 @@ any new feature and keep it updated whenever the schema evolves.
 ## 1. Dexie.js Database Schema
 
 Database name: `ProductivityDashboardDB`
-Current version: `6`
+Current version: `7`
 (v3 replaced `shiftConfig` with `weeklySchedules`; v4 added the `subjectId`
 index on `calendarEvents`; v5 adds topic-based library: `topics`,
 `assessments`, topic-level `resources` with file blobs, and
 `subjectId`/`topicId` links on `pomodoroSessions`; v6 adds `aiProviders`,
-the configurable AI provider table backing the global assistant)
+the configurable AI provider table backing the global assistant; v7 adds
+`chatSessions` / `chatMessages` for persistent assistant chat history)
 Source: `src/db/db.ts` (interfaces in `src/types/index.ts`)
 
 ```typescript
@@ -61,6 +62,10 @@ db.version(5).upgrade(async (tx) => {
 });
 db.version(6).stores({
   aiProviders:      'id, label, isDefault',
+});
+db.version(7).stores({
+  chatSessions:     'id, updatedAt, providerId',
+  chatMessages:     'id, sessionId, createdAt',
 });
 ```
 
@@ -409,6 +414,86 @@ pass. It requires a separate text-extraction pipeline (PDF → chunked text,
 plus embeddings/indexing) before the assistant can meaningfully reference
 uploaded lecture files in `resources`.
 
+### 1.11 Persistent chat history (schema v7)
+
+```typescript
+export interface ChatSession {
+  id: string;
+  title: string;                // from the first user message, or user-set
+  providerId: string | null;    // FK -> AiProvider.id that produced it
+  createdAt: string;
+  updatedAt: string;            // bumped on every stored message
+}
+
+export interface ChatMessageRow {
+  id: string;
+  sessionId: string;            // FK -> ChatSession.id
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;              // prose for the UI; '' on pure tool-call turns
+  raw: Record<string, unknown>; // FULL message as sent/received, incl. extra_content
+  toolCallIds?: string[];       // assistant turns: which calls it requested
+  toolCallId?: string | null;   // tool turns: which call this answers
+  toolName?: string | null;
+  display?: string | null;      // short human summary (UI only)
+  error?: boolean;
+  createdAt: string;
+}
+```
+
+`src/features/ai/chatRepo.ts` owns all of it: session CRUD, `appendMessage()`,
+`buildTranscript()` and `toViewMessages()`.
+
+**Why `raw` exists.** Assistant messages must be stored and replayed
+*verbatim*. Gemini 3 attaches a `thought_signature` to every tool call
+(`tool_calls[i].extra_content.google.thought_signature`) and rejects the next
+turn with HTTP 400 if it is missing. Storing a normalized subset and
+rebuilding the request would drop it, so `raw` is the source of truth; the
+other columns exist only so the UI can render without parsing JSON. This
+survives a page refresh, which an in-memory transcript could not.
+
+Rules the transcript builder enforces:
+
+- **Context window.** Only the most recent ~20 messages are sent, but the
+  window is widened when a `tool_calls` turn and its results would otherwise be
+  split. It may exceed 20 by a message or two — that is intentional.
+- **No orphans.** A `tool` message whose issuing assistant turn is missing is
+  dropped, never sent with an unpaired `tool_call_id`.
+- **Provider pinning.** Sessions record `providerId`. Switching the default
+  provider starts a **new** session instead of replaying old messages, because
+  `extra_content` is Gemini-specific and must never be sent to another
+  provider.
+- **No secrets.** Only message payloads are stored. The API key lives in
+  `aiProviders` and the `Authorization` header is not part of a message.
+- **Rendering.** `toViewMessages()` shows user/assistant prose as chat bubbles
+  and collapses tool calls and results into small "Action · name" chips — raw
+  JSON is never displayed.
+
+`chatSessions` and `chatMessages` are included in `db/backup.ts`
+(`schemaVersion: 7`). Settings → Assistant Chat History has a
+"Clear all history" action that wipes both tables.
+
+---
+
+## 1.12 `/assistant` — full-page assistant
+
+The bubble panel and the full page are two renderings of the same
+conversation, not two implementations:
+
+- `AssistantChat` — transcript, confirmation gate and composer. All behaviour
+  comes from `useAssistantStore`; this only renders it.
+- `AssistantSessionList` — New chat, rename, delete; collapsible side panel on
+  `md+` and a slide-over drawer below.
+- `AssistantPanel` — floating bubble; below `sm` it fills the viewport instead
+  of floating, so it never appears as a small window on phones.
+- `AssistantPage` — full page reached via the panel's Expand button, or by
+  navigating to `/assistant`.
+
+`App.tsx` holds an `assistantPage` flag. Expanding pushes `/assistant` onto the
+history stack and remembers the originating tab; **Back** in the page (and the
+browser back button) returns to that tab. The page and the bubble share one
+Dexie history and one provider configuration — switching between them keeps
+the same conversation open.
+
 ---
 
 ## 2. Folder Structure
@@ -479,20 +564,25 @@ uploaded lecture files in `resources`.
 │   │   │   ├── FocusPage.tsx     # large circular countdown + controls
 │   │   │   └── components/
 │   │   │       └── SessionLog.tsx  # collapsed Dexie session history
-│   │   ├── ai/                  # global AI assistant (schema v6, Part 1)
+│   │   ├── ai/                  # global AI assistant (schema v6/v7)
 │   │   │   ├── aiProviderRepo.ts # provider CRUD + getDefaultProvider()
 │   │   │   ├── aiClient.ts      # OpenAI-compatible chat/completions + tool loop
+│   │   │   ├── chatRepo.ts      # chat sessions/messages (Dexie, verbatim raw)
 │   │   │   ├── tools.ts         # 6 callable functions (real Dexie ops)
 │   │   │   ├── types.ts         # ToolSpec / ChatMessage
 │   │   │   └── components/
-│   │   │       ├── AssistantLauncher.tsx  # floating bottom-right button
-│   │   │       └── AssistantPanel.tsx     # chat UI + confirmation gate
+│   │   │       ├── AssistantLauncher.tsx   # floating bottom-right button
+│   │   │       ├── AssistantChat.tsx       # transcript + composer (shared)
+│   │   │       ├── AssistantSessionList.tsx# new/rename/delete sessions
+│   │   │       ├── AssistantPanel.tsx      # floating bubble wrapper
+│   │   │       └── AssistantPage.tsx       # full page at /assistant
 │   │   └── settings/            # Phase 6: theme map, shifts, export/import
 │   │       ├── SettingsPage.tsx
 │   │       └── components/
 │   │           ├── WeeklySchedulesSettings.tsx
 │   │           ├── PomodoroSettingsSection.tsx
 │   │           ├── AiProvidersSettings.tsx  # add/edit/default/test providers
+│   │           ├── ChatHistorySettings.tsx   # clear all chat history
 │   │           └── DataBackupSection.tsx
 │   ├── stores/
 │   │   ├── useStatusThemeStore.ts   # status/theme/colorScheme (Zustand)
@@ -657,3 +747,25 @@ uploaded lecture files in `resources`.
   `aiProviders` (schemaVersion 6). **Scope note:** this is Part 1 only —
   PDF-based subject Q&A is a later phase requiring a separate text-extraction
   and indexing pipeline before uploaded lecture files can be referenced.
+
+- **Assistant chat history (schema v7):** added `chatSessions` and
+  `chatMessages`, so conversations survive a reload. Every message is stored
+  with the provider's own payload in `raw` and replayed verbatim — this is
+  required for Gemini's `thought_signature` and would silently reintroduce the
+  HTTP 400 otherwise. The session list supports New chat, rename and delete;
+  Settings has "Clear all history"; both tables are included in the export /
+  import backup. Only the most recent ~20 messages are sent to the model, and
+  the window is widened rather than split when a `tool_calls` turn and its
+  results straddle the cut; tool results with no issuing turn are dropped.
+  Sessions record their `providerId`, so switching the default provider starts a
+  fresh session instead of replaying another provider's messages. Only message
+  payloads are stored — never the API key. The panel renders user/assistant
+  prose and collapses tool activity into "Action" chips, never raw JSON.
+
+- **Full-page assistant at `/assistant`:** the bubble panel and the full page
+  share one `AssistantChat` component, one `useAssistantStore` and one Dexie
+  history, so no chat logic is duplicated. The page adds a session list that is
+  a persistent rail on `md+` and a slide-over drawer below, reached from the
+  panel's Expand button; expanding pushes `/assistant` onto the history stack
+  and remembers the originating tab so Back returns there. Under 768px the
+  bubble panel now fills the viewport rather than floating.

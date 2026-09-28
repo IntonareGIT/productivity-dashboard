@@ -15,6 +15,8 @@ export const BACKUP_TABLES = [
   'themeStatusMap',
   'appSettings',
   'aiProviders',
+  'chatSessions',
+  'chatMessages',
 ] as const;
 
 export type BackupTable = (typeof BACKUP_TABLES)[number];
@@ -47,7 +49,7 @@ export async function exportAllData(): Promise<void> {
   }
   const payload: BackupPayload = {
     app: 'personal-productivity-dashboard',
-    schemaVersion: 6,
+    schemaVersion: 7,
     exportedAt: new Date().toISOString(),
     data,
   };
