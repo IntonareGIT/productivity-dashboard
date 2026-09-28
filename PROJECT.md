@@ -677,6 +677,58 @@ Store rules (`src/stores/useStatusThemeStore.ts`):
 5. Open a **fresh** device profile signed into the same account → it must show
    the account's status/override and must not overwrite the row on first load.
 
+### 1.13.2 Not-signed-in banner (Dashboard only)
+
+A warning at the top of the **Dashboard** page, above the "Welcome back"
+heading, whenever the user is known to be signed out:
+
+> Not signed in. Your data is only saved on this device and is not backed up.
+> Clearing browser data or losing this device will erase it.
+
+with a **Sign in** button and a **Not now** button.
+
+**Reuses the existing account state.** It renders the same
+`useCloudAccount()` hook that Settings → Sync and the profile menu use, and the
+same real check, `state.signedIn` (the addon's `isLoggedIn`). It never treats a
+truthy `currentUser` object as signed in, because that object also exists for
+the anonymous realm.
+
+**No flash for signed-in users.** The hook does not expose an "initialized"
+flag, and the hook is deliberately **not modified**. The component derives one
+locally from the addon's `currentUser` observable instead:
+
+- A lazy `useState` initializer reads `cloud.currentUser?.value` **during the
+  first render**, so a user who is already signed in never sees a frame of the
+  banner.
+- A `useEffect` then subscribes to that observable, flipping `initialized` to
+  `true` on its first emission.
+- If no cloud is configured at all, the state settles immediately as signed out.
+
+**Dismissal.** "Not now" sets in-memory React state only. It is deliberately
+**not** written to the synced database, nor to `localStorage`/`sessionStorage`
+(which would outlive the load), so the banner returns on the next app load.
+
+**Hides on sign-in without a reload.** `shouldShowBanner()` checks `signedIn`
+*before* `dismissed`, so signing in hides the banner regardless of the dismiss
+state.
+
+**Styling.** The theme has no dedicated warning token, so the banner uses the
+tokens already defined in `tailwind.config.js` — `bg-accent-subtle` (defined
+per theme, light and dark), `border-border` and `text-content-primary` — plus
+the `text-amber-500` icon colour already used for the `warn` tone in
+`SyncAccountPanel`. That keeps it readable in all four themes in both modes.
+Full width on desktop; buttons sit beside the text at `sm` and above, and stack
+below it under 768px. Both keep the 44px touch target used elsewhere, and
+`role="status"` is set for assistive technology.
+
+**Verification** — `scripts/verify-signin-banner.mjs` (also run by
+`npm run verify`) renders the real component through `react-dom/server` against
+a **mocked account hook**, a **mocked `currentUser` observable** and mocked
+icons. It covers: hidden while loading, shown when signed out, hidden when
+signed in, the anonymous-`currentUser` trap in both directions, "Not now"
+hiding it and returning on a fresh load with nothing persisted, the required
+markup/role/responsive classes, and that only `DashboardPage` mounts it.
+
 
 **Settings → Sync** offers sign in, the signed-in email, live status
 (synced / syncing / offline / error) and sign out. Signing out erases the local
@@ -764,6 +816,8 @@ the same conversation open.
 │   │   │   ├── DashboardPage.tsx
 │   │   │   └── components/
 │   │   │       ├── TodayTimelineStrip.tsx
+│   │   │       ├── SignInBanner.tsx     # not-signed-in warning (dashboard only)
+│   │   │       ├── signInBannerState.ts # pure shouldShowBanner() decision
 │   │   │       ├── PomodoroMiniWidget.tsx
 │   │   │       ├── UpcomingDeadlinesCard.tsx
 │   │   │       ├── WeeklyHoursCard.tsx

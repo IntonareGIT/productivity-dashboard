@@ -6,6 +6,7 @@ import { PomodoroMiniWidget } from './components/PomodoroMiniWidget';
 import { UpcomingDeadlinesCard } from './components/UpcomingDeadlinesCard';
 import { WeeklyHoursCard } from './components/WeeklyHoursCard';
 import { StatsCard } from './components/StatsCard';
+import { SignInBanner } from './components/SignInBanner';
 import type { NavTab } from '../../components/layout/Sidebar';
 import { format } from 'date-fns';
 import { occursOn } from '../calendar/recurrence';
@@ -43,6 +44,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
 
   return (
     <div className="space-y-5 animate-in fade-in duration-200">
+      {/* Not-signed-in warning. Dashboard only, above the welcome heading. */}
+      <SignInBanner />
+
       {/* Welcome Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-1">
         <div>
