@@ -521,6 +521,72 @@ Rules the transcript builder enforces:
 (`schemaVersion: 7`). Settings → Assistant Chat History has a
 "Clear all history" action that wipes both tables.
 
+### 1.13 Cross-device sync (Dexie Cloud)
+
+All tables sync through Dexie Cloud except one (see below). Configuration lives
+in `src/db/cloudConfig.ts`.
+
+```typescript
+db.cloud?.configure({
+  databaseUrl: 'https://zmofmso62.dexie.cloud', // committed on purpose
+  unsyncedTables: ['aiProviders'],
+  blobMode: 'lazy',
+});
+```
+
+**ID format.** Every primary key is a client-generated **string UUID**
+(`crypto.randomUUID()` via `src/utils/id.ts`), declared as a plain `'id'`
+primary key — never `++id` and never `@id`. This is deliberate:
+
+- Dexie Cloud explicitly supports own GUID strings, and forbids ever changing a
+  table's primary keys.
+- `@id` (auto-generated) would require keys prefixed with a dedicated 3-letter
+  table shortname, which existing UUIDs do not have. Switching would mean
+  re-keying every row — a table migration, and migrations on *synced* tables
+  cannot be performed consistently on the client.
+- Consequently there is **no `Version.upgrade()` touching any synced table**.
+  The only `.upgrade()` in the codebase is the historical schema v5 one, which
+  predates sync.
+
+`themeStatusMap` (keyed on `status`) and `appSettings` (keyed on the literal
+`'pomodoro'`) keep their natural keys. These are deterministic, so two devices
+seeding independently converge on the same row rather than duplicating it.
+
+**Unsynced tables.** `aiProviders` is excluded so API keys never leave the
+device — each device configures its own key. Nothing else is device-specific.
+
+**Blob handling.** `resources.blob` (uploaded files) uses `blobMode: 'lazy'`,
+so bytes are offloaded to remote storage on first sync. The upload UI warns
+above 20 MB because that first sync is slow.
+
+**Seeding rules** (`src/db/defaultData.ts`) — synced tables must never be
+blindly populated, or a fresh device would overwrite synced rows with defaults:
+
+1. Insert a default row **only when that row is missing**; never overwrite.
+2. Only fixed/deterministic primary keys.
+3. Run on first run when signed out, and again on the first `syncComplete`
+   after signing in.
+
+**Service worker.** `vite-plugin-pwa` precaches only same-origin build assets
+and `runtimeCaching` is empty, so Dexie Cloud requests are never cached or
+intercepted. Offline use is unaffected.
+
+**Settings → Sync** offers sign in, the signed-in email, live status
+(synced / syncing / offline / error) and sign out. Signing out erases the local
+database, so it requires an explicit acknowledgement checkbox, offers an
+"Export backup first" button, and is blocked entirely while sync is
+incomplete (offline, syncing or error) to avoid losing unpushed changes.
+
+### Conflict resolution for same-key rows
+
+Dexie Cloud is **server-authoritative**: the server re-executes operations with
+their where-clauses, and the last write to reach the server wins for a given
+primary key. A locally seeded row and a cloud row with the same key do **not**
+merge — the newer one overwrites the other. This is exactly why seeding is
+insert-if-missing and is deferred until after the first sync when signed in:
+without that ordering, a fresh device would push its defaults over the
+account's real settings.
+
 ---
 
 ## 1.12 `/assistant` — full-page assistant
@@ -565,9 +631,10 @@ the same conversation open.
 │   │       ├── Card.tsx
 │   │       └── Modal.tsx        # dialog (bottom sheet on mobile)
 │   ├── db/
-│   │   ├── db.ts                # Dexie instance & table definitions (v2)
+│   │   ├── db.ts                # Dexie instance, table definitions, db.cloud.configure()
+│   │   ├── cloudConfig.ts       # Dexie Cloud URL, unsyncedTables, blobMode
 │   │   ├── backup.ts            # export/import all tables as one JSON file
-│   │   └── defaultData.ts       # default shift config + theme mappings
+│   │   └── defaultData.ts       # first-run seeding (insert-if-missing only)
 │   ├── components/
 │   │   ├── layout/ ... (as above)
 │   │   └── ui/
@@ -634,6 +701,7 @@ the same conversation open.
 │   │           ├── PomodoroSettingsSection.tsx
 │   │           ├── AiProvidersSettings.tsx  # add/edit/default/test providers
 │   │           ├── ChatHistorySettings.tsx   # clear all chat history
+│   │           ├── SyncSettings.tsx          # Dexie Cloud sign in / status / out
 │   │           └── DataBackupSection.tsx
 │   ├── stores/
 │   │   ├── useStatusThemeStore.ts   # status/theme/colorScheme (Zustand)
@@ -837,3 +905,20 @@ the same conversation open.
   returns a clear error instead of writing bad data. The function-calling loop,
   the confirmation gate and the verbatim `raw` message storage/replay are
   unchanged.
+
+- **Cross-device sync via Dexie Cloud:** `dexie-cloud-addon` is attached in
+  `db.ts` and configured from the committed `db/cloudConfig.ts` with the
+  database URL — deliberately not read from the gitignored `dexie-cloud.json`,
+  which does not exist on the build server. `aiProviders` is excluded from sync
+  so API keys stay per-device; `resources` blobs use `blobMode: 'lazy'` with a
+  20 MB upload warning. Primary keys are unchanged: all remain plain `'id'`
+  string UUIDs, with no `Version.upgrade()` on any synced table, per Dexie
+  Cloud's rule that primary keys must never change and synced-table migrations
+  cannot run client-side. Dexie was upgraded 4.0.11 → ^4.4.5 (the addon
+  requires ≥4.4.5). First-run seeding was hardened to insert only missing rows
+  so a fresh device cannot overwrite synced settings, and is deferred until
+  after the first sync when signed in. Workbox precaches only app assets with
+  empty `runtimeCaching`, so cloud requests are never intercepted. Settings →
+  Sync adds sign in, live status, and a guarded sign out (acknowledgement
+  checkbox, export-first option, blocked while sync is incomplete).
+  **`dexie-cloud.key` is a secret: never commit it.**

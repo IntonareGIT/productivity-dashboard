@@ -6,6 +6,7 @@ import { WeeklySchedulesSettings } from './components/WeeklySchedulesSettings';
 import { PomodoroSettingsSection } from './components/PomodoroSettingsSection';
 import { AiProvidersSettings } from './components/AiProvidersSettings';
 import { ChatHistorySettings } from './components/ChatHistorySettings';
+import { SyncSettings } from './components/SyncSettings';
 import { DataBackupSection } from './components/DataBackupSection';
 import type { UserStatus, ThemeMode, ColorScheme } from '../../types';
 
@@ -40,6 +41,9 @@ export const SettingsPage: React.FC = () => {
 
       {/* Assistant conversation history */}
       <ChatHistorySettings />
+
+      {/* Cross-device sync (Dexie Cloud) */}
+      <SyncSettings />
 
       {/* Theme to Status Mapping Section */}
       <Card
