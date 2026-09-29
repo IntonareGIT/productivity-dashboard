@@ -211,6 +211,27 @@ const res = (over = {}) => ({
   check('F the viewer is focusable so shortcuts work', /tabIndex=\{0\}/.test(pdf) && /onKeyDown=\{onKeyDown\}/.test(pdf));
 
   check('N a page number input exists', /aria-label="Page number"/.test(pdf) && /onBlur=\{\(\) => \{ const n = Number\(pageInput\)/.test(pdf));
+
+  // ---- offline: the worker must be precached -----------------------------
+  // The bug this guards: `pdfjs-dist`'s worker is emitted as
+  // `pdf.worker.min-<hash>.mjs`. The precache glob listed `js` but not `mjs`,
+  // so Workbox silently skipped the worker. The app installed and precached
+  // fine, but EVERY PDF failed offline ("Setting up fake worker failed"), which
+  // looks exactly like "the app is offline" while the app itself is fine.
+  const viteCfg = readFileSync('vite.config.ts', 'utf8');
+  const glob = /globPatterns:\s*\[([^\]]*)\]/.exec(viteCfg)?.[1] ?? '';
+  check('O the precache glob includes mjs (the pdf.js worker)',
+    /mjs/.test(glob),
+    glob.trim());
+  check('O the precache glob still covers the other asset types',
+    ['js', 'css', 'html', 'woff2', 'webmanifest']
+      .every((ext) => new RegExp(`\\b${ext}\\b`).test(glob)));
+  check('O the worker is imported as a URL so Vite emits a hashed asset',
+    /pdfjs-dist\/build\/pdf\.worker\.min\.mjs\?url/.test(pdf));
+  check('O the worker is still registered globally',
+    /GlobalWorkerOptions\.workerSrc = pdfWorkerUrl/.test(pdf));
+  check('O cross-origin sync is still never cached',
+    /runtimeCaching:\s*\[\]/.test(viteCfg));
   check('N the current page and total are shown', /of \{pageCount \|\| '—'\}/.test(pdf));
   check('L a rendering placeholder is shown while rendering', /\{rendering && \(/.test(pdf) && /Rendering…/.test(pdf));
   check('L the loading state has a spinner', /Loading PDF…/.test(pdf));

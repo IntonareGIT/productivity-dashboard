@@ -37,7 +37,17 @@ export default defineConfig({
         // Keeping runtimeCaching empty means Workbox registers no fetch handler
         // for cross-origin traffic, so sync requests always hit the network —
         // or fail cleanly while offline, rather than returning stale data.
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,webmanifest}'],
+        // `mjs` is essential, not optional: `pdfjs-dist`'s worker is emitted as
+        // `pdf.worker.min-<hash>.mjs`, and it was the ONE file in dist without
+        // an extension in this list. Workbox silently skipped it, so the app
+        // installed and precached fine but every PDF failed offline with a
+        // "Setting up fake worker failed / Failed to fetch dynamically
+        // imported module" error — the viewer, not the network, was broken.
+        // Adding `mjs` is what makes PDFs work with no connection.
+        globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,woff,woff2,webmanifest}'],
+        // Belt and braces: never let a stale precache entry point at a file
+        // that a new build no longer emits, or the SW 404s on a cache hit.
+        navigateFallback: 'index.html',
         runtimeCaching: []
       }
     })
