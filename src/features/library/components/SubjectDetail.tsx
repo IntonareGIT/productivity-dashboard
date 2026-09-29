@@ -7,8 +7,9 @@ import { Card } from '../../../components/ui/Card';
 import { MarkdownNotes } from './MarkdownNotes';
 import { TopicModal } from './TopicModal';
 import { ResourceModal } from './ResourceModal';
+import { ResourceViewer } from './ResourceViewer';
 import { AssessmentModal } from './AssessmentModal';
-import { deleteAssessment, deleteResource, deleteTopicCascade, ensureDefaultTopic, resourceObjectUrl, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes } from '../libraryRepo';
+import { deleteAssessment, deleteResource, deleteTopicCascade, ensureDefaultTopic, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes } from '../libraryRepo';
 import type { Assessment, Resource, Subject, Topic, TopicStatus } from '../../../types';
 
 interface SubjectDetailProps {
@@ -46,10 +47,10 @@ function fmtBytes(bytes?: number | null): string {
 interface ResourceRowProps {
   resource: Resource; copied: boolean; confirmDelete: boolean;
   onToggle: () => void; onEdit: () => void; onDelete: () => void;
-  onCopy: () => void; onOpen: () => void; onDownload: () => void;
+  onCopy: () => void; onPreview: () => void; onDownload: () => void;
 }
 
-function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onOpen, onDownload }: ResourceRowProps) {
+function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onPreview, onDownload }: ResourceRowProps) {
   const meta = dueMeta(resource);
   const isFile = resource.kind === 'file';
   return (
@@ -72,7 +73,7 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
                   <span className="font-mono truncate">{resource.fileName || resource.title}</span>
                   {resource.fileSize != null && <span className="text-content-tertiary">({fmtBytes(resource.fileSize)})</span>}
                 </span>
-                <button onClick={onOpen} className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><Eye className="w-3 h-3" /> View</button>
+                <button onClick={onPreview} className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><Eye className="w-3 h-3" /> Preview</button>
                 {resource.blob && <button onClick={onDownload} className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><Download className="w-3 h-3" /> Download</button>}
               </div>
             ) : resource.urlOrPath ? (
@@ -126,6 +127,8 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   const [editingTopic, setEditingTopic] = useState<Topic | null>(null);
   const [addingResource, setAddingResource] = useState(false);
   const [editingResource, setEditingResource] = useState<Resource | null>(null);
+  // The resource currently open in the preview modal, if any.
+  const [previewingResource, setPreviewingResource] = useState<Resource | null>(null);
   const [addingAssessment, setAddingAssessment] = useState(false);
   const [editingAssessment, setEditingAssessment] = useState<Assessment | null>(null);
   const [confirmDeleteSubject, setConfirmDeleteSubject] = useState(false);
@@ -204,13 +207,6 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
       setCopiedId(resource.id);
       window.setTimeout(() => setCopiedId((id) => (id === resource.id ? null : id)), 1500);
     } catch { /* clipboard unavailable */ }
-  };
-
-  const openFile = (resource: Resource) => {
-    const url = resourceObjectUrl(resource);
-    if (!url) return;
-    window.open(url, '_blank', 'noopener');
-    if (resource.blob) window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   };
 
   const downloadFile = (resource: Resource) => {
@@ -377,7 +373,7 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
                   onEdit={() => setEditingResource(resource)}
                   onDelete={() => (deleteResourceId === resource.id ? void deleteResource(resource.id).then(() => setDeleteResourceId(null)) : setDeleteResourceId(resource.id))}
                   onCopy={() => copyPath(resource)}
-                  onOpen={() => openFile(resource)}
+                  onPreview={() => setPreviewingResource(resource)}
                   onDownload={() => downloadFile(resource)}
                 />
               ))}
@@ -444,6 +440,9 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
       )}
       {(addingAssessment || editingAssessment) && (
         <AssessmentModal subjectId={subject.id} assessment={editingAssessment} onClose={() => { setEditingAssessment(null); setAddingAssessment(false); }} />
+      )}
+      {previewingResource && (
+        <ResourceViewer resource={previewingResource} onClose={() => setPreviewingResource(null)} />
       )}
     </div>
   );

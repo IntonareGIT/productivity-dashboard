@@ -141,6 +141,32 @@ Uploads (PDF/image/doc) are stored as Blobs in IndexedDB and opened via
 `URL.createObjectURL(blob)` for view/download. JSON backup skips `blob`
 bytes (keeps metadata only) — see §1.10.
 
+**Preview.** One **Preview** button per resource row opens `ResourceViewer`,
+which dispatches on `previewKindFor()` (`src/features/library/previewKind.ts`,
+pure and separately testable):
+
+| Kind | Behaviour |
+| --- | --- |
+| `image` (jpeg/png) | `<img>` from a blob object URL, revoked on unmount |
+| `pdf` | The shared `PdfViewer` (pdf.js) — page render + Prev/Next |
+| `drive` | Google Drive share link → `drive.google.com/file/d/<id>/preview` iframe |
+| `opaque` | Word / PowerPoint / anything else: name, type, size + **Download** |
+| `link` | Non-Drive URL → **Open link** in a new tab |
+| `none` | No local blob → "File not available on this device" |
+
+`PdfViewer` is the **single place** pdf.js page-render logic lives; the Library
+viewer uses it and any future "Ask about this PDF" flow must reuse it rather
+than re-implementing page rendering. `pdfjs-dist` is **code-split** via
+`React.lazy` (~474 kB) with its worker (~1.2 MB) as a separate hashed asset, so
+neither is downloaded until a PDF is actually previewed. In pdf.js v6,
+`destroy()` lives on the loading task, not the document proxy, so the task is
+retained and aborted on unmount to avoid leaking the worker.
+
+Drive embeds are best-effort: Drive serves its own "no access" page inside the
+iframe for private or unshared files, which the parent cannot detect, so
+**Open link** is always offered alongside the embed. **Download** and **Open
+link** remain available regardless of whether the inline preview succeeds.
+
 **Two modes, and `kind` must be explicit.** `ResourceModal` offers *Link*
 (title + URL) and *Upload file* (title + file). `saveResource()` validates per
 mode: `'link'` requires a non-empty `urlOrPath`, `'file'` requires a blob and
@@ -853,6 +879,9 @@ the same conversation open.
 │   │   │   └── components/
 │   │   │       ├── SubjectModal.tsx
 │   │   │       ├── ResourceModal.tsx  # link OR file upload (Blob)
+│   │   │       ├── ResourceViewer.tsx # Preview modal: image/pdf/drive/opaque dispatch
+│   │   │       ├── PdfViewer.tsx     # shared pdf.js page renderer (code-split)
+│   │   │       ├── previewKind.ts     # pure preview-type + Drive URL detection
 │   │   │       ├── TopicModal.tsx
 │   │   │       ├── AssessmentModal.tsx
 │   │   │       ├── MarkdownNotes.tsx   # markdown/LaTeX/code renderer
