@@ -243,9 +243,11 @@ const res = (over = {}) => ({
     /setContainerHeight/.test(pdf));
   check('F the fit accounts for the padding (16px) on both axes',
     /const availW = Math\.max\(1, containerWidth - PAGE_PAD\)/.test(pdf) &&
-    /const availH = Math\.max\(1, containerHeight - PAGE_PAD - TOOLBAR_H\)/.test(pdf));
-  check('F the fit reserves the floating toolbar strip',
-    /const TOOLBAR_H = 40/.test(pdf));
+    /const availH = Math\.max\(1, containerHeight - PAGE_PAD\)/.test(pdf));
+  // The header is a real flex child now, so the scroll viewport it measures is
+  // already below it. Reserving extra height for it would under-fill the page.
+  check('F the fit does NOT double-reserve the header (it is a flex sibling)',
+    !/TOOLBAR_H/.test(pdf));
   check('F the fit takes BOTH axes, not width alone',
     /Math\.min\(availW \/ pageW, availH \/ pageH, MAX_FIT\)/.test(pdf));
   check('F the fit is rotation-aware (rotated pages swap width and height)',
@@ -282,13 +284,26 @@ const res = (over = {}) => ({
   // ---- one toolbar, overlaid, with Download; no duplicate title ---------
   check('T there is exactly ONE toolbar element in the viewer',
     (pdf.match(/aria-label="PDF controls"/g) || []).length === 1);
-  check('T the toolbar is an overlay inside the page surface, not a sibling row',
-    /role="toolbar"[\s\S]{0,200}className="sticky top-0 z-20/.test(pdf));
+  // The header is a real flex child BEFORE the scroll area, not a sticky
+  // overlay inside it. A `sticky` element inside an `overflow` container is
+  // positioned by that container, so pages scrolled upward slid under it and
+  // showed through; as a sibling, the viewport starts strictly below it.
+  check('T the toolbar is a fixed header, not a sticky/absolute overlay',
+    /role="toolbar"[\s\S]{0,400}className="flex-shrink-0 w-full h-11 px-3 flex items-center justify-between gap-2 bg-slate-900/.test(pdf));
+  check('T the toolbar never uses sticky or absolute positioning',
+    !/role="toolbar"[\s\S]{0,400}className="[^"]*(sticky|absolute)/.test(pdf));
+  check('T the toolbar is declared BEFORE the scroll area',
+    pdf.indexOf('aria-label="PDF controls"') < pdf.indexOf('ref={shellRef}'));
   check('T the toolbar has an OPAQUE dark fill, never a blur or gradient',
-    /sticky top-0 z-20 flex flex-wrap items-center gap-1 bg-slate-900/.test(pdf) &&
+    /bg-slate-900 text-slate-100 border-b border-slate-800/.test(pdf) &&
     !/backdrop-blur/.test(pdf));
-  check('T the toolbar is flush with the top edge (no negative margin)',
-    /sticky top-0 z-20 flex/.test(pdf) && !/-mx-4/.test(pdf));
+  check('T the root is a definite-height flex column',
+    /'flex flex-col gap-0 h-full min-h-0 w-full overflow-hidden'/.test(pdf));
+  check('T the scroll area is the second child and scrolls vertically',
+    /ref=\{shellRef\}[\s\S]{0,600}className="relative flex-1 min-h-\[320px\] w-full overflow-y-auto overflow-x-hidden/.test(pdf));
+  check('T the toolbar rows are split left / centre / right',
+    /LEFT: the pane/.test(pdf) && /CENTRE: page navigation/.test(pdf) &&
+    /RIGHT: zoom, fit, rotate, download/.test(pdf));
   check('T the toolbar can host the host pane selector in the same row',
     /leadingControls\?: React\.ReactNode/.test(pdf) &&
     /trailingControls\?: React\.ReactNode/.test(pdf) &&

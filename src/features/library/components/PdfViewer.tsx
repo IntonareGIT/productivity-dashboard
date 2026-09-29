@@ -46,21 +46,13 @@ const ZOOM_STEP = 0.25;
  */
 const PAGE_PAD = 16;
 
-/**
- * Height reserved at the top of the page surface for the floating toolbar.
- * The toolbar is `position: absolute` so it costs no layout space, but the
- * fitted page must still END above it, otherwise the first page's header is
- * permanently hidden behind the controls.
- */
-const TOOLBAR_H = 40;
-
 /** The gap between two consecutive pages in the stack. */
 const PAGE_GAP = 10;
 
 /** An upper bound on auto-fit, so a tiny page can't be blown up to 8x. */
 const MAX_FIT = 3;
 
-const ctrl = 'inline-flex items-center justify-center gap-1.5 px-2 min-h-[32px] rounded-lg border border-border text-content-secondary hover:text-content-primary hover:bg-bg-elevated disabled:opacity-40 transition-colors text-xs font-semibold';
+const ctrl = 'inline-flex items-center justify-center gap-1 px-1.5 min-h-[26px] rounded-md border border-transparent text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent transition-colors text-xs font-semibold shrink-0';
 
 const isCancel = (e: unknown) =>
   e instanceof Error && e.name === 'RenderingCancelledException';
@@ -295,7 +287,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       const pageW = rotated ? unit.height : unit.width;
       const pageH = rotated ? unit.width : unit.height;
       const availW = Math.max(1, containerWidth - PAGE_PAD);
-      const availH = Math.max(1, containerHeight - PAGE_PAD - TOOLBAR_H);
+      const availH = Math.max(1, containerHeight - PAGE_PAD);
       // Fit both axes and take the smaller, so a short page is not blown up
       // past the bottom of the pane and a long one still fits the width.
       const fitScale = Math.min(availW / pageW, availH / pageH, MAX_FIT);
@@ -539,9 +531,12 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // promote the element, so the two paths cannot drift apart visually.
   // `p-0` is deliberate: the old `p-3 sm:p-5` was dead space around the
   // document in fullscreen, and the max-height below used to clip it further.
+  // `flex flex-col h-full overflow-hidden` is what makes the header + scroll
+  // split work: the header is a shrink-0 child and the scroll area takes the
+  // rest, so the scroll viewport begins exactly under the header.
   const boxClass = fullScreen
     ? 'fixed inset-0 z-[60] flex flex-col gap-0 p-0 h-full w-full bg-bg-primary overflow-hidden'
-    : 'flex flex-col gap-2 h-full min-h-0 w-full';
+    : 'flex flex-col gap-0 h-full min-h-0 w-full overflow-hidden';
   if (status === 'error') {
     return (
       <div className="flex items-start gap-2 p-4 rounded-xl border border-amber-500/40 bg-amber-500/10">
@@ -564,6 +559,93 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       aria-label={title ? `${title} PDF viewer` : 'PDF viewer'}
     >
 
+      {/* THE HEADER. It is a flex-shrink-0 child of the root flex column and is
+          deliberately NOT inside the scroll area and NOT `sticky`. Two
+          problems came from having it in the scroll flow: a `sticky` element
+          inside an `overflow` container is positioned by that container, so a
+          page scrolling upward slid under it and showed through the gap the
+          border left; and as a scroll child it occupied layout height INSIDE
+          the surface, so the page began partly above it. As a sibling BEFORE
+          the scroll area the viewport starts strictly under the header, so
+          content can only ever appear below it. */}
+      <div
+        role="toolbar"
+        aria-label="PDF controls"
+        className="flex-shrink-0 w-full h-11 px-3 flex items-center justify-between gap-2 bg-slate-900 text-slate-100 border-b border-slate-800"
+      >
+    {/* LEFT: the pane's own view + document selectors, injected by the host. */}
+    <div className="flex items-center gap-1.5 min-w-0 shrink-0">
+      {leadingControls}
+    </div>
+
+    {/* CENTRE: page navigation. */}
+    <div className="flex items-center gap-1 shrink-0">
+    <button onClick={onPrevPage} disabled={page <= 1 || pageCount === 0} aria-label="Previous page" className={ctrl}>
+      <ChevronLeft className="w-4 h-4" />
+    </button>
+    <label className="flex items-center gap-1.5 text-xs text-slate-400">
+      <span className="sr-only">Page number</span>
+      <input
+        value={pageInput}
+        onChange={(e) => setPageInput(e.target.value.replace(/[^\d]/g, ''))}
+        onBlur={() => { const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); }}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); } }}
+        inputMode="numeric"
+        aria-label="Page number"
+        className="w-10 text-center bg-slate-800 border border-slate-600 rounded-md px-1 py-1 text-xs text-slate-100 tabular-nums outline-none focus:border-accent"
+      />
+      <span className="tabular-nums whitespace-nowrap text-slate-400">of {pageCount || '—'}</span>
+    </label>
+    <button onClick={onNextPage} disabled={page >= pageCount || pageCount === 0} aria-label="Next page" className={ctrl}>
+      <ChevronRight className="w-4 h-4" />
+    </button>
+    </div>
+
+    {/* RIGHT: zoom, fit, rotate, download, fullscreen, then the host's pane
+        buttons. The row is already justify-between, so no ml-auto is needed. */}
+    <div className="flex items-center gap-1 shrink-0">
+
+    <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
+
+    <button onClick={() => changeZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label="Zoom out" className={ctrl}>
+      <Minus className="w-4 h-4" />
+    </button>
+    <span className="min-w-[2.75rem] text-center text-xs text-slate-300 tabular-nums">{zoomPct}%</span>
+    <button onClick={() => changeZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label="Zoom in" className={ctrl}>
+      <Plus className="w-4 h-4" />
+    </button>
+    <button onClick={() => setZoom(1)} aria-label="Fit page to the window" className={`${ctrl} px-2`}>Fit</button>
+
+    <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
+
+    <button onClick={() => setRotation((r) => (r + 90) % 360)} aria-label={`Rotate, currently ${rotation} degrees`} className={ctrl}>
+      <RotateCw className="w-4 h-4" />
+    </button>
+
+    {onDownload && (
+      <>
+        <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
+        <button onClick={onDownload} aria-label="Download this file" title="Download" className={ctrl}>
+          <Download className="w-4 h-4" />
+        </button>
+      </>
+    )}
+
+    {/* One control, always present, always operating on THIS viewer. */}
+    <button
+      onClick={toggleFullScreen}
+      aria-label={fullScreen ? 'Exit full screen' : 'Enter full screen'}
+      title={fullScreen ? 'Exit full screen (Esc)' : 'Full screen'}
+      className={trailingControls ? ctrl : `${ctrl} ml-auto`}
+    >
+      {fullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+      {!fullScreen && 'Full screen'}
+    </button>
+
+      {trailingControls}
+    </div>
+    </div>
+
       <div
         ref={shellRef}
         onScroll={handleScroll}
@@ -571,7 +653,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         // same value subtracted from the measured width/height when fitting, so
         // the page lands exactly on the padding box: no dead grey margin, and
         // no horizontal scrollbar from a border/padding miscount.
-        className="relative flex-1 min-h-[320px] w-full overflow-auto overscroll-contain bg-bg-elevated/40 outline-none p-4"
+        className="relative flex-1 min-h-[320px] w-full overflow-y-auto overflow-x-hidden overscroll-contain bg-bg-elevated/40 outline-none p-4"
         // CRITICAL: the page surface must be height-bounded or `overflow-auto`
         // never engages. Without a bound it grows to the full spacer height
         // (pageCount x pageHeight), so it cannot scroll, every scrollTop write
@@ -588,73 +670,6 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
             is absolutely positioned, so it consumes no layout height and the
             document still occupies 100% of the pane below it. Download lives
           here too, which is why the separate bottom action bar is gone. */}
-      <div
-        role="toolbar"
-        aria-label="PDF controls"
-        className="sticky top-0 z-20 flex flex-wrap items-center gap-1 bg-slate-900 px-2 py-1.5 text-slate-100 border-b border-slate-700"
-      >
-      {leadingControls}
-
-      <button onClick={onPrevPage} disabled={page <= 1 || pageCount === 0} aria-label="Previous page" className={ctrl}>
-        <ChevronLeft className="w-4 h-4" />
-      </button>
-      <label className="flex items-center gap-1.5 text-xs text-content-secondary">
-        <span className="sr-only">Page number</span>
-        <input
-          value={pageInput}
-          onChange={(e) => setPageInput(e.target.value.replace(/[^\d]/g, ''))}
-          onBlur={() => { const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); }}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); } }}
-          inputMode="numeric"
-          aria-label="Page number"
-          className="w-12 text-center bg-bg-elevated border border-border rounded-lg px-1.5 py-1.5 text-xs text-content-primary tabular-nums outline-none focus:border-accent"
-        />
-        <span className="tabular-nums whitespace-nowrap">of {pageCount || '—'}</span>
-      </label>
-      <button onClick={onNextPage} disabled={page >= pageCount || pageCount === 0} aria-label="Next page" className={ctrl}>
-        <ChevronRight className="w-4 h-4" />
-      </button>
-
-      <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-
-      <button onClick={() => changeZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label="Zoom out" className={ctrl}>
-        <Minus className="w-4 h-4" />
-      </button>
-      <span className="min-w-[3.25rem] text-center text-xs text-content-secondary tabular-nums">{zoomPct}%</span>
-      <button onClick={() => changeZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label="Zoom in" className={ctrl}>
-        <Plus className="w-4 h-4" />
-      </button>
-      <button onClick={() => setZoom(1)} aria-label="Fit page to the window" className={`${ctrl} px-2`}>Fit</button>
-
-      <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-
-      <button onClick={() => setRotation((r) => (r + 90) % 360)} aria-label={`Rotate, currently ${rotation} degrees`} className={ctrl}>
-        <RotateCw className="w-4 h-4" />
-      </button>
-
-      {onDownload && (
-        <>
-          <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-          <button onClick={onDownload} aria-label="Download this file" title="Download" className={ctrl}>
-            <Download className="w-4 h-4" />
-          </button>
-        </>
-      )}
-
-      {/* One control, always present, always operating on THIS viewer. */}
-      <button
-        onClick={toggleFullScreen}
-        aria-label={fullScreen ? 'Exit full screen' : 'Enter full screen'}
-        title={fullScreen ? 'Exit full screen (Esc)' : 'Full screen'}
-        className={trailingControls ? ctrl : `${ctrl} ml-auto`}
-      >
-        {fullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-        {!fullScreen && 'Full screen'}
-      </button>
-
-        {trailingControls}
-      </div>
-
         {status === 'loading' ? (
           <div className="flex h-full min-h-[280px] items-center justify-center gap-2 text-xs text-content-tertiary">
             <Loader2 className="w-4 h-4 animate-spin" /> Loading PDF…

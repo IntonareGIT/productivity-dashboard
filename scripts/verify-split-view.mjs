@@ -564,8 +564,14 @@ const CHAT = { kind: 'assistant' };
     // The doubled header came from the pane floating its own selector bar over
     // the viewer's toolbar. A PDF pane now injects BOTH halves into the
     // viewer's single row instead.
-    check('H a PDF pane does not render its own floating header',
-      /slot\.kind !== 'pdf' && \(\s*<div className="absolute inset-x-0 top-0/.test(sv));
+    // The bar is suppressed only for a pdf pane that has actually loaded a
+    // document. With no resourceId the pane shows just a "pick a PDF" message,
+    // so hiding the bar would remove the only way to choose a file.
+    check('H a PDF pane with a loaded document renders no second header',
+      /\(slot\.kind !== 'pdf' \|\| !slot\.resourceId\) && \(/.test(sv));
+    check('H an empty PDF pane still shows the bar, so the file picker is reachable',
+      /!slot\.resourceId/.test(sv) &&
+      /slot\.kind === 'pdf' && slot\.resourceId \? \(/.test(sv));
     check('H a PDF pane injects its selectors into the viewer toolbar',
       /part="selectors"/.test(sv) && /part="buttons"/.test(sv) &&
       /leadingControls=\{/.test(sv) && /trailingControls=\{/.test(sv));

@@ -137,7 +137,11 @@ const SplitBody: React.FC<SplitBodyProps> = ({
                 (leadingControls / trailingControls), so there is exactly one
                 header row. Every other kind keeps this compact floating bar,
                 because it has no viewer toolbar to live in. */}
-            {slot.kind !== 'pdf' && (
+            {/* A pdf pane hides this bar only once a document is actually
+                loaded: until then the pane shows only a "pick a PDF" message,
+                so suppressing the bar would remove the very dropdown the user
+                needs to choose a file. A dead-end with no way out. */}
+            {(slot.kind !== 'pdf' || !slot.resourceId) && (
               <div className="absolute inset-x-0 top-0 z-20 flex justify-start pointer-events-none px-1.5 pt-1.5">
                 <div className="pointer-events-auto flex items-center gap-1 max-w-full overflow-x-auto rounded-xl bg-slate-900 border border-slate-700 px-1 py-0.5">
                   <PaneHeader
@@ -161,7 +165,7 @@ const SplitBody: React.FC<SplitBodyProps> = ({
                 onNavigate={onNavigate}
                 onOpenAssistantSettings={onOpenAssistantSettings}
                 leadingControls={
-                  slot.kind === 'pdf' ? (
+                  slot.kind === 'pdf' && slot.resourceId ? (
                     <PaneHeader
                       index={index}
                       slot={slot}
@@ -174,7 +178,7 @@ const SplitBody: React.FC<SplitBodyProps> = ({
                   ) : undefined
                 }
                 trailingControls={
-                  slot.kind === 'pdf' ? (
+                  slot.kind === 'pdf' && slot.resourceId ? (
                     <PaneHeader
                       index={index}
                       slot={slot}
