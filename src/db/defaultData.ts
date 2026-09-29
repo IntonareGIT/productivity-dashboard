@@ -67,9 +67,13 @@ export function makeDefaultAiProvider(): AiProvider {
  * written only by an explicit status/override choice, never at startup, so a
  * fresh device cannot push its fallback over the account's value.
  *
- * `aiProviders` IS seeded: it is an unsynced table, so it stays per-device and
- * cannot reach another account. It uses a fixed id so a re-seed can never
- * create a second Gemini row.
+ * `aiProviders` is seeded ONLY on a device that is not signed in. It is a
+ * SYNCED table now, so seeding it on a signed-in device is unsafe: the default
+ * uses the fixed id `ai-provider-gemini-default`, and a fresh device would push
+ * that row — with an empty key — over the account's real provider. A signed-in
+ * device therefore takes its providers from the live query instead, exactly
+ * like `appSettings` and `uiState`. The fixed id still means a re-seed on a
+ * signed-out device can never create a second Gemini row.
  */
 export async function initializeDatabaseDefaults() {
   // NOTE: no schedule seeding — weeks are assigned manually via
@@ -81,11 +85,16 @@ export async function initializeDatabaseDefaults() {
   // in-memory fallback until the live query returns a real row (or the user
   // saves).
 
-  const existingProviders = await db.aiProviders.toArray();
-  if (existingProviders.length === 0) {
-    await db.aiProviders.put(makeDefaultAiProvider());
-  } else if (!existingProviders.some((p) => p.isDefault)) {
-    // Guarantee exactly one default after imports/edits.
-    await db.aiProviders.put({ ...existingProviders[0], isDefault: true });
+  // Same rule for `aiProviders`, which is synced as of this change. The app
+  // stays fully usable signed out: the row is written locally, and nothing
+  // leaves the device until the user signs in.
+  if (!db.cloud?.currentUser?.value?.isLoggedIn) {
+    const existingProviders = await db.aiProviders.toArray();
+    if (existingProviders.length === 0) {
+      await db.aiProviders.put(makeDefaultAiProvider());
+    } else if (!existingProviders.some((p) => p.isDefault)) {
+      // Guarantee exactly one default after imports/edits.
+      await db.aiProviders.put({ ...existingProviders[0], isDefault: true });
+    }
   }
 }

@@ -130,9 +130,11 @@ export const db = new ProductivityDB();
  * Enable cross-device sync.
  *
  * The URL comes from the committed `cloudConfig.ts` (NOT from the gitignored
- * `dexie-cloud.json`, which does not exist on the build server). `aiProviders`
- * is excluded so API keys never leave the device. Blobs in `resources` (uploaded
- * files) use lazy offloading, so their bytes are uploaded on first sync.
+ * `dexie-cloud.json`, which does not exist on the build server). Every table
+ * syncs, `aiProviders` included, so a provider (and its key) is available on
+ * every signed-in device; `UNSYNCED_TABLES` is currently empty. Blobs in
+ * `resources` (uploaded files) use lazy offloading, so their bytes are uploaded
+ * on first sync.
  */
 db.cloud?.configure({
   databaseUrl: DEXIE_CLOUD_URL,

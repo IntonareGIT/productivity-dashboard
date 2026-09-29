@@ -85,9 +85,9 @@ export const SyncAccountPanel: React.FC<SyncAccountPanelProps> = ({
           <p className="text-xs font-semibold text-content-primary">Sign out and erase this device's data?</p>
           <p className="text-xs text-content-secondary">
             Signing out <strong>erases the local database on this device</strong>: subjects, topics,
-            calendar, schedules, focus history and assistant chats. Your{' '}
-            <strong>AI API key is not synced</strong>, so it is deleted here and must be re-entered on
-            this device. Other devices keep their own data and key.
+            calendar, schedules, focus history and assistant chats. Your provider
+            settings, including the API key, <strong>are synced</strong>, so signing back in on
+            this device restores them from your account. Other devices keep their own data.
           </p>
           <button onClick={() => void exportAllData()} className={`${btn} border border-border bg-bg-surface text-content-primary hover:bg-bg-elevated`}>
             <Download className="w-4 h-4" />

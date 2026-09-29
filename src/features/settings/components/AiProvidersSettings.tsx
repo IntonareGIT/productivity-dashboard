@@ -115,8 +115,12 @@ export const AiProvidersSettings: React.FC = () => {
       }
     >
       <p className="text-xs text-content-tertiary mb-4 -mt-1">
-        The assistant stays disabled until the default provider has an API key. Keys are
-        stored only in this device’s IndexedDB and are stripped from JSON backups.
+        The assistant stays disabled until the default provider has an API key.
+      </p>
+      <p className="text-xs text-content-secondary bg-accent-subtle border border-border rounded-xl px-3 py-2.5 mb-4">
+        Provider details, <strong>including the API key</strong>, now sync to your account and
+        are available on every signed-in device. While you are signed out they stay on this
+        device only. Keys are stripped from JSON backups.
       </p>
 
       {sorted.length === 0 ? (

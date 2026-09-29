@@ -11,8 +11,14 @@ import { SyncAccountPanel } from './SyncAccountPanel';
  */
 export const SyncSettings: React.FC = () => (
   <SyncAccountPanel variant="card" showDiagnostics>
-    <p className="text-[11px] text-content-tertiary">
-      Never synced (kept per-device): {UNSYNCED_TABLES.join(', ')}.
-    </p>
+    {UNSYNCED_TABLES.length > 0 ? (
+      <p className="text-[11px] text-content-tertiary">
+        Never synced (kept per-device): {UNSYNCED_TABLES.join(', ')}.
+      </p>
+    ) : (
+      <p className="text-[11px] text-content-tertiary">
+        Everything syncs, including your AI providers and their API keys.
+      </p>
+    )}
   </SyncAccountPanel>
 );
