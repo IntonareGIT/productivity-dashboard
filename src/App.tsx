@@ -60,6 +60,13 @@ export const App: React.FC = () => {
   }, []);
 
   const closeSplit = useCallback(() => setSplitOpen(false), []);
+
+  // Navigating to a different tab closes the split overlay, so the user is
+  // never left staring at the previous tab's content behind an overlay.
+  const selectTab = useCallback((tab: NavTab) => {
+    if (tab !== activeTab) setSplitOpen(false);
+    setActiveTab(tab);
+  }, [activeTab]);
   const loadPomodoroSettings = usePomodoroStore((s) => s.loadSettings);
   const refreshAssistantProvider = useAssistantStore((s) => s.refreshProvider);
   // Live status -> theme mapping (synced); re-applies the theme when it changes.
@@ -212,7 +219,7 @@ export const App: React.FC = () => {
   return (
     <AppLayout
       activeTab={activeTab}
-      onSelectTab={setActiveTab}
+      onSelectTab={selectTab}
       splitOpen={splitOpen}
       onToggleSplit={toggleSplit}
       overlay={

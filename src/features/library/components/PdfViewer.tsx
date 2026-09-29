@@ -354,6 +354,15 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         ref={shellRef}
         onScroll={handleScroll}
         className="relative flex-1 min-h-[320px] overflow-auto overscroll-contain rounded-xl border border-border bg-bg-elevated/40 outline-none"
+        // CRITICAL: the page surface must be height-bounded or `overflow-auto`
+        // never engages. Without a bound it grows to the full spacer height
+        // (pageCount x pageHeight), so it cannot scroll, every scrollTop write
+        // is a no-op, and pages 2..N are rendered far below the visible area —
+        // which looks exactly like "only page 1 ever displays". `flex-1` only
+        // resolves against a definite parent, and this viewer is also used
+        // inline in a modal, so an explicit max-height is required. In full
+        // screen the root is `fixed inset-0`, so flex-1 is definite there.
+        style={fullScreen ? undefined : { maxHeight: 'min(72vh, 720px)' }}
       >
         {status === 'loading' ? (
           <div className="flex h-full min-h-[280px] items-center justify-center gap-2 text-xs text-content-tertiary">

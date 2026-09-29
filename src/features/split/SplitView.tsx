@@ -181,11 +181,19 @@ const SplitBody: React.FC<SplitBodyProps> = ({
             setState((s) => ({ ...s, ratio: clampRatio(s.ratio + step) }));
           }
         }}
-        className={`shrink-0 flex items-center justify-center bg-border/40 hover:bg-accent/50 transition-colors ${
-          stacked ? 'h-2 w-full cursor-row-resize' : 'w-2 cursor-col-resize h-full'
+        className={`shrink-0 flex items-center justify-center bg-border hover:bg-accent/60 transition-colors touch-none select-none ${
+          // `self-stretch` rather than `h-full`: stretch always fills the row,
+          // whereas a percentage height collapses to 0 if the row height is not
+          // definite, which made the divider disappear. The background is a
+          // solid token too — `bg-border/40` was too faint to see on some themes.
+          stacked ? 'h-2.5 w-full cursor-row-resize self-stretch' : 'w-2.5 cursor-col-resize self-stretch'
         }`}
       >
-        <span className="rounded-full bg-border" style={{ width: stacked ? 28 : 2, height: stacked ? 2 : 28 }} />
+        <span
+          aria-hidden="true"
+          className="rounded-full bg-content-tertiary/70"
+          style={{ width: stacked ? 32 : 3, height: stacked ? 3 : 32 }}
+        />
       </div>
 
       {pane(1, b, secondFlex)}

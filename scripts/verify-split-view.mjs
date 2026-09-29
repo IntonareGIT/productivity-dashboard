@@ -300,6 +300,64 @@ const CHAT = { kind: 'assistant' };
     /changeZoom\(ZOOM_STEP\)/.test(pdf) && /setRotation\(\(r\) => \(r \+ 90\) % 360\)/.test(pdf));
   check('11 keyboard page navigation is retained',
     /case 'ArrowLeft'/.test(pdf) && /case 'ArrowRight'/.test(pdf));
+
+  // ---- 12. Regression: bugs 1 & 2 (unbounded page surface) -----------
+  // Without a height bound the surface grows to pageCount x pageHeight, so
+  // overflow-auto never engages, scrollTop writes are no-ops, and pages 2..N
+  // are painted far below the visible area.
+  check('12 the page surface is height-bounded so it can actually scroll',
+    /maxHeight: 'min\(72vh, 720px\)'/.test(pdf));
+  check('12 the bound is lifted only in full screen (definite fixed parent)',
+    /style=\{fullScreen \? undefined : \{ maxHeight/.test(pdf));
+  check('12 the surface still declares overflow-auto', /overflow-auto/.test(pdf));
+  check('12 the nav-sync effect can now take effect', /el\.scrollTop = target/.test(pdf));
+  check('12 handleScroll is bound to the scrolling element',
+    /onScroll=\{handleScroll\}/.test(pdf) && /ref=\{shellRef\}/.test(pdf));
+  check('12 the spacer is taller than the bounded surface',
+    /height: `\$\{totalHeight\}px`/.test(pdf) && /pageCount\) \* band/.test(pdf));
+  check('12 the render function uses the live page, not a hardcoded one',
+    /doc\.getPage\(page\)/.test(pdf) && !/getPage\(1\)/.test(pdf));
+  check('12 the cancellation guard cannot block a NEW render',
+    // The cleanup nulls the ref, so the next render sees no previous task and
+    // the token only ever rejects a genuinely stale completion.
+    /renderTaskRef\.current = null;[\s\S]{0,60}t\?\.cancel\(\)/.test(pdf) &&
+    /const token = \+\+renderTokenRef\.current/.test(pdf));
+
+  // ---- 13. Regression: bug 2b (divider visibility) -------------------
+  // The pane layout is read from the same file, scoped locally here. Comments are
+  // stripped so prose that MENTIONS a token does not count as using it.
+  const sv = readFileSync('src/features/split/SplitView.tsx', 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '');
+  check('13 the divider stretches rather than using a percentage height',
+    /self-stretch/.test(sv) && !/w-2 cursor-col-resize h-full/.test(sv));
+  check('13 the divider has a solid, visible background',
+    /bg-border hover:bg-accent\/60/.test(sv) && !/bg-border\/40/.test(sv));
+  check('13 the divider has a visible grab handle',
+    /bg-content-tertiary\/70/.test(sv));
+  // Structural, not distance-based: the divider sits between the two panes.
+  check('13 the divider renders whenever the split is open, not per pane type',
+    (() => {
+      const p0 = sv.indexOf('{pane(0, a, firstFlex)}');
+      const sep = sv.indexOf('role="separator"');
+      const p1 = sv.indexOf('{pane(1, b, secondFlex)}');
+      return p0 !== -1 && sep !== -1 && p1 !== -1 && p0 < sep && sep < p1 &&
+        sv.split('role="separator"').length - 1 === 1;
+    })(),
+    'exactly one divider, between the two panes');
+  check('13 the divider is not hidden when a pane is maximized',
+    !/maximized[^}]*hidden[^}]*role="separator"/.test(sv));
+
+  // ---- 14. Regression: bug 3 (sidebar navigation closes the split) ----
+  const appSrc = readFileSync('src/App.tsx', 'utf8');
+  check('14 a dedicated tab handler exists', /const selectTab = useCallback/.test(appSrc));
+  check('14 selecting a different tab closes the split overlay',
+    /if \(tab !== activeTab\) setSplitOpen\(false\)/.test(appSrc));
+  check('14 the tab handler still switches tabs', /setActiveTab\(tab\)/.test(appSrc));
+  check('14 AppLayout is wired to the tab handler, not raw setActiveTab',
+    /onSelectTab=\{selectTab\}/.test(appSrc));
+  check('14 the split is not closed when re-selecting the same tab',
+    /if \(tab !== activeTab\)/.test(appSrc));
 }
 
 console.log('');
