@@ -853,7 +853,24 @@ the same conversation open.
 ## 1.14 Two-pane split view
 
 `src/features/split/` hosts a two-pane layout where **either** pane can show the
-Dashboard, a PDF preview, topic notes, or the assistant chat.
+Dashboard, a PDF preview, topic notes, the assistant chat, or be **empty**.
+
+**The split is an app-level overlay, not a view owned by a tab.** `App.tsx`
+renders it through `AppLayout`'s `overlay` slot, layered above whichever tab is
+active (Dashboard, Library, Calendar, Shifts, Focus, Settings) and below the top
+bar. Opening or closing it never touches `activeTab`, so closing returns to
+exactly the tab that was showing.
+
+**The top-bar icon is the only generic entry point.** A `Columns2` button sits
+next to the profile avatar, visible on every tab and at every width including
+mobile, with `aria-pressed` reflecting the state. It opens an **empty split** —
+two panes, each a dashed border with *"Choose what to show in this pane:
+Dashboard, a PDF, Notes, or Assistant."* plus its own picker — and toggles
+closed when clicked again. A test asserts only one file may call
+`addSecondPane()`, so no second generic entry point can creep in. The Library's
+per-resource **"Split with notes"** remains as a *contextual* shortcut: it
+opens the split with that PDF and its topic notes immediately, from whatever tab
+the button is on, without navigating to the Dashboard.
 
 | File | Role |
 | --- | --- |
@@ -879,7 +896,19 @@ topicId)` opens the split with that PDF in one pane and **its own topic notes**
 in the other, both still changeable through their own pickers. Reached from the
 Library resource row's "Split with notes".
 
-**Three distinct zoom levels, deliberately.** Pane maximize hides the other pane
+**Page scrolling.** The page surface is a real scroll container holding a spacer
+as tall as every page, with the current page's canvas offset to its own band, so
+the **mouse wheel and touch drags (with momentum) scroll continuously** between
+pages like a normal PDF viewer. Scrolling derives the page in view and feeds it
+into the same `goToPage()` path, so the render-cancellation fix, zoom and
+rotation all still apply, and the page indicator always shows the page in view.
+A `scrollDrivenRef` distinguishes a scroll-originated page change (left alone,
+so the view does not snap back) from a nav-button or page-input change (which
+snaps to the page top). The band height is recomputed on zoom, rotation and
+document change. `overscroll-contain` keeps a flick from scrolling the app
+behind. Next/previous, the page-number input and the arrow keys all remain.
+
+**Three deliberately separate zoom levels.** Pane maximize hides the other pane
 with `display:none` but keeps it **mounted**, so it retains its page/zoom/
 rotation and restores instantly. Full-screen preview is separate: a
 `fixed inset-0` overlay that mounts a **fresh** `PdfViewer`, giving it its own

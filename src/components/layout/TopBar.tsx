@@ -1,20 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { format } from 'date-fns';
-import { Sun, Moon } from 'lucide-react';
+import { Sun, Moon, Columns2 } from 'lucide-react';
 import { useStatusThemeStore } from '../../stores/useStatusThemeStore';
 import { ProfileMenu } from './ProfileMenu';
 import type { NavTab } from './Sidebar';
 
 interface TopBarProps {
   onSelectTab: (tab: NavTab) => void;
+  /** Whether the split overlay is currently open. */
+  splitOpen?: boolean;
+  /** Toggle the split overlay. Visible on every tab and at every width. */
+  onToggleSplit?: () => void;
 }
 
 /**
- * Top bar: clock on the left, light/dark toggle and the profile avatar on the
- * right. Current status is no longer shown or set here — it lives only in the
- * profile menu ("Mood and theme") and in Settings.
+ * Top bar: clock on the left, light/dark toggle, the split-view icon and the
+ * profile avatar on the right. Current status is no longer shown or set here —
+ * it lives only in the profile menu ("Mood and theme") and in Settings.
  */
-export const TopBar: React.FC<TopBarProps> = ({ onSelectTab }) => {
+export const TopBar: React.FC<TopBarProps> = ({ onSelectTab, splitOpen, onToggleSplit }) => {
   const [currentTime, setCurrentTime] = useState(new Date());
 
   const { colorScheme, toggleColorScheme } = useStatusThemeStore();
@@ -50,6 +54,24 @@ export const TopBar: React.FC<TopBarProps> = ({ onSelectTab }) => {
             <Moon className="w-4 h-4 text-slate-700" />
           )}
         </button>
+
+        {/* Split view — the ONLY generic entry point. Visible on every tab and at
+            every width, including mobile. */}
+        {onToggleSplit && (
+          <button
+            onClick={onToggleSplit}
+            aria-label={splitOpen ? 'Close split view' : 'Open split view'}
+            aria-pressed={splitOpen}
+            title={splitOpen ? 'Close split view' : 'Open split view'}
+            className={`inline-flex p-1.5 rounded-lg transition-colors border ${
+              splitOpen
+                ? 'text-accent bg-accent-subtle border-accent'
+                : 'text-content-secondary hover:text-content-primary hover:bg-bg-elevated border-transparent hover:border-border'
+            }`}
+          >
+            <Columns2 className="w-4 h-4" />
+          </button>
+        )}
 
         {/* Profile avatar + menu — visible at every width. */}
         <ProfileMenu onNavigate={onSelectTab} />

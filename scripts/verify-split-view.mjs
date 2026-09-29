@@ -6,7 +6,7 @@
  * including the rule that NOTHING is persisted (a refresh must reset).
  */
 import { build } from 'esbuild';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -157,12 +157,71 @@ const CHAT = { kind: 'assistant' };
   const fullScreen = readFileSync('src/features/split/FullScreenPreview.tsx', 'utf8');
   const app = readFileSync('src/App.tsx', 'utf8');
   const pdfViewer = readFileSync('src/features/library/components/PdfViewer.tsx', 'utf8');
+  const topBar = readFileSync('src/components/layout/TopBar.tsx', 'utf8');
+  const appLayout = readFileSync('src/components/layout/AppLayout.tsx', 'utf8');
 
   check('10 the split is React state in App, seeded from initialSplitState',
     /useState<SplitState>\(initialSplitState\)/.test(app));
-  check('10 the dashboard tab hosts the split view',
-    /activeTab === 'dashboard' \? \([\s\S]{0,200}SplitView/.test(app));
+  check('10 App does not persist the split',
+    !/localStorage|sessionStorage/.test(app));
+  check('10 the split is an APP-LEVEL overlay, not owned by a tab',
+    /overlay=\{/.test(app) && /<AppLayout[\s\S]{0,400}overlay/.test(app));
+  check('10 the overlay is layered above the active tab content',
+    /absolute inset-x-0 top-14 bottom-0 z-20/.test(app));
+  check('10 every tab renders its normal content again',
+    /case 'dashboard'/.test(app) && /case 'library'/.test(app) &&
+    /case 'calendar'/.test(app) && /case 'shifts'/.test(app) &&
+    /case 'focus'/.test(app) && /case 'settings'/.test(app));
+  check('10 the split is no longer bound to the dashboard tab',
+    !/activeTab === 'dashboard' \? \(/.test(app));
   check('10 App opens the PDF split via splitWithNotes', /splitWithNotes\(resourceId, topicId\)/.test(app));
+  check('10 opening the PDF split also opens the overlay', /setSplitOpen\(true\)/.test(app));
+  check('10 opening the split does NOT change the active tab',
+    !/setActiveTab\([^)]*\)/.test(
+      app.slice(app.indexOf('const openPdfWithNotes'), app.indexOf('const renderContent'))));
+  check('10 closing the split does NOT change the active tab',
+    /const closeSplit = useCallback\(\(\) => setSplitOpen\(false\), \[\]\)/.test(app));
+
+  check('10 the top bar has a split icon next to the avatar',
+    /Columns2/.test(topBar) && /Open split view/.test(topBar) && /Close split view/.test(topBar));
+  check('10 the split icon is visible at every width (no hidden/md-only)',
+    !/hidden (sm|md):[a-z-]*flex[^"]*"[\s\S]{0,200}Columns2/.test(topBar) &&
+    /onToggleSplit && \(/.test(topBar));
+  check('10 the top bar icon reflects and toggles split state',
+    /aria-pressed=\{splitOpen\}/.test(topBar) && /onClick=\{onToggleSplit\}/.test(topBar));
+  check('10 the icon is the only generic split entry point',
+    (() => {
+      // `onToggleSplit` legitimately appears in App/AppLayout/TopBar as prop
+      // plumbing, and `addSecondPane` in the model that defines it. What must be
+      // unique is the actual CALL SITE that adds a pane generically.
+      const hits = [];
+      const walk = (d) => {
+        for (const e of readdirSync(d, { withFileTypes: true })) {
+          const p = join(d, e.name);
+          if (e.isDirectory()) walk(p);
+          else if (/\.tsx$/.test(e.name) && /addSecondPane\(/.test(readFileSync(p, 'utf8'))) hits.push(p);
+        }
+      };
+      walk('src');
+      return hits.length === 1 && hits[0].replace(/\\/g, '/').endsWith('features/split/SplitView.tsx');
+    })(),
+    'only SplitView may add a pane generically');
+  check('10 no other surface exposes a generic start-split button',
+    !/Start split screen|startSplitScreen/.test(
+      readFileSync('src/components/layout/Sidebar.tsx', 'utf8') +
+      readFileSync('src/components/layout/BottomNav.tsx', 'utf8') +
+      readFileSync('src/components/layout/ProfileMenu.tsx', 'utf8')));
+
+  check('10 the empty pane kind exists with the instructional note',
+    /case 'empty'/.test(paneContent) &&
+    /Choose what to show in this pane: Dashboard, a PDF, Notes, or Assistant\./.test(paneContent));
+  check('10 the empty pane has a light (dashed) border',
+    /border-dashed/.test(paneContent));
+  check('10 the icon opens a default empty split',
+    /emptySplitState/.test(app) && /panes\.length > 1 \? s : emptySplitState/.test(app));
+  check('10 every pane still has its own picker control',
+    /Pane \$\{index \+ 1\} content/.test(splitView));
+
 
   check('10 two panes are side by side, stacked under 768px',
     /stacked \? 'flex-col' : 'flex-row'/.test(splitView) && /max-width: 767px/.test(splitView));
@@ -203,6 +262,44 @@ const CHAT = { kind: 'assistant' };
     /onRequestFullScreen/.test(pdfViewer));
   check('10 the render-cancellation fix is still in the viewer',
     /previous\.cancel\(\)/.test(pdfViewer) && /renderTokenRef/.test(pdfViewer));
+
+  // The overlay is rendered by AppLayout, above whichever tab is active.
+  check('10 AppLayout accepts and renders an overlay layer',
+    /overlay\?: React\.ReactNode/.test(appLayout) && /\{overlay\}/.test(appLayout));
+  check('10 AppLayout passes the split toggle to the top bar',
+    /onToggleSplit=\{onToggleSplit\}/.test(appLayout) && /splitOpen=\{splitOpen\}/.test(appLayout));
+  check('10 the layout column is positioned for the overlay',
+    /flex-1 flex flex-col min-w-0 pb-16 md:pb-0 relative/.test(appLayout));
+}
+
+// ---- 11. PDF continuous scrolling ------------------------------------
+{
+  const pdf = readFileSync('src/features/library/components/PdfViewer.tsx', 'utf8');
+  check('11 the page surface is a real scroll container',
+    /onScroll=\{handleScroll\}/.test(pdf) && /overflow-auto/.test(pdf));
+  check('11 touch scrolling is not captured by the page',
+    /touch-action/.test(pdf) || /overscroll-contain/.test(pdf));
+  check('11 the scroll surface spans every page',
+    /const totalHeight = Math\.max\(1, pageCount\) \* band/.test(pdf) && /height: `\$\{totalHeight\}px`/.test(pdf));
+  check('11 the canvas is offset to its own page band',
+    /top: `\$\{\(page - 1\) \* band\}px`/.test(pdf));
+  check('11 scrolling derives the page in view and syncs the indicator',
+    /handleScroll/.test(pdf) && /el\.scrollTop \/ pageHeight/.test(pdf) && /goToPage\(next\)/.test(pdf));
+  check('11 scrolling does not snap the scroll position back',
+    /scrollDrivenRef/.test(pdf) && /scrollDrivenRef\.current = false; return/.test(pdf));
+  check('11 nav buttons and the page input do snap to the page top',
+    /el\.scrollTop = target/.test(pdf));
+  check('11 the page height is recomputed on zoom/rotation/document change',
+    /setPageHeight\(cssH\)/.test(pdf) && /useEffect\(\(\) => \{ setPageHeight\(0\); \}, \[blob, zoom, rotation\]\)/.test(pdf));
+  check('11 the existing nav buttons and page input are still present',
+    /aria-label="Previous page"/.test(pdf) && /aria-label="Next page"/.test(pdf) &&
+    /aria-label="Page number"/.test(pdf));
+  check('11 scrolling reuses the existing render path (cancellation applies)',
+    /goToPage\(next\)/.test(pdf) && /previous\.cancel\(\)/.test(pdf) && /renderTokenRef/.test(pdf));
+  check('11 zoom and rotation still work alongside scrolling',
+    /changeZoom\(ZOOM_STEP\)/.test(pdf) && /setRotation\(\(r\) => \(r \+ 90\) % 360\)/.test(pdf));
+  check('11 keyboard page navigation is retained',
+    /case 'ArrowLeft'/.test(pdf) && /case 'ArrowRight'/.test(pdf));
 }
 
 console.log('');

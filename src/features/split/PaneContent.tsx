@@ -43,6 +43,15 @@ export const PaneContent: React.FC<PaneContentProps> = ({
   ) as Resource | undefined;
 
   switch (slot.kind) {
+    case 'empty':
+      return (
+        <div className="flex h-full items-center justify-center p-4">
+          <p className="max-w-[22rem] text-center text-xs text-content-tertiary border border-dashed border-border rounded-xl px-4 py-6">
+            Choose what to show in this pane: Dashboard, a PDF, Notes, or Assistant.
+          </p>
+        </div>
+      );
+
     case 'dashboard':
       return <DashboardPage onNavigate={onNavigate} />;
 

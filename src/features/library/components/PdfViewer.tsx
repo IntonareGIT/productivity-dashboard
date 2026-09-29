@@ -72,6 +72,11 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   const [rendering, setRendering] = useState(false);
   const [error, setError] = useState('');
   const [containerWidth, setContainerWidth] = useState(720);
+  // CSS height of the current page, used as a uniform band for scrolling.
+  const [pageHeight, setPageHeight] = useState(0);
+  // True when the page change came from scrolling, so the scroll position is
+  // left alone instead of being snapped back to the page top.
+  const scrollDrivenRef = useRef(false);
 
   const shellRef = useRef<HTMLDivElement | null>(null);
 
@@ -179,10 +184,14 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       if (!context) return;
       // Match the CSS box to the rotated page so layout reserves the right space.
       const rotated = rotation % 180 !== 0;
+      const cssH = Math.floor(rotated ? unit.width * cssScale : unit.height * cssScale);
+      const cssW = Math.floor(rotated ? unit.height * cssScale : unit.width * cssScale);
       canvas.width = Math.floor(viewport.width);
       canvas.height = Math.floor(viewport.height);
-      canvas.style.width = `${Math.floor(rotated ? unit.height * cssScale : unit.width * cssScale)}px`;
-      canvas.style.height = `${Math.floor(rotated ? unit.width * cssScale : unit.height * cssScale)}px`;
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+      // The band height drives continuous scrolling, so keep it in sync.
+      setPageHeight(cssH);
 
       const task = pdfPage.render({ canvas, canvasContext: context, viewport });
       renderTaskRef.current = task;
@@ -209,6 +218,37 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       t?.cancel();
     };
   }, [status, renderPage]);
+
+  // ---- Continuous scrolling through pages ------------------------------
+  // The page surface is a real scroll container, so the mouse wheel and touch
+  // drags (with momentum) work natively. Scrolling updates `page`, which feeds
+  // the existing render path — so the render-cancellation fix, zoom and
+  // rotation all still apply, and the page indicator tracks what is in view.
+  const band = pageHeight || 600;
+  const totalHeight = Math.max(1, pageCount) * band;
+
+  const handleScroll = () => {
+    const el = shellRef.current;
+    if (!el || pageHeight <= 0 || pageCount === 0) return;
+    const next = Math.max(1, Math.min(pageCount, Math.round(el.scrollTop / pageHeight) + 1));
+    if (next !== page) {
+      // Let the effect below know this change came from scrolling.
+      scrollDrivenRef.current = true;
+      goToPage(next);
+    }
+  };
+
+  // Nav buttons and the page input snap to the page top; scrolling does not.
+  useEffect(() => {
+    const el = shellRef.current;
+    if (scrollDrivenRef.current) { scrollDrivenRef.current = false; return; }
+    if (!el || pageHeight <= 0 || pageCount <= 1) return;
+    const target = (page - 1) * pageHeight;
+    if (Math.abs(el.scrollTop - target) > 1) el.scrollTop = target;
+  }, [page, pageHeight, pageCount]);
+
+  // A new document or a zoom/rotation change invalidates the old offset.
+  useEffect(() => { setPageHeight(0); }, [blob, zoom, rotation]);
 
   // ---- Keyboard shortcuts, active only while the viewer has focus ----
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -312,28 +352,33 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
       <div
         ref={shellRef}
-        className="relative flex-1 min-h-[320px] overflow-auto rounded-xl border border-border bg-bg-elevated/40 p-3 outline-none"
+        onScroll={handleScroll}
+        className="relative flex-1 min-h-[320px] overflow-auto overscroll-contain rounded-xl border border-border bg-bg-elevated/40 outline-none"
       >
         {status === 'loading' ? (
           <div className="flex h-full min-h-[280px] items-center justify-center gap-2 text-xs text-content-tertiary">
             <Loader2 className="w-4 h-4 animate-spin" /> Loading PDF…
           </div>
         ) : (
-          <>
+          /* A spacer as tall as every page, with the current page's canvas
+             positioned at its own offset. That makes the wheel and touch drags
+             scroll continuously between pages. */
+          <div className="relative" style={{ height: `${totalHeight}px` }}>
             <canvas
               ref={canvasRef}
-              className="mx-auto block rounded-lg bg-white shadow-sm"
+              className="absolute left-1/2 -translate-x-1/2 rounded-lg bg-white shadow-sm"
+              style={{ top: `${(page - 1) * band}px` }}
               aria-label={title ? `${title} — PDF page ${page} of ${pageCount}` : `PDF page ${page} of ${pageCount}`}
             />
             {/* Rendering overlay, so zoom/rotate/page never look frozen. */}
             {rendering && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <div className="flex items-center gap-2 rounded-full bg-bg-surface/90 border border-border px-3 py-1.5 text-[11px] font-semibold text-content-secondary shadow-sm">
+              <div className="sticky top-0 pointer-events-none flex justify-center">
+                <div className="mt-2 flex items-center gap-2 rounded-full bg-bg-surface/90 border border-border px-3 py-1.5 text-[11px] font-semibold text-content-secondary shadow-sm">
                   <Loader2 className="w-3.5 h-3.5 animate-spin" /> Rendering…
                 </div>
               </div>
             )}
-          </>
+          </div>
         )}
       </div>
 

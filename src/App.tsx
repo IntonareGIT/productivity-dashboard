@@ -6,7 +6,7 @@ import { CommandPalette } from './components/ui/CommandPalette';
 import { Toaster } from './components/ui/Toaster';
 import { DashboardPage } from './features/dashboard/DashboardPage';
 import { SplitView } from './features/split/SplitView';
-import { initialSplitState, splitWithNotes, type SplitState } from './features/split/splitModel';
+import { initialSplitState, emptySplitState, splitWithNotes, type SplitState } from './features/split/splitModel';
 import { LibraryPage } from './features/library/LibraryPage';
 import { CalendarPage } from './features/calendar/CalendarPage';
 import { ShiftsPage } from './features/shifts/ShiftsPage';
@@ -43,9 +43,23 @@ export const App: React.FC = () => {
   // Bumped whenever "New event" runs from the palette; CalendarPage opens
   // its event modal for today when this changes.
   const [quickAddEventNonce, setQuickAddEventNonce] = useState(0);
-  // Two-pane split view. React state ONLY — never persisted, so a refresh
-  // always returns to the default single full-width dashboard.
+  // Two-pane split view, an APP-LEVEL overlay above whichever tab is active.
+  // React state ONLY — never persisted, so a refresh resets to the default
+  // single full-width dashboard. The active tab is never changed by opening or
+  // closing it, so closing returns to exactly the tab that was showing.
   const [splitState, setSplitState] = useState<SplitState>(initialSplitState);
+  const [splitOpen, setSplitOpen] = useState(false);
+
+  // The top-bar icon is the only generic entry point: it opens an empty split
+  // the first time and toggles it closed afterwards.
+  const toggleSplit = useCallback(() => {
+    setSplitOpen((open) => {
+      if (!open) setSplitState((s) => (s.panes.length > 1 ? s : emptySplitState));
+      return !open;
+    });
+  }, []);
+
+  const closeSplit = useCallback(() => setSplitOpen(false), []);
   const loadPomodoroSettings = usePomodoroStore((s) => s.loadSettings);
   const refreshAssistantProvider = useAssistantStore((s) => s.refreshProvider);
   // Live status -> theme mapping (synced); re-applies the theme when it changes.
@@ -167,11 +181,13 @@ export const App: React.FC = () => {
   }, [loadPomodoroSettings]);
 
   // A PDF's half-screen mode: the split with that PDF in one pane and its own
-  // topic notes in the other. Both panes stay fully changeable afterwards.
+  // topic notes in the other. Opens immediately, from whichever tab the button
+  // was on, WITHOUT navigating anywhere.
   const openPdfWithNotes = useCallback((resourceId: string, topicId: string | null) => {
     setAssistantPage(false);
     useAssistantStore.getState().setOpen(false);
     setSplitState(splitWithNotes(resourceId, topicId));
+    setSplitOpen(true);
   }, []);
 
   const renderContent = () => {
@@ -194,7 +210,27 @@ export const App: React.FC = () => {
   };
 
   return (
-    <AppLayout activeTab={activeTab} onSelectTab={setActiveTab}>
+    <AppLayout
+      activeTab={activeTab}
+      onSelectTab={setActiveTab}
+      splitOpen={splitOpen}
+      onToggleSplit={toggleSplit}
+      overlay={
+        /* App-level overlay: sits above whichever tab is active and never
+           changes it, so closing returns to the same tab. */
+        splitOpen ? (
+          <div className="absolute inset-x-0 top-14 bottom-0 z-20 bg-bg">
+            <SplitView
+              state={splitState}
+              setState={setSplitState}
+              onNavigate={(tab) => setActiveTab(tab)}
+              onOpenAssistantSettings={openAssistantSettings}
+              onCloseSplit={closeSplit}
+            />
+          </div>
+        ) : null
+      }
+    >
       {assistantPage ? (
         <AssistantPage
           onOpenSettings={openAssistantSettings}
@@ -203,18 +239,7 @@ export const App: React.FC = () => {
         />
       ) : (
         <>
-          {activeTab === 'dashboard' ? (
-            /* The Dashboard tab hosts the split view, so a pane can show the
-               normal dashboard layout alongside a PDF, notes or the assistant. */
-            <SplitView
-              state={splitState}
-              setState={setSplitState}
-              onNavigate={(tab) => setActiveTab(tab)}
-              onOpenAssistantSettings={openAssistantSettings}
-            />
-          ) : (
-            renderContent()
-          )}
+          {renderContent()}
           <CommandPalette
             open={paletteOpen}
             onClose={() => setPaletteOpen(false)}

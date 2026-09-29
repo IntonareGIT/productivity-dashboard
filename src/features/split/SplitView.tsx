@@ -20,10 +20,12 @@ interface SplitViewProps {
   setState: React.Dispatch<React.SetStateAction<SplitState>>;
   onNavigate: (tab: NavTab) => void;
   onOpenAssistantSettings: () => void;
+  /** Close the split overlay entirely (the top-bar icon also toggles it). */
+  onCloseSplit?: () => void;
 }
 
 export const SplitView: React.FC<SplitViewProps> = ({
-  state, setState, onNavigate, onOpenAssistantSettings,
+  state, setState, onNavigate, onOpenAssistantSettings, onCloseSplit,
 }) => {
   const [fullScreenResource, setFullScreenResource] = useState<Resource | null>(null);
   const split = isSplit(state);
@@ -48,6 +50,7 @@ export const SplitView: React.FC<SplitViewProps> = ({
           onNavigate={onNavigate}
           onOpenAssistantSettings={onOpenAssistantSettings}
           onOpenFullScreen={openFullScreenFor}
+          onCloseSplit={onCloseSplit}
         />
       )}
 
@@ -80,7 +83,7 @@ interface SplitBodyProps extends Omit<SplitViewProps, 'state'> {
 }
 
 const SplitBody: React.FC<SplitBodyProps> = ({
-  state, setState, onNavigate, onOpenAssistantSettings, onOpenFullScreen,
+  state, setState, onNavigate, onOpenAssistantSettings, onOpenFullScreen, onCloseSplit,
 }) => {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [stacked, setStacked] = useState(false);
@@ -138,6 +141,7 @@ const SplitBody: React.FC<SplitBodyProps> = ({
               split={isSplit(state)}
               maximized={maximized === index}
               setState={setState}
+              onCloseSplit={onCloseSplit}
             />
             <div className="flex-1 min-h-0 overflow-auto">
               <PaneContent
@@ -196,13 +200,16 @@ interface PaneHeaderProps {
   split: boolean;
   maximized: boolean;
   setState: React.Dispatch<React.SetStateAction<SplitState>>;
+  onCloseSplit?: () => void;
 }
 
 /**
  * The small per-pane header: what this pane shows (with a picker), plus swap,
  * close, maximize and open-split controls.
  */
-const PaneHeader: React.FC<PaneHeaderProps> = ({ index, slot, split, maximized, setState }) => {
+const PaneHeader: React.FC<PaneHeaderProps> = ({
+  index, slot, split, maximized, setState, onCloseSplit,
+}) => {
   // Pickers are driven by the currently selected kind, so each pane chooses
   // "Dashboard / PDF / Notes / Assistant" and then its own resource or topic.
   const pdfs = useLiveQuery(async () => {
@@ -233,6 +240,7 @@ const PaneHeader: React.FC<PaneHeaderProps> = ({ index, slot, split, maximized, 
         onChange={(e) => select({ kind: e.target.value as PaneSlot['kind'] })}
         className="min-w-0 max-w-[9rem] bg-bg-elevated border border-border rounded-lg px-2 py-1.5 text-[11px] font-semibold text-content-primary outline-none focus:border-accent"
       >
+        <option value="empty">Empty</option>
         <option value="dashboard">Dashboard</option>
         <option value="pdf">PDF preview</option>
         <option value="notes">Notes</option>
@@ -296,6 +304,18 @@ const PaneHeader: React.FC<PaneHeaderProps> = ({ index, slot, split, maximized, 
             <PanelLeftClose className="w-4 h-4" />
           </button>
         </>
+      )}
+
+      {/* Close the whole overlay, leaving the active tab untouched. */}
+      {split && onCloseSplit && (
+        <button
+          onClick={onCloseSplit}
+          aria-label="Close split view"
+          title="Close split view"
+          className={ico}
+        >
+          <X className="w-4 h-4" />
+        </button>
       )}
 
       {!split && (

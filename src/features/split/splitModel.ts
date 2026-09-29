@@ -8,7 +8,7 @@
  * so a refresh always returns to the default single full-width dashboard.
  */
 
-export type PaneKind = 'dashboard' | 'pdf' | 'notes' | 'assistant';
+export type PaneKind = 'empty' | 'dashboard' | 'pdf' | 'notes' | 'assistant';
 
 /** What one pane is showing. `resourceId`/`topicId` are per-kind. */
 export interface PaneSlot {
@@ -18,6 +18,16 @@ export interface PaneSlot {
   /** For kind 'notes': the topic whose notes are being edited. */
   topicId?: string;
 }
+
+/**
+ * The state the top-bar icon opens with: two empty panes, each showing the
+ * instructional note and its own picker.
+ */
+export const emptySplitState: SplitState = {
+  panes: [{ kind: 'empty' }, { kind: 'empty' }],
+  ratio: 0.5,
+  maximized: null,
+};
 
 export interface SplitState {
   /** One entry in single-pane mode, two in split mode. */
