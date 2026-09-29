@@ -153,13 +153,13 @@ const res = (over = {}) => ({
   check('6 the worker is registered at module load', /GlobalWorkerOptions\.workerSrc/.test(pdf));
 
   // ---- render safety: the bug this fixes ----
-  check('R1 the in-flight render is held in a ref', /renderTaskRef = useRef<pdfjsLib\.RenderTask \| null>\(null\)/.test(pdf));
+  check('R1 the in-flight render is held in a ref', /renderTasksRef = useRef<Map<number, pdfjsLib\.RenderTask>>\(new Map\(\)\)/.test(pdf));
   check('R1 the previous render is cancelled', /previous\.cancel\(\)/.test(pdf));
   check('R1 the cancellation is AWAITED before a new render', /previous\.cancel\(\);[\s\S]{0,80}await previous\.promise/.test(pdf));
-  check('R1 a monotonic token guards stale renders', /renderTokenRef\.current/.test(pdf) && /token !== renderTokenRef\.current/.test(pdf));
-  check('R1 the effect cleanup cancels on unmount/input change', /t\?\.cancel\(\)/.test(pdf));
+  check('R1 a monotonic token guards stale renders', /renderTokensRef\.current\.get\(n\)/.test(pdf) && /const isCurrent = \(\) =>/.test(pdf));
+  check('R1 the effect cleanup cancels on unmount/input change', /renderTasksRef\.current\.clear\(\)/.test(pdf));
   check('R1 cancellation rejections are swallowed, not surfaced as errors', /isCancel\(e\)/.test(pdf) && /RenderingCancelledException/.test(pdf));
-  check('R1 the token is claimed AFTER the awaited cancellation', pdf.indexOf('const token = ++renderTokenRef.current;') > pdf.indexOf('await previous.promise;'));
+  check('R1 the token is claimed AFTER the awaited cancellation', pdf.indexOf('renderTokensRef.current.set(n, token);') > pdf.indexOf('await previous.promise;'));
 
   // ---- zoom / rotate / full screen / keyboard ----
   check('Z zoom in and out exist', /changeZoom\(ZOOM_STEP\)/.test(pdf) && /changeZoom\(-ZOOM_STEP\)/.test(pdf));

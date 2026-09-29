@@ -261,7 +261,7 @@ const CHAT = { kind: 'assistant' };
   check('10 the PDF viewer exposes a full-screen control to the host',
     /onRequestFullScreen/.test(pdfViewer));
   check('10 the render-cancellation fix is still in the viewer',
-    /previous\.cancel\(\)/.test(pdfViewer) && /renderTokenRef/.test(pdfViewer));
+    /previous\.cancel\(\)/.test(pdfViewer) && /renderTokensRef/.test(pdfViewer));
 
   // The overlay is rendered by AppLayout, above whichever tab is active.
   check('10 AppLayout accepts and renders an overlay layer',
@@ -280,22 +280,22 @@ const CHAT = { kind: 'assistant' };
   check('11 touch scrolling is not captured by the page',
     /touch-action/.test(pdf) || /overscroll-contain/.test(pdf));
   check('11 the scroll surface spans every page',
-    /const totalHeight = Math\.max\(1, pageCount\) \* band/.test(pdf) && /height: `\$\{totalHeight\}px`/.test(pdf));
+    /const totalHeight = last \? last\.top \+ last\.height : 0/.test(pdf) && /height: `\$\{totalHeight\}px`/.test(pdf));
   check('11 the canvas is offset to its own page band',
-    /top: `\$\{\(page - 1\) \* band\}px`/.test(pdf));
-  check('11 scrolling derives the page in view and syncs the indicator',
-    /handleScroll/.test(pdf) && /el\.scrollTop \/ pageHeight/.test(pdf) && /goToPage\(next\)/.test(pdf));
+    /style=\{\{ top: `\$\{entry\.top\}px` \}\}/.test(pdf));
+  check('12 scrolling derives the page in view and syncs the indicator',
+    /handleScroll/.test(pdf) && /el\.scrollTop \+ el\.clientHeight \/ 2/.test(pdf));
   check('11 scrolling does not snap the scroll position back',
     /scrollDrivenRef/.test(pdf) && /scrollDrivenRef\.current = false; return/.test(pdf));
   check('11 nav buttons and the page input do snap to the page top',
-    /el\.scrollTop = target/.test(pdf));
+    /el\.scrollTo\(\{ top: entry\.top, behavior: 'smooth' \}\)/.test(pdf));
   check('11 the page height is recomputed on zoom/rotation/document change',
-    /setPageHeight\(cssH\)/.test(pdf) && /useEffect\(\(\) => \{ setPageHeight\(0\); \}, \[blob, zoom, rotation\]\)/.test(pdf));
+    /setPageHeights/.test(pdf) && /\[blob\]\)/.test(pdf));
   check('11 the existing nav buttons and page input are still present',
     /aria-label="Previous page"/.test(pdf) && /aria-label="Next page"/.test(pdf) &&
     /aria-label="Page number"/.test(pdf));
   check('11 scrolling reuses the existing render path (cancellation applies)',
-    /goToPage\(next\)/.test(pdf) && /previous\.cancel\(\)/.test(pdf) && /renderTokenRef/.test(pdf));
+    /goToPage\(next\)/.test(pdf) && /previous\.cancel\(\)/.test(pdf) && /renderTokensRef/.test(pdf));
   check('11 zoom and rotation still work alongside scrolling',
     /changeZoom\(ZOOM_STEP\)/.test(pdf) && /setRotation\(\(r\) => \(r \+ 90\) % 360\)/.test(pdf));
   check('11 keyboard page navigation is retained',
@@ -310,18 +310,18 @@ const CHAT = { kind: 'assistant' };
   check('12 the bound is lifted in full screen / standalone (definite parent)',
     /style=\{fullScreen \|\| variant === 'standalone' \? undefined : \{ maxHeight/.test(pdf));
   check('12 the surface still declares overflow-auto', /overflow-auto/.test(pdf));
-  check('12 the nav-sync effect can now take effect', /el\.scrollTop = target/.test(pdf));
+  check('12 the nav-sync effect can now take effect', /el\.scrollTo\(\{ top: entry\.top/.test(pdf));
   check('12 handleScroll is bound to the scrolling element',
     /onScroll=\{handleScroll\}/.test(pdf) && /ref=\{shellRef\}/.test(pdf));
   check('12 the spacer is taller than the bounded surface',
-    /height: `\$\{totalHeight\}px`/.test(pdf) && /pageCount\) \* band/.test(pdf));
+    /height: `\$\{totalHeight\}px`/.test(pdf) && /layout\.length/.test(pdf));
   check('12 the render function uses the live page, not a hardcoded one',
-    /doc\.getPage\(page\)/.test(pdf) && !/getPage\(1\)/.test(pdf));
+    /doc\.getPage\(n\)/.test(pdf) && !/getPage\(1\)/.test(pdf));
   check('12 the cancellation guard cannot block a NEW render',
-    // The cleanup nulls the ref, so the next render sees no previous task and
-    // the token only ever rejects a genuinely stale completion.
-    /renderTaskRef\.current = null;[\s\S]{0,60}t\?\.cancel\(\)/.test(pdf) &&
-    /const token = \+\+renderTokenRef\.current/.test(pdf));
+    // The per-page cleanup empties the task map, so the next render of that page
+    // sees no previous task and the token only ever rejects a stale completion.
+    /renderTasksRef\.current\.delete\(n\)/.test(pdf) &&
+    /const token = \(renderTokensRef\.current\.get\(n\) \?\? 0\) \+ 1/.test(pdf));
 
   // ---- 13. Regression: bug 2b (divider visibility) -------------------
   // The pane layout is read from the same file, scoped locally here. Comments are
@@ -401,6 +401,54 @@ const CHAT = { kind: 'assistant' };
     /fullScreen \|\| variant === 'standalone' \? undefined : \{ maxHeight/.test(pdf));
   check('16 the viewer full-screen overlay also clips overflow',
     /z-\[60\] flex flex-col bg-bg-primary p-3 sm:p-5 overflow-hidden/.test(pdf));
+
+  // ---- 17. Fix 2: stacked, windowed page rendering -------------------
+  check('17 pages are a vertical STACK, not one swapped canvas',
+    /renderWindow\.map\(\(n\)/.test(pdf) && /style=\{\{ top: `\$\{entry\.top\}px` \}\}/.test(pdf));
+  check('17 each page owns its own canvas in document order',
+    /ref=\{setCanvas\(n\)\}/.test(pdf) && /key=\{n\}/.test(pdf));
+  check('17 only a window of pages is rendered (current +/-1)',
+    /const from = Math\.max\(1, page - 1\)/.test(pdf) &&
+    /const to = Math\.min\(pageCount, page \+ 1\)/.test(pdf));
+  check('17 canvases outside the window are released by unmounting',
+    /renderWindow\.map/.test(pdf) && !/Array\.from\(\{ length: pageCount \}\)/.test(pdf));
+  check('17 cancellation is tracked PER PAGE, not globally',
+    /renderTasksRef = useRef<Map<number, pdfjsLib\.RenderTask>>/.test(pdf) &&
+    /renderTasksRef\.current\.get\(n\)/.test(pdf) &&
+    /renderTasksRef\.current\.delete\(n\)/.test(pdf));
+  check('17 the per-page token rejects a stale render',
+    /renderTokensRef\.current\.get\(n\)/.test(pdf) && /const isCurrent = \(\) =>/.test(pdf));
+  check('17 each page cancels and AWAITS its own previous render',
+    /previous\.cancel\(\);[\s\S]{0,80}await previous\.promise/.test(pdf));
+  check('17 the window cleanup cancels every in-flight render',
+    /for \(const \[, t\] of renderTasksRef\.current\) t\.cancel\(\)/.test(pdf));
+  check('17 cancelling one page cannot disturb another',
+    !/renderTaskRef = useRef<pdfjsLib\.RenderTask \| null>/.test(pdf));
+  check('17 the page stack height is the sum of all page bands',
+    /const last = layout\.length \? layout\[layout\.length - 1\] : null/.test(pdf) &&
+    /const totalHeight = last \? last\.top \+ last\.height : 0/.test(pdf));
+  check('17 unmeasured pages get a stable estimated height',
+    /pageHeights\[n\] \?\? fallbackHeight/.test(pdf) && /avgHeight \|\| Math\.round\(containerWidth \* 1\.414\)/.test(pdf));
+  check('17 measured heights are recorded per page',
+    /setPageHeights\(\(prev\) => \(prev\[n\] === cssH \? prev : \{ \.\.\.prev, \[n\]: cssH \}\)\)/.test(pdf));
+  check('17 a new document resets the measured heights',
+    /setPageHeights\(\{\}\)/.test(pdf));
+  check('17 the indicator tracks the most visible page while scrolling',
+    /const mid = el\.scrollTop \+ el\.clientHeight \/ 2/.test(pdf) && /pageAtOffset\(mid\)/.test(pdf));
+  check('17 nav/page-input scrolls smoothly to the page in the stack',
+    /el\.scrollTo\(\{ top: entry\.top, behavior: 'smooth' \}\)/.test(pdf));
+  check('17 scrolling is not yanked back by the nav-sync effect',
+    /scrollDrivenRef\.current = false; return/.test(pdf));
+  check('17 zoom and rotation apply to EVERY page, not just the current one',
+    /const renderInto = useCallback\(async \(n: number\)/.test(pdf) &&
+    /const cssScale = \(containerWidth \/ unit\.width\) \* zoom/.test(pdf) &&
+    /cssScale \* dpr, rotation/.test(pdf));
+  check('17 the render window re-runs on zoom/rotation change',
+    /\[status, windowKey, zoom, rotation, containerWidth, renderInto\]/.test(pdf));
+  check('17 the rendering spinner still reflects real work',
+    /setRendering\(true\)/.test(pdf) && /renderTasksRef\.current\.size === 0\) setRendering\(false\)/.test(pdf));
+  check('17 the old single-canvas-per-page band is gone',
+    !/top: `\$\{\(page - 1\) \* band\}px`/.test(pdf) && !/const band = /.test(pdf));
 }
 
 console.log('');
