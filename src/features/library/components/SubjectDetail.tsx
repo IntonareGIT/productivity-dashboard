@@ -463,12 +463,9 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
         <AssessmentModal subjectId={subject.id} assessment={editingAssessment} onClose={() => { setEditingAssessment(null); setAddingAssessment(false); }} />
       )}
       {previewingResource && (
-        // `onOpenFullScreen` is what makes the shared PdfViewer show its
-        // full-screen control; without it the Library preview had none at all.
         <ResourceViewer
           resource={previewingResource}
           onClose={() => setPreviewingResource(null)}
-          onOpenFullScreen={() => void openFullScreen(previewingResource.id)}
         />
       )}
       {/* The same shared full-screen preview the split view uses. */}

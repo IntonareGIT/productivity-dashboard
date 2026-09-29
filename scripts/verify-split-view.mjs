@@ -256,10 +256,13 @@ const CHAT = { kind: 'assistant' };
 
   check('10 full screen is a separate overlay, not a pane', /fixed inset-0 z-\[70\]/.test(fullScreen));
   check('10 full screen closes on Escape', /'Escape'/.test(fullScreen));
-  check('10 full screen mounts its own PdfViewer (independent state)',
-    /lazy\(\(\) =>/.test(fullScreen) && /PdfViewer/.test(fullScreen));
-  check('10 the PDF viewer exposes a full-screen control to the host',
-    /onRequestFullScreen/.test(pdfViewer));
+  // The duplicate viewer WAS the bug: fullscreen is now the same element
+  // promoted by the browser, so no second PdfViewer is ever mounted.
+  check('10 full screen mounts NO second PdfViewer (one instance only)',
+    !/PdfViewer/.test(fullScreen.replace(/\/\*[\s\S]*?\*\//g, '')));
+  check('10 the PDF viewer owns its own fullscreen control',
+    /const toggleFullScreen = useCallback/.test(pdfViewer) &&
+    /onClick=\{toggleFullScreen\}/.test(pdfViewer));
   check('10 the render-cancellation fix is still in the viewer',
     /previous\.cancel\(\)/.test(pdfViewer) && /renderTokensRef/.test(pdfViewer));
 
@@ -269,7 +272,7 @@ const CHAT = { kind: 'assistant' };
   check('10 AppLayout passes the split toggle to the top bar',
     /onToggleSplit=\{onToggleSplit\}/.test(appLayout) && /splitOpen=\{splitOpen\}/.test(appLayout));
   check('10 the layout column is positioned for the overlay',
-    /flex-1 flex flex-col min-w-0 pb-16 md:pb-0 relative/.test(appLayout));
+    /flex-1 min-w-0 h-full flex flex-col pb-16 md:pb-0 relative/.test(appLayout));
 }
 
 // ---- 11. PDF continuous scrolling ------------------------------------
@@ -307,8 +310,8 @@ const CHAT = { kind: 'assistant' };
   // are painted far below the visible area.
   check('12 the page surface is height-bounded so it can actually scroll',
     /maxHeight: 'min\(72vh, 720px\)'/.test(pdf));
-  check('12 the bound is lifted in full screen / standalone (definite parent)',
-    /style=\{fullScreen \|\| variant === 'standalone' \? undefined : \{ maxHeight/.test(pdf));
+  check('12 the bound is lifted for standalone (definite parent)',
+    /style=\{variant === 'standalone' \? undefined : \{ maxHeight/.test(pdf));
   check('12 the surface still declares overflow-auto', /overflow-auto/.test(pdf));
   check('12 the nav-sync effect can now take effect', /el\.scrollTo\(\{ top: entry\.top/.test(pdf));
   check('12 handleScroll is bound to the scrolling element',
@@ -381,11 +384,14 @@ const CHAT = { kind: 'assistant' };
   // ---- 16. Fix 1: height constraints --------------------------------
   check('16 the split overlay cannot grow the outer page',
     /absolute inset-x-0 top-14 bottom-0 z-20 bg-bg overflow-hidden/.test(appSrc));
-  check('16 each pane content area scrolls internally, bounded',
-    /flex-1 min-h-0 overflow-auto/.test(
+  // The pane CLIPPS; the PDF's own surface is what scrolls. An `overflow-auto`
+  // wrapper here made the whole pane scroll as well.
+  check('16 each pane content area is bounded and clipped',
+    /flex-1 min-h-0 overflow-hidden pt-9/.test(
       readFileSync('src/features/split/SplitView.tsx', 'utf8')));
   check('16 the pane itself is bounded and does not push the page',
-    /min-w-0 min-h-0 flex flex-col/.test(readFileSync('src/features/split/SplitView.tsx', 'utf8')));
+    /min-w-0 min-h-0 relative flex flex-col overflow-hidden/.test(
+      readFileSync('src/features/split/SplitView.tsx', 'utf8')));
   check('16 the assistant pane is a bounded flex column',
     /h-full min-h-0 flex flex-col bg-bg-surface overflow-hidden/.test(
       readFileSync('src/features/split/PaneContent.tsx', 'utf8')));
@@ -395,10 +401,9 @@ const CHAT = { kind: 'assistant' };
   check('16 the full preview body is bounded and clips overflow',
     /flex-1 min-h-0 flex items-stretch justify-center overflow-hidden/.test(fsp));
   check('16 standalone PDF fills its host height instead of collapsing',
-    /variant === 'standalone' \? 'flex flex-col gap-3 h-full min-h-0'/.test(pdf) ||
-    /'flex flex-col gap-3 h-full min-h-0'/.test(pdf));
-  check('16 the inline PDF cap is lifted for standalone/full screen',
-    /fullScreen \|\| variant === 'standalone' \? undefined : \{ maxHeight/.test(pdf));
+    /variant === 'standalone'/.test(pdf) && /h-full min-h-0/.test(pdf));
+  check('16 the inline PDF cap is lifted for standalone',
+    /variant === 'standalone' \? undefined : \{ maxHeight/.test(pdf));
   check('16 the viewer full-screen overlay also clips overflow',
     /z-\[60\] flex flex-col bg-bg-primary p-3 sm:p-5 overflow-hidden/.test(pdf));
 
@@ -484,11 +489,12 @@ const CHAT = { kind: 'assistant' };
       /<PdfViewer\b/.test(rv) && /<ResourceViewer/.test(sd));
     check('18 split panes render the same ResourceViewer/PdfViewer path',
       /<ResourceViewer/.test(pc) && /<PdfViewer\b/.test(rv));
-    check('18 the Library preview wires onOpenFullScreen (the missing prop)',
-      /onOpenFullScreen=\{\(\) => void openFullScreen\(previewingResource\.id\)\}/.test(sd));
-    check('18 split panes wire onOpenFullScreen too',
-      /onOpenFullScreen=\{openFullScreen\}/.test(pc) ||
-      /onOpenFullScreen=\{onRequestFullScreen\}/.test(pc));
+    // The missing-prop class of bug is now impossible: the viewer has its own
+    // control, so no host can forget to pass one.
+    check('18 the Library preview needs no fullscreen prop',
+      !/onOpenFullScreen/.test(sd) && !/onOpenFullScreen/.test(rv));
+    check('18 split panes need no fullscreen prop either',
+      !/onRequestFullScreen/.test(pc) && !/onRequestFullScreen/.test(sv));
     check('18 both hosts use the ONE shared full-screen hook',
       /useResourceFullScreen\(\)/.test(sd) && /useResourceFullScreen\(\)/.test(sv));
     check('18 both hosts render the one shared FullScreenPreview',
@@ -506,6 +512,43 @@ const CHAT = { kind: 'assistant' };
       /lg: 'sm:max-w-6xl'/.test(modal));
     check('18 a PDF/image preview opens wide, not cramped',
       /size=\{kind === 'pdf' \|\| kind === 'image' \? 'lg' : 'md'\}/.test(rv));
+
+    // ---- Focus Mode ----
+    const layout = readFileSync('src/components/layout/AppLayout.tsx', 'utf8');
+    const topbar = readFileSync('src/components/layout/TopBar.tsx', 'utf8');
+
+    check('FM the sidebar auto-collapses when the split opens',
+      /if \(splitOpen\)/.test(layout) && /setIsSidebarCollapsed\(\(wasCollapsed\)/.test(layout));
+    check('FM the previous sidebar choice is restored when the split closes',
+      /userCollapseRef\.current/.test(layout)
+      && /setIsSidebarCollapsed\(userCollapseRef\.current\)/.test(layout));
+    check('FM the top bar hides the date and time in split view',
+      /\{!splitOpen && \(/.test(topbar));
+    check('FM the clock timer is not run while splitting',
+      /if \(splitOpen\) return;/.test(topbar));
+
+    check('FM the shell has a definite height so the split can reach the floor',
+      /h-\[100dvh\] overflow-hidden flex/.test(layout)
+      && /flex-1 min-w-0 h-full flex flex-col/.test(layout));
+    check('FM main is a bounded, scrollable flex child',
+      /flex-1 min-h-0 p-4 md:p-6 max-w-7xl w-full mx-auto overflow-y-auto/.test(layout));
+
+    check('FM the split controls float and cost no vertical space',
+      /absolute top-1\.5 left-1\/2 -translate-x-1\/2 z-30/.test(sv)
+      && /role="toolbar"/.test(sv));
+    check('FM the pane header floats over the pane instead of stacking',
+      /absolute inset-x-0 top-0 z-20 flex justify-start pointer-events-none/.test(sv)
+      && /pointer-events-auto/.test(sv));
+    check('FM the pane header no longer takes layout height',
+      !/border-b border-border bg-bg-elevated\/40 shrink-0/.test(sv));
+    check('FM the split container stretches edge to edge',
+      /flex-1 min-h-0 w-full relative flex/.test(sv));
+    check('FM the pane clips and the PDF scroll area scrolls',
+      /relative flex flex-col overflow-hidden/.test(sv) && /flex-1 min-h-0 overflow-hidden pt-9/.test(sv));
+    check('FM the embedded viewer fills the pane height',
+      /flex flex-col h-full min-h-0 overflow-hidden rounded-xl border border-border bg-bg-surface/.test(rv));
+    check('FM a pane PDF is rendered standalone so it fills the host',
+      /variant=\{embedded \? 'standalone' : 'inline'\}/.test(rv));
   }
 }
 

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2, Minus, Plus,
-  RotateCw, TriangleAlert, X,
+  RotateCw, TriangleAlert,
 } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
@@ -15,15 +15,8 @@ interface PdfViewerProps {
   blob: Blob;
   /** Accessible label, e.g. the resource title. */
   title?: string;
-  /** `inline` sits inside the ResourceViewer modal; `standalone` is for a page
-   *  of its own and offers full screen. */
+  /** `inline` sits in the Library modal; `standalone` fills its host height. */
   variant?: 'inline' | 'standalone';
-  /**
-   * Raised by this viewer's own full-screen control. The host renders the
-   * full-screen preview with a FRESH PdfViewer, so it has its own
-   * zoom/rotation/page and does not share this instance's state.
-   */
-  onRequestFullScreen?: () => void;
 }
 
 /** Zoom bounds. 1 = fit-to-width (the default), so zoom is a multiplier. */
@@ -50,7 +43,7 @@ const isCancel = (e: unknown) =>
  * lands after a newer render has started.
  */
 export const PdfViewer: React.FC<PdfViewerProps> = ({
-  blob, title, variant = 'inline', onRequestFullScreen,
+  blob, title, variant = 'inline',
 }) => {
   const docRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
   // In pdf.js v6 destroy() lives on the loading task, so the task is what we
@@ -63,6 +56,14 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [fullScreen, setFullScreen] = useState(false);
+  // The viewer's own root element IS the fullscreen element. There is no second
+  // viewer, overlay or modal for fullscreen: this wrapper is the one instance,
+  // and the browser promotes it, so the same DOM (and the same page, zoom and
+  // rotation) is what you see full screen.
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  // True when the browser has no Fullscreen API, so we fall back to a CSS fill
+  // on this same element. Still one viewer — no duplicate is ever mounted.
+  const noFullscreenApiRef = useRef(false);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [rendering, setRendering] = useState(false);
   const [error, setError] = useState('');
@@ -320,14 +321,106 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     }
   }, [page, layout]);
 
-  // ---- Keyboard shortcuts, active only while the viewer has focus ----
+  /**
+   * Enter/leave the browser's real fullscreen on THIS element. Escape and the
+   * browser's own fullscreen control both fire `fullscreenchange`, which keeps
+   * the toolbar state honest.
+   */
+  const toggleFullScreen = useCallback(() => {
+    const el = wrapperRef.current as (HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    }) | null;
+    if (!el) return;
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      webkitExitFullscreen?: () => Promise<void> | void;
+    };
+    const active = doc.fullscreenElement ?? doc.webkitFullscreenElement;
+    if (active === el) {
+      const exit = doc.exitFullscreen ?? doc.webkitExitFullscreen;
+      if (typeof exit === 'function') { try { void exit.call(doc); } catch { /* ignore */ } }
+      return;
+    }
+    const request = el.requestFullscreen ?? el.webkitRequestFullscreen;
+    if (typeof request !== 'function') {
+      // No API (e.g. iOS Safari): fall back to filling the viewport with this
+      // same element, so the control is never dead.
+      noFullscreenApiRef.current = true;
+      setFullScreen(true);
+      return;
+    }
+    noFullscreenApiRef.current = false;
+    try { void Promise.resolve(request.call(el)).catch(() => setFullScreen(false)); }
+    catch { setFullScreen(false); }
+  }, []);
+
+  // Reflect the real fullscreen state, including an exit via the browser's own
+  // Escape key rather than our button.
+  useEffect(() => {
+    const onChange = () => {
+      const doc = document as Document & { webkitFullscreenElement?: Element | null };
+      const active = doc.fullscreenElement ?? doc.webkitFullscreenElement;
+      setFullScreen(active === wrapperRef.current);
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    document.addEventListener('webkitfullscreenchange', onChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange);
+      document.removeEventListener('webkitfullscreenchange', onChange);
+    };
+  }, []);
+
+  // Leaving fullscreen on unmount, so we never strand the page in fullscreen.
+  useEffect(() => {
+    const el = wrapperRef.current;
+    return () => {
+      const doc = document as Document & {
+        webkitFullscreenElement?: Element | null;
+        webkitExitFullscreen?: () => Promise<void> | void;
+      };
+      const active = doc.fullscreenElement ?? doc.webkitFullscreenElement;
+      if (active && active === el) {
+        const exit = doc.exitFullscreen ?? doc.webkitExitFullscreen;
+        if (typeof exit === 'function') { try { void exit.call(doc); } catch { /* ignore */ } }
+      }
+    };
+  }, []);
+  // One ref per page in the stack, so nav can scroll the target page into view
+  // rather than guessing an offset.
+  const pageElsRef = useRef<Map<number, HTMLDivElement>>(new Map());
+  const setPageEl = useCallback((n: number) => (el: HTMLDivElement | null) => {
+    if (el) pageElsRef.current.set(n, el);
+    else pageElsRef.current.delete(n);
+  }, []);
+
+  /** Scroll a page into view inside the surface. Used by nav and the page input. */
+  const scrollPageIntoView = useCallback((n: number) => {
+    const el = pageElsRef.current.get(n);
+    if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, []);
+
+  const onNextPage = useCallback(() => {
+    const next = Math.min(pageCount || 1, page + 1);
+    if (next === page) return;
+    scrollPageIntoView(next);
+    goToPage(next);
+  }, [page, pageCount, goToPage, scrollPageIntoView]);
+
+  const onPrevPage = useCallback(() => {
+    const prev = Math.max(1, page - 1);
+    if (prev === page) return;
+    scrollPageIntoView(prev);
+    goToPage(prev);
+  }, [page, goToPage, scrollPageIntoView]);
+
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     switch (e.key) {
-      case 'ArrowLeft': e.preventDefault(); goToPage(page - 1); break;
-      case 'ArrowRight': e.preventDefault(); goToPage(page + 1); break;
+      case 'ArrowLeft': e.preventDefault(); onPrevPage(); break;
+      case 'ArrowRight': e.preventDefault(); onNextPage(); break;
       case '+': case '=': e.preventDefault(); changeZoom(ZOOM_STEP); break;
       case '-': case '_': e.preventDefault(); changeZoom(-ZOOM_STEP); break;
-      case 'Escape': if (fullScreen) { e.preventDefault(); setFullScreen(false); } break;
+      case 'Escape': if (fullScreen && noFullscreenApiRef.current) { e.preventDefault(); setFullScreen(false); } break;
       default: return;
     }
   };
@@ -337,11 +430,14 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // canvas, so the page gets genuinely more room. `standalone` must FILL the
   // height its host gives it, otherwise it collapses to its content and the
   // host has to scroll to reach the viewer's own controls.
-  const boxClass = fullScreen
+  // The `fixed inset-0` fill applies only as a fallback for browsers with no
+  // Fullscreen API. When the API is available the browser promotes this very
+  // element, so this is a no-op there.
+  const boxClass = noFullscreenApiRef.current && fullScreen
     ? 'fixed inset-0 z-[60] flex flex-col bg-bg-primary p-3 sm:p-5 overflow-hidden'
     : variant === 'standalone'
-      ? 'flex flex-col gap-3 h-full min-h-0'
-      : 'flex flex-col gap-3';
+      ? 'flex flex-col gap-3 h-full min-h-0 w-full'
+      : 'flex flex-col gap-3 h-full min-h-0 w-full';
   if (status === 'error') {
     return (
       <div className="flex items-start gap-2 p-4 rounded-xl border border-amber-500/40 bg-amber-500/10">
@@ -356,6 +452,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
   return (
     <div
+      ref={wrapperRef}
       className={boxClass}
       tabIndex={0}
       onKeyDown={onKeyDown}
@@ -363,7 +460,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       aria-label={title ? `${title} PDF viewer` : 'PDF viewer'}
     >
       <div className="flex flex-wrap items-center gap-1.5">
-        <button onClick={() => goToPage(page - 1)} disabled={page <= 1 || pageCount === 0} aria-label="Previous page" className={ctrl}>
+        <button onClick={onPrevPage} disabled={page <= 1 || pageCount === 0} aria-label="Previous page" className={ctrl}>
           <ChevronLeft className="w-4 h-4" />
         </button>
         <label className="flex items-center gap-1.5 text-xs text-content-secondary">
@@ -371,15 +468,15 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
           <input
             value={pageInput}
             onChange={(e) => setPageInput(e.target.value.replace(/[^\d]/g, ''))}
-            onBlur={() => goToPage(Number(pageInput) || 1)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); goToPage(Number(pageInput) || 1); } }}
+            onBlur={() => { const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); } }}
             inputMode="numeric"
             aria-label="Page number"
             className="w-12 text-center bg-bg-elevated border border-border rounded-lg px-1.5 py-1.5 text-xs text-content-primary tabular-nums outline-none focus:border-accent"
           />
           <span className="tabular-nums whitespace-nowrap">of {pageCount || '—'}</span>
         </label>
-        <button onClick={() => goToPage(page + 1)} disabled={page >= pageCount || pageCount === 0} aria-label="Next page" className={ctrl}>
+        <button onClick={onNextPage} disabled={page >= pageCount || pageCount === 0} aria-label="Next page" className={ctrl}>
           <ChevronRight className="w-4 h-4" />
         </button>
 
@@ -400,28 +497,20 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
           <RotateCw className="w-4 h-4" />
         </button>
 
-        {variant === 'standalone' && (
-          <button onClick={() => setFullScreen((f) => !f)} aria-label={fullScreen ? 'Exit full screen' : 'Enter full screen'} className={ctrl}>
-            {fullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-          </button>
-        )}
+
         {/* The host's full-screen preview: available from a single pane AND from
             inside the split, and independent of this viewer's own state. */}
-        {onRequestFullScreen && !fullScreen && (
-          <button
-            onClick={onRequestFullScreen}
-            aria-label="Open full screen preview"
-            title="Full screen preview"
-            className={ctrl}
-          >
-            <Maximize2 className="w-4 h-4" /> Full screen
-          </button>
-        )}
-        {fullScreen && (
-          <button onClick={() => setFullScreen(false)} aria-label="Close full screen" className={`${ctrl} ml-auto`}>
-            <X className="w-4 h-4" /> Exit
-          </button>
-        )}
+        {/* One control, always present, always operating on THIS viewer. */}
+        <button
+          onClick={toggleFullScreen}
+          aria-label={fullScreen ? 'Exit full screen' : 'Enter full screen'}
+          title={fullScreen ? 'Exit full screen (Esc)' : 'Full screen'}
+          className={ctrl}
+        >
+          {fullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          {!fullScreen && 'Full screen'}
+        </button>
+
       </div>
 
       <div
@@ -433,10 +522,12 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         // (pageCount x pageHeight), so it cannot scroll, every scrollTop write
         // is a no-op, and pages 2..N are rendered far below the visible area —
         // which looks exactly like "only page 1 ever displays". `flex-1` only
-        // resolves against a definite parent, and this viewer is also used
-        // inline in a modal, so an explicit max-height is required. In full
-        // screen the root is `fixed inset-0`, so flex-1 is definite there.
-        style={fullScreen || variant === 'standalone' ? undefined : { maxHeight: 'min(72vh, 720px)' }}
+        // resolves against a definite parent, so an explicit max-height is
+        // required for the INLINE (Library modal) case. `standalone` — the
+        // split pane, and the same element in real fullscreen — inherits a
+        // definite height from its host, so no cap is applied here and the
+        // viewer genuinely fills the pane.
+        style={variant === 'standalone' ? undefined : { maxHeight: 'min(72vh, 720px)' }}
       >
         {status === 'loading' ? (
           <div className="flex h-full min-h-[280px] items-center justify-center gap-2 text-xs text-content-tertiary">
@@ -454,6 +545,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
               return (
                 <div
                   key={n}
+                  ref={setPageEl(n)}
                   className="absolute inset-x-0 flex justify-center"
                   style={{ top: `${entry.top}px` }}
                 >

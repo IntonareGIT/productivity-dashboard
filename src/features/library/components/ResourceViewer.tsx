@@ -43,12 +43,6 @@ interface ResourceViewerProps {
   onClose: () => void;
   /** Render without the modal wrapper, for use inside a split pane. */
   embedded?: boolean;
-  /**
-   * Raised by the PDF viewer's own full-screen control so a host can cover the
-   * whole screen (the split does this). The viewer mounts a FRESH PdfViewer for
-   * it, so full-screen keeps its own zoom/rotation/page.
-   */
-  onOpenFullScreen?: () => void;
 }
 
 /**
@@ -66,7 +60,7 @@ interface ResourceViewerProps {
  * regardless of whether the inline preview works.
  */
 export const ResourceViewer: React.FC<ResourceViewerProps> = ({
-  resource, onClose, embedded = false, onOpenFullScreen,
+  resource, onClose, embedded = false,
 }) => {
   const kind = previewKindFor(resource);
   const [imgUrl, setImgUrl] = useState<string | null>(null);
@@ -106,14 +100,14 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
   const driveEmbed = kind === 'drive' ? googleDriveEmbedUrl(resource.urlOrPath ?? '') : null;
 
   const body = (
-      <div className="space-y-4">
+      <div className="space-y-4 flex-1 min-h-0 flex flex-col overflow-hidden">
         {kind === 'image' && resource.blob && !imgFailed && (
           imgUrl ? (
             <img
               src={imgUrl}
               alt={resource.title}
               onError={() => setImgFailed(true)}
-              className="max-h-[55vh] w-full object-contain rounded-xl border border-border bg-bg-elevated/40"
+              className={embedded ? "h-full min-h-0 w-full object-contain rounded-xl border border-border bg-bg-elevated/40" : "max-h-[55vh] w-full object-contain rounded-xl border border-border bg-bg-elevated/40"}
             />
           ) : (
             <div className="py-10 text-center text-xs text-content-tertiary">Preparing image…</div>
@@ -126,11 +120,7 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
 
         {kind === 'pdf' && resource.blob && (
           <Suspense fallback={<PdfLoading />}>
-            <PdfViewer
-              blob={resource.blob}
-              title={resource.title}
-              onRequestFullScreen={onOpenFullScreen}
-            />
+            <PdfViewer blob={resource.blob} title={resource.title} variant={embedded ? 'standalone' : 'inline'} />
           </Suspense>
         )}
 
@@ -139,7 +129,7 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
             <iframe
               src={driveEmbed}
               title={resource.title}
-              className="w-full h-[55vh] rounded-xl border border-border bg-white"
+              className={embedded ? "w-full h-full min-h-0 rounded-xl border border-border bg-white" : "w-full h-[55vh] rounded-xl border border-border bg-white"}
             />
             <p className="text-[11px] text-content-tertiary">
               Drive may show a "you don't have access" notice for private or unshared files. Use
@@ -208,11 +198,14 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
   );
 
   // `embedded` drops the modal chrome so a split pane can host the same viewer.
+  // The wrapper is a definite-height flex column so the viewer's own `h-full`
+  // resolves against the PANE rather than collapsing to its content — this is
+  // what lets a PDF fill a split pane and scroll internally.
   if (embedded) {
     return (
-      <div className="rounded-xl border border-border bg-bg-surface p-3">
-        <p className="mb-2 truncate text-xs font-semibold text-content-primary">{resource.title}</p>
-        {body}
+      <div className="flex flex-col h-full min-h-0 overflow-hidden rounded-xl border border-border bg-bg-surface p-2">
+        <p className="mb-1.5 shrink-0 truncate text-[11px] font-semibold text-content-primary">{resource.title}</p>
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">{body}</div>
       </div>
     );
   }

@@ -151,8 +151,18 @@ const res = (over = {}) => ({
       return hits.length === 1 && hits[0].replace(/\\/g, '/').endsWith('library/components/PdfViewer.tsx');
     })(),
     'import count must be 1');
+  // Nav must clamp to 1..pageCount and scroll the target page into view, rather
+  // than only writing the index.
   check('6 the shared PdfViewer has page navigation',
-    /goToPage\(page - 1\)/.test(pdf) && /goToPage\(page \+ 1\)/.test(pdf) && /aria-label="Previous page"/.test(pdf) && /aria-label="Next page"/.test(pdf));
+    /const onNextPage = useCallback/.test(pdf) && /const onPrevPage = useCallback/.test(pdf)
+    && /aria-label="Previous page"/.test(pdf) && /aria-label="Next page"/.test(pdf));
+  check('N next/prev clamp between page 1 and totalPages',
+    /Math\.min\(pageCount \|\| 1, page \+ 1\)/.test(pdf) && /Math\.max\(1, page - 1\)/.test(pdf));
+  check('N nav scrolls the active page into view',
+    /const pageElsRef = useRef<Map<number, HTMLDivElement>>/.test(pdf)
+    && /scrollIntoView\(\{ block: 'start'/.test(pdf) && /ref=\{setPageEl\(n\)\}/.test(pdf));
+  check('N the arrow buttons are wired to the nav handlers',
+    /onClick=\{onPrevPage\}/.test(pdf) && /onClick=\{onNextPage\}/.test(pdf));
   check('6 the worker is registered at module load', /GlobalWorkerOptions\.workerSrc/.test(pdf));
 
   // ---- render safety: the bug this fixes ----
@@ -177,13 +187,30 @@ const res = (over = {}) => ({
   check('R2 rotation drives the canvas CSS box', /const rotated = rotation % 180 !== 0/.test(pdf));
   check('R2 the current angle is displayed', /\{rotation\}°/.test(pdf));
 
+  // ---- ONE instance: the viewer's own wrapper IS the fullscreen element ----
+  const fsp = readFileSync('src/features/split/FullScreenPreview.tsx', 'utf8');
+  // (block comments are stripped first so the file's own explanation of
+  //  why it does NOT mount a viewer is not mistaken for code)
+  check('F fullscreen mounts NO second viewer',
+    !/PdfViewer/.test(fsp.replace(/\/\*[\s\S]*?\*\//g, '')));
+  check('F the fullscreen element is the viewer own wrapper',
+    /ref=\{wrapperRef\}/.test(pdf) && /wrapperRef\.current\.requestFullscreen|request\.call\(el\)/.test(pdf));
+  check('F entering fullscreen uses the native API',
+    /el\.requestFullscreen \?\? el\.webkitRequestFullscreen/.test(pdf));
+  check('F exiting fullscreen calls document.exitFullscreen',
+    /doc\.exitFullscreen \?\? doc\.webkitExitFullscreen/.test(pdf));
+  check('F a fullscreenchange listener syncs the UI state',
+    /addEventListener\('fullscreenchange'/.test(pdf)
+    && /removeEventListener\('fullscreenchange'/.test(pdf)
+    && /setFullScreen\(active === wrapperRef\.current\)/.test(pdf));
+  check('F no host needs to pass a fullscreen callback', !/onRequestFullScreen/.test(pdf));
   check('F full screen is a real overlay, not a scaled canvas',
     /fixed inset-0 z-\[60\]/.test(pdf) && !/scale-\(/.test(pdf));
   check('F full screen re-measures the available width', /\}, \[fullScreen\]\)/.test(pdf));
   check('F Escape exits full screen', /case 'Escape'/.test(pdf) && /setFullScreen\(false\)/.test(pdf));
   check('F the viewer is focusable so shortcuts work', /tabIndex=\{0\}/.test(pdf) && /onKeyDown=\{onKeyDown\}/.test(pdf));
 
-  check('N a page number input exists', /aria-label="Page number"/.test(pdf) && /onBlur=\{\(\) => goToPage/.test(pdf));
+  check('N a page number input exists', /aria-label="Page number"/.test(pdf) && /onBlur=\{\(\) => \{ const n = Number\(pageInput\)/.test(pdf));
   check('N the current page and total are shown', /of \{pageCount \|\| '—'\}/.test(pdf));
   check('L a rendering placeholder is shown while rendering', /\{rendering && \(/.test(pdf) && /Rendering…/.test(pdf));
   check('L the loading state has a spinner', /Loading PDF…/.test(pdf));

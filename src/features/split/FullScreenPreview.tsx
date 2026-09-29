@@ -1,13 +1,7 @@
-import React, { Suspense, lazy, useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Loader2, X } from 'lucide-react';
 import type { Resource } from '../../types';
 import { previewKindFor } from '../library/previewKind';
-
-// A FRESH PdfViewer instance, so full-screen preview starts with its own
-// zoom/rotation/page and does not share state with the pane behind it.
-const PdfViewer = lazy(() =>
-  import('../library/components/PdfViewer').then((m) => ({ default: m.PdfViewer })),
-);
 
 interface FullScreenPreviewProps {
   resource: Resource;
@@ -24,7 +18,14 @@ type FsDocument = Document & {
 };
 
 /**
- * True full-screen preview of a single resource.
+ * Full-screen preview for NON-PDF resources (images and similar).
+ *
+ * PDFs deliberately do NOT come through here. The shared `PdfViewer` owns its
+ * own fullscreen: it calls requestFullscreen() on its own wrapper, so exactly
+ * ONE viewer instance is ever in the DOM and there is no second canvas, no
+ * duplicated page/zoom/rotation state, and nothing to unmount when leaving.
+ * Mounting a second PdfViewer here was the source of the duplicate-viewer bug.
+ *
  *
  * Enters the browser's REAL fullscreen via `requestFullscreen()`, so the
  * browser chrome (tabs, address bar) genuinely disappears — a CSS
@@ -119,13 +120,7 @@ export const FullScreenPreview: React.FC<FullScreenPreviewProps> = ({ resource, 
       </div>
 
       <div className="flex-1 min-h-0 flex items-stretch justify-center overflow-hidden">
-        {kind === 'pdf' && resource.blob ? (
-          // `standalone` lets the viewer fill the available height instead of
-          // imposing its own inline cap.
-          <Suspense fallback={<Centered label="Loading PDF viewer…" />}>
-            <PdfViewer blob={resource.blob} title={resource.title} variant="standalone" />
-          </Suspense>
-        ) : kind === 'image' && resource.blob ? (
+        {kind === 'image' && resource.blob ? (
           <FullScreenImage blob={resource.blob} title={resource.title} />
         ) : (
           <Centered label="This format has no full-screen preview. Use Download or Open link from the pane." />

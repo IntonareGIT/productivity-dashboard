@@ -13,7 +13,10 @@ import {
   swapPanes, toggleMaximize, type PaneSlot, type SplitState,
 } from './splitModel';
 
-const ico = 'inline-flex items-center justify-center p-2 min-h-[36px] rounded-lg border border-border text-content-secondary hover:text-content-primary hover:bg-bg-elevated transition-colors';
+const ico = 'inline-flex items-center justify-center p-1.5 min-h-[30px] rounded-lg border border-transparent text-content-secondary hover:text-content-primary hover:bg-bg-elevated transition-colors shrink-0';
+// Focus Mode: the pane pickers float over the content, so they need their own
+// translucent surface to stay readable against a PDF page.
+const field = 'min-w-0 bg-bg-surface/90 border border-border rounded-lg px-1.5 py-1 text-[11px] text-content-primary outline-none focus:border-accent backdrop-blur-sm';
 
 interface SplitViewProps {
   state: SplitState;
@@ -27,9 +30,9 @@ interface SplitViewProps {
 export const SplitView: React.FC<SplitViewProps> = ({
   state, setState, onNavigate, onOpenAssistantSettings, onCloseSplit,
 }) => {
-  // Full screen uses the SAME shared hook as the Library preview, so the two
-  // hosts cannot drift apart again.
-  const { fullScreenResource, openFullScreen, closeFullScreen } = useResourceFullScreen();
+  // Non-PDF full screen (images) goes through the shared hook. PDFs are handled
+  // by the shared PdfViewer itself, so no second viewer is ever mounted.
+  const { fullScreenResource, closeFullScreen } = useResourceFullScreen();
   const split = isSplit(state);
 
   const onDrag = useCallback((clientX: number, rect: DOMRect) => {
@@ -38,14 +41,13 @@ export const SplitView: React.FC<SplitViewProps> = ({
   }, [setState]);
 
   return (
-    <div className="h-full min-h-0 flex flex-col">
+    <div className="h-full min-h-0 w-full flex flex-col">
       {split && (
         <SplitBody
           state={state}
           setState={setState}
           onNavigate={onNavigate}
           onOpenAssistantSettings={onOpenAssistantSettings}
-          onOpenFullScreen={openFullScreen}
           onCloseSplit={onCloseSplit}
         />
       )}
@@ -71,11 +73,10 @@ export const SplitView: React.FC<SplitViewProps> = ({
 
 interface SplitBodyProps extends Omit<SplitViewProps, 'state'> {
   state: SplitState;
-  onOpenFullScreen: (resourceId?: string) => void;
 }
 
 const SplitBody: React.FC<SplitBodyProps> = ({
-  state, setState, onNavigate, onOpenAssistantSettings, onOpenFullScreen, onCloseSplit,
+  state, setState, onNavigate, onOpenAssistantSettings, onCloseSplit,
 }) => {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [stacked, setStacked] = useState(false);
@@ -121,26 +122,38 @@ const SplitBody: React.FC<SplitBodyProps> = ({
         key={index}
         // The maximized-away pane stays MOUNTED but display:none, so it keeps
         // its viewer state (page/zoom/rotation) and is instant on restore.
-        className={`min-w-0 min-h-0 flex flex-col ${hidden ? 'hidden' : ''}`}
+        className={`min-w-0 min-h-0 relative flex flex-col overflow-hidden ${hidden ? 'hidden' : ''}`}
         style={hidden ? undefined : { flex: `${flex} 1 0%` }}
         aria-hidden={hidden || undefined}
       >
         {!hidden && (
           <>
-            <PaneHeader
-              index={index}
-              slot={slot}
-              split={isSplit(state)}
-              maximized={maximized === index}
-              setState={setState}
-              onCloseSplit={onCloseSplit}
-            />
-            <div className="flex-1 min-h-0 overflow-auto">
+            {/* Focus Mode: the header is absolutely positioned, so it overlays
+                the pane instead of taking a slice of its height. The content
+                underneath gets the full pane and only a small top inset so the
+                float does not sit on top of the viewer's own toolbar. */}
+            <div className="absolute inset-x-0 top-0 z-20 flex justify-start pointer-events-none px-1.5 pt-1.5">
+              <div className="pointer-events-auto flex items-center gap-1 max-w-full overflow-x-auto rounded-xl bg-bg-surface/85 backdrop-blur-md border border-border shadow-sm px-1 py-0.5">
+                <PaneHeader
+                  index={index}
+                  slot={slot}
+                  split={isSplit(state)}
+                  maximized={maximized === index}
+                  setState={setState}
+                  onCloseSplit={onCloseSplit}
+                />
+              </div>
+            </div>
+            {/* `overflow-hidden` on the pane plus `overflow-y-auto` inside the
+                viewer is what keeps scrolling inside the PDF rather than
+                scrolling the page. The chain is
+                pane(relative, flex) -> region(flex-1 min-h-0) -> PaneContent
+                (h-full) -> ResourceViewer/PdfViewer (h-full min-h-0). */}
+            <div className="flex-1 min-h-0 overflow-hidden pt-9">
               <PaneContent
                 slot={slot}
                 onNavigate={onNavigate}
                 onOpenAssistantSettings={onOpenAssistantSettings}
-                onRequestFullScreen={onOpenFullScreen}
               />
             </div>
           </>
@@ -152,7 +165,7 @@ const SplitBody: React.FC<SplitBodyProps> = ({
   return (
     <div
       ref={wrapRef}
-      className={`flex-1 min-h-0 flex ${stacked ? 'flex-col' : 'flex-row'}`}
+      className={`flex-1 min-h-0 w-full relative flex ${stacked ? 'flex-col' : 'flex-row'}`}
     >
       {pane(0, a, firstFlex)}
 
@@ -189,6 +202,44 @@ const SplitBody: React.FC<SplitBodyProps> = ({
       </div>
 
       {pane(1, b, secondFlex)}
+
+      {/* Focus Mode: one compact translucent pill centred on the divider. It is
+          absolutely positioned, so the split controls cost ZERO vertical space
+          and both panes start at the very top of the split area. */}
+      {isSplit(state) && (
+        <div
+          role="toolbar"
+          aria-label="Split view controls"
+          className="absolute top-1.5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-0.5 rounded-full bg-bg-surface/85 backdrop-blur-md border border-border shadow-md px-1.5 py-1"
+        >
+          <button
+            onClick={() => setState((s) => (s.maximized === null ? toggleMaximize(s, 0) : { ...s, maximized: null }))}
+            aria-label={maximized === null ? 'Maximize a pane' : 'Restore both panes'}
+            title={maximized === null ? 'Maximize a pane' : 'Restore both panes'}
+            className={ico}
+          >
+            {maximized === null ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={() => setState((s) => swapPanes(s))}
+            aria-label="Swap panes"
+            title="Swap panes"
+            className={ico}
+          >
+            <ArrowLeftRight className="w-4 h-4" />
+          </button>
+          {onCloseSplit && (
+            <button
+              onClick={onCloseSplit}
+              aria-label="Close split view"
+              title="Close split view"
+              className={`${ico} hover:text-red-400`}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -233,12 +284,12 @@ const PaneHeader: React.FC<PaneHeaderProps> = ({
           : pdfs.find((p: Resource) => p.id === slot.resourceId)?.title ?? 'PDF preview';
 
   return (
-    <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-border bg-bg-elevated/40 shrink-0">
+    <div className="flex items-center gap-1 shrink-0">
       <select
         aria-label={`Pane ${index + 1} content`}
         value={slot.kind}
         onChange={(e) => select({ kind: e.target.value as PaneSlot['kind'] })}
-        className="min-w-0 max-w-[9rem] bg-bg-elevated border border-border rounded-lg px-2 py-1.5 text-[11px] font-semibold text-content-primary outline-none focus:border-accent"
+        className={`${field} max-w-[7.5rem] font-semibold shrink-0`}
       >
         <option value="empty">Empty</option>
         <option value="dashboard">Dashboard</option>
@@ -256,7 +307,7 @@ const PaneHeader: React.FC<PaneHeaderProps> = ({
             if (slot.kind === 'pdf') select({ kind: 'pdf', resourceId: v });
             else select({ kind: 'notes', topicId: v });
           }}
-          className="min-w-0 flex-1 bg-bg-elevated border border-border rounded-lg px-2 py-1.5 text-[11px] text-content-primary outline-none focus:border-accent"
+          className={`${field} w-[8rem] sm:w-[11rem] shrink-0`}
         >
           <option value="">{slot.kind === 'pdf' ? 'Choose a file…' : 'Choose a topic…'}</option>
           {slot.kind === 'pdf'
@@ -278,7 +329,7 @@ const PaneHeader: React.FC<PaneHeaderProps> = ({
 
       {split && (
         <>
-          <span className="hidden sm:inline text-[11px] text-content-tertiary truncate max-w-[10rem]">{label}</span>
+          <span className="hidden lg:inline text-[11px] text-content-tertiary truncate max-w-[8rem]">{label}</span>
           <button
             onClick={() => setState((s) => toggleMaximize(s, index))}
             aria-label={maximized ? `Restore pane ${index + 1}` : `Maximize pane ${index + 1}`}
@@ -286,14 +337,6 @@ const PaneHeader: React.FC<PaneHeaderProps> = ({
             className={ico}
           >
             {maximized ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-          </button>
-          <button
-            onClick={() => setState((s) => swapPanes(s))}
-            aria-label={`Swap pane ${index + 1} with the other`}
-            title="Swap panes"
-            className={ico}
-          >
-            <ArrowLeftRight className="w-4 h-4" />
           </button>
           <button
             onClick={() => setState((s) => closePane(s, index))}
@@ -304,18 +347,6 @@ const PaneHeader: React.FC<PaneHeaderProps> = ({
             <PanelLeftClose className="w-4 h-4" />
           </button>
         </>
-      )}
-
-      {/* Close the whole overlay, leaving the active tab untouched. */}
-      {split && onCloseSplit && (
-        <button
-          onClick={onCloseSplit}
-          aria-label="Close split view"
-          title="Close split view"
-          className={ico}
-        >
-          <X className="w-4 h-4" />
-        </button>
       )}
 
       {!split && (

@@ -13,9 +13,6 @@ interface PaneContentProps {
   slot: PaneSlot;
   onNavigate: (tab: NavTab) => void;
   onOpenAssistantSettings: () => void;
-  /** The PDF viewer's own "full screen" control, lifted to the split so it can
-   *  cover the whole screen (see FullScreenPreview). */
-  onRequestFullScreen?: () => void;
 }
 
 const Blank = ({ children }: { children: React.ReactNode }) => (
@@ -32,7 +29,7 @@ const Blank = ({ children }: { children: React.ReactNode }) => (
  * completely independent viewer state.
  */
 export const PaneContent: React.FC<PaneContentProps> = ({
-  slot, onNavigate, onOpenAssistantSettings, onRequestFullScreen,
+  slot, onNavigate, onOpenAssistantSettings,
 }) => {
   // Resources are read live, so a pane opened on a file picks up edits.
   const resource = useLiveQuery(
@@ -75,14 +72,15 @@ export const PaneContent: React.FC<PaneContentProps> = ({
     case 'pdf':
       if (!slot.resourceId) return <Blank>Pick a PDF in this pane&apos;s header.</Blank>;
       if (!resource) return <Blank>Loading resource…</Blank>;
-      // `embedded` renders the viewer without its own modal chrome, and
-      // `onFullScreen` exposes the viewer's own full-screen control.
+      // `embedded` renders the viewer without its own modal chrome, and the
+      // viewer supplies its own full-screen control. The wrapper is
+      // `overflow-hidden` on purpose: the PANE clips, and the PDF's own scroll
+      // area (`overflow-y-auto`) does the scrolling. An `overflow-auto` wrapper
+      // here would make the whole pane scroll as well, and the page controls
+      // would drift away from the page.
       return (
-        <div className="h-full min-h-0 overflow-auto p-2">
-          <EmbeddedResourceViewer
-            resource={resource}
-            onOpenFullScreen={onRequestFullScreen}
-          />
+        <div className="flex flex-col h-full min-h-0 overflow-hidden p-1">
+          <EmbeddedResourceViewer resource={resource} />
         </div>
       );
 
@@ -95,13 +93,11 @@ export const PaneContent: React.FC<PaneContentProps> = ({
  * The shared ResourceViewer body, minus the modal wrapper, for use inside a
  * pane. Full-screen preview is raised by the split so it can cover everything.
  */
-const EmbeddedResourceViewer: React.FC<{ resource: Resource; onOpenFullScreen?: () => void }> = ({
-  resource, onOpenFullScreen,
-}) => (
+// The viewer owns its own fullscreen, so nothing is threaded in from the pane.
+const EmbeddedResourceViewer: React.FC<{ resource: Resource }> = ({ resource }) => (
   <ResourceViewer
     resource={resource}
     onClose={() => { /* panes are closed by the pane header, not the viewer */ }}
-    onOpenFullScreen={onOpenFullScreen}
     embedded
   />
 );
