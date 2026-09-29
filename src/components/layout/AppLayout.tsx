@@ -64,7 +64,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
       {/* Main Content Area. A definite height (`h-full` on a `100dvh` shell) is
           what lets the split overlay's `bottom-0` actually reach the viewport
           floor, and what gives the PDF panes a real height to fill. */}
-      <div className="flex-1 min-w-0 h-full flex flex-col pb-16 md:pb-0 relative">
+      <div className="flex-1 min-w-0 min-h-0 h-full flex flex-col pb-16 md:pb-0 relative">
         <TopBar
           onSelectTab={onSelectTab}
           splitOpen={splitOpen}

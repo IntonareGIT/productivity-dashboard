@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2, Minus, Plus,
-  RotateCw, TriangleAlert,
+  ChevronLeft, ChevronRight, Download, Loader2, Maximize2, Minimize2,
+  Minus, Plus, RotateCw, TriangleAlert,
 } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
@@ -17,6 +17,12 @@ interface PdfViewerProps {
   title?: string;
   /** `inline` sits in the Library modal; `standalone` fills its host height. */
   variant?: 'inline' | 'standalone';
+  /**
+   * Saves the underlying file. The host owns the blob and the filename, so it
+   * supplies the action; the viewer only renders the control, which keeps every
+   * control in the ONE toolbar instead of a separate bottom bar.
+   */
+  onDownload?: () => void;
 }
 
 /** Zoom bounds. 1 = fit-to-width (the default), so zoom is a multiplier. */
@@ -30,6 +36,14 @@ const ZOOM_STEP = 0.25;
  * to see the page edge against the surface behind it.
  */
 const PAGE_PAD = 16;
+
+/**
+ * Height reserved at the top of the page surface for the floating toolbar.
+ * The toolbar is `position: absolute` so it costs no layout space, but the
+ * fitted page must still END above it, otherwise the first page's header is
+ * permanently hidden behind the controls.
+ */
+const TOOLBAR_H = 40;
 
 /** The gap between two consecutive pages in the stack. */
 const PAGE_GAP = 10;
@@ -56,7 +70,7 @@ const isCancel = (e: unknown) =>
  * lands after a newer render has started.
  */
 export const PdfViewer: React.FC<PdfViewerProps> = ({
-  blob, title, variant = 'inline',
+  blob, title, variant = 'inline', onDownload,
 }) => {
   const docRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
   // In pdf.js v6 destroy() lives on the loading task, so the task is what we
@@ -272,7 +286,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       const pageW = rotated ? unit.height : unit.width;
       const pageH = rotated ? unit.width : unit.height;
       const availW = Math.max(1, containerWidth - PAGE_PAD);
-      const availH = Math.max(1, containerHeight - PAGE_PAD);
+      const availH = Math.max(1, containerHeight - PAGE_PAD - TOOLBAR_H);
       // Fit both axes and take the smaller, so a short page is not blown up
       // past the bottom of the pane and a long one still fits the width.
       const fitScale = Math.min(availW / pageW, availH / pageH, MAX_FIT);
@@ -512,11 +526,13 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // The `fixed inset-0` fill applies only as a fallback for browsers with no
   // Fullscreen API. When the API is available the browser promotes this very
   // element, so this is a no-op there.
-  const boxClass = noFullscreenApiRef.current && fullScreen
-    ? 'fixed inset-0 z-[60] flex flex-col bg-bg-primary p-3 sm:p-5 overflow-hidden'
-    : variant === 'standalone'
-      ? 'flex flex-col gap-2 h-full min-h-0 w-full'
-      : 'flex flex-col gap-2 h-full min-h-0 w-full';
+  // Fullscreen is ONE list of classes whether or not the browser had to
+  // promote the element, so the two paths cannot drift apart visually.
+  // `p-0` is deliberate: the old `p-3 sm:p-5` was dead space around the
+  // document in fullscreen, and the max-height below used to clip it further.
+  const boxClass = fullScreen
+    ? 'fixed inset-0 z-[60] flex flex-col gap-0 p-0 h-full w-full bg-bg-primary overflow-hidden'
+    : 'flex flex-col gap-2 h-full min-h-0 w-full';
   if (status === 'error') {
     return (
       <div className="flex items-start gap-2 p-4 rounded-xl border border-amber-500/40 bg-amber-500/10">
@@ -538,59 +554,6 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       role="group"
       aria-label={title ? `${title} PDF viewer` : 'PDF viewer'}
     >
-      <div className="flex flex-wrap items-center gap-1.5">
-        <button onClick={onPrevPage} disabled={page <= 1 || pageCount === 0} aria-label="Previous page" className={ctrl}>
-          <ChevronLeft className="w-4 h-4" />
-        </button>
-        <label className="flex items-center gap-1.5 text-xs text-content-secondary">
-          <span className="sr-only">Page number</span>
-          <input
-            value={pageInput}
-            onChange={(e) => setPageInput(e.target.value.replace(/[^\d]/g, ''))}
-            onBlur={() => { const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); }}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); } }}
-            inputMode="numeric"
-            aria-label="Page number"
-            className="w-12 text-center bg-bg-elevated border border-border rounded-lg px-1.5 py-1.5 text-xs text-content-primary tabular-nums outline-none focus:border-accent"
-          />
-          <span className="tabular-nums whitespace-nowrap">of {pageCount || '—'}</span>
-        </label>
-        <button onClick={onNextPage} disabled={page >= pageCount || pageCount === 0} aria-label="Next page" className={ctrl}>
-          <ChevronRight className="w-4 h-4" />
-        </button>
-
-        <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-
-        <button onClick={() => changeZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label="Zoom out" className={ctrl}>
-          <Minus className="w-4 h-4" />
-        </button>
-        <span className="min-w-[3.25rem] text-center text-xs text-content-secondary tabular-nums">{zoomPct}%</span>
-        <button onClick={() => changeZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label="Zoom in" className={ctrl}>
-          <Plus className="w-4 h-4" />
-        </button>
-        <button onClick={() => setZoom(1)} aria-label="Fit page to the window" className={`${ctrl} px-2`}>Fit</button>
-
-        <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-
-        <button onClick={() => setRotation((r) => (r + 90) % 360)} aria-label={`Rotate, currently ${rotation} degrees`} className={ctrl}>
-          <RotateCw className="w-4 h-4" />
-        </button>
-
-
-        {/* The host's full-screen preview: available from a single pane AND from
-            inside the split, and independent of this viewer's own state. */}
-        {/* One control, always present, always operating on THIS viewer. */}
-        <button
-          onClick={toggleFullScreen}
-          aria-label={fullScreen ? 'Exit full screen' : 'Enter full screen'}
-          title={fullScreen ? 'Exit full screen (Esc)' : 'Full screen'}
-          className={ctrl}
-        >
-          {fullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-          {!fullScreen && 'Full screen'}
-        </button>
-
-      </div>
 
       <div
         ref={shellRef}
@@ -599,7 +562,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         // same value subtracted from the measured width/height when fitting, so
         // the page lands exactly on the padding box: no dead grey margin, and
         // no horizontal scrollbar from a border/padding miscount.
-        className="relative flex-1 min-h-[320px] overflow-auto overscroll-contain rounded-xl border border-border bg-bg-elevated/40 outline-none p-4"
+        className="relative flex-1 min-h-[320px] w-full overflow-auto overscroll-contain rounded-xl border border-border bg-bg-elevated/40 outline-none p-4"
         // CRITICAL: the page surface must be height-bounded or `overflow-auto`
         // never engages. Without a bound it grows to the full spacer height
         // (pageCount x pageHeight), so it cannot scroll, every scrollTop write
@@ -610,8 +573,75 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         // split pane, and the same element in real fullscreen — inherits a
         // definite height from its host, so no cap is applied here and the
         // viewer genuinely fills the pane.
-        style={variant === 'standalone' ? undefined : { maxHeight: 'min(72vh, 720px)' }}
+        style={variant === 'standalone' || fullScreen ? undefined : { maxHeight: 'min(72vh, 720px)' }}
       >
+        {/* ONE toolbar for everything, floating over the top of the page. It
+            is absolutely positioned, so it consumes no layout height and the
+            document still occupies 100% of the pane below it. Download lives
+          here too, which is why the separate bottom action bar is gone. */}
+      <div
+        role="toolbar"
+        aria-label="PDF controls"
+        className="sticky top-0 z-10 -mx-4 flex flex-wrap items-center gap-1 bg-bg-surface/85 backdrop-blur-md border-b border-border/60 px-4 py-1.5"
+      >
+      <button onClick={onPrevPage} disabled={page <= 1 || pageCount === 0} aria-label="Previous page" className={ctrl}>
+        <ChevronLeft className="w-4 h-4" />
+      </button>
+      <label className="flex items-center gap-1.5 text-xs text-content-secondary">
+        <span className="sr-only">Page number</span>
+        <input
+          value={pageInput}
+          onChange={(e) => setPageInput(e.target.value.replace(/[^\d]/g, ''))}
+          onBlur={() => { const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); } }}
+          inputMode="numeric"
+          aria-label="Page number"
+          className="w-12 text-center bg-bg-elevated border border-border rounded-lg px-1.5 py-1.5 text-xs text-content-primary tabular-nums outline-none focus:border-accent"
+        />
+        <span className="tabular-nums whitespace-nowrap">of {pageCount || '—'}</span>
+      </label>
+      <button onClick={onNextPage} disabled={page >= pageCount || pageCount === 0} aria-label="Next page" className={ctrl}>
+        <ChevronRight className="w-4 h-4" />
+      </button>
+
+      <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+
+      <button onClick={() => changeZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label="Zoom out" className={ctrl}>
+        <Minus className="w-4 h-4" />
+      </button>
+      <span className="min-w-[3.25rem] text-center text-xs text-content-secondary tabular-nums">{zoomPct}%</span>
+      <button onClick={() => changeZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label="Zoom in" className={ctrl}>
+        <Plus className="w-4 h-4" />
+      </button>
+      <button onClick={() => setZoom(1)} aria-label="Fit page to the window" className={`${ctrl} px-2`}>Fit</button>
+
+      <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+
+      <button onClick={() => setRotation((r) => (r + 90) % 360)} aria-label={`Rotate, currently ${rotation} degrees`} className={ctrl}>
+        <RotateCw className="w-4 h-4" />
+      </button>
+
+      {onDownload && (
+        <>
+          <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+          <button onClick={onDownload} aria-label="Download this file" title="Download" className={ctrl}>
+            <Download className="w-4 h-4" />
+          </button>
+        </>
+      )}
+
+      {/* One control, always present, always operating on THIS viewer. */}
+      <button
+        onClick={toggleFullScreen}
+        aria-label={fullScreen ? 'Exit full screen' : 'Enter full screen'}
+        title={fullScreen ? 'Exit full screen (Esc)' : 'Full screen'}
+        className={`${ctrl} ml-auto`}
+      >
+        {fullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+        {!fullScreen && 'Full screen'}
+      </button>
+      </div>
+
         {status === 'loading' ? (
           <div className="flex h-full min-h-[280px] items-center justify-center gap-2 text-xs text-content-tertiary">
             <Loader2 className="w-4 h-4 animate-spin" /> Loading PDF…

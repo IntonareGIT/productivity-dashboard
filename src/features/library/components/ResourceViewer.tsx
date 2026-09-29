@@ -118,9 +118,29 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
           <Notice title="Could not display this image." body="The stored file may be corrupt. You can still download it below." />
         )}
 
+        {/* An image has no PDF toolbar to host its actions, so they live in the
+            branch itself rather than in a separate bottom bar. */}
+        {kind === 'image' && resource.blob && (
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {resource.urlOrPath && (
+              <button onClick={openLink} className={`${btn} border border-border text-content-secondary hover:text-content-primary hover:bg-bg-elevated`}>
+                <ExternalLink className="w-4 h-4" /> Open original
+              </button>
+            )}
+            <button onClick={download} className={`${btn} border border-border text-content-secondary hover:text-content-primary hover:bg-bg-elevated`}>
+              <Download className="w-4 h-4" /> Download
+            </button>
+          </div>
+        )}
+
         {kind === 'pdf' && resource.blob && (
           <Suspense fallback={<PdfLoading />}>
-            <PdfViewer blob={resource.blob} title={resource.title} variant={embedded ? 'standalone' : 'inline'} />
+            <PdfViewer
+              blob={resource.blob}
+              title={resource.title}
+              variant={embedded ? 'standalone' : 'inline'}
+              onDownload={resource.blob ? download : undefined}
+            />
           </Suspense>
         )}
 
@@ -131,10 +151,14 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
               title={resource.title}
               className={embedded ? "w-full h-full min-h-0 rounded-xl border border-border bg-white" : "w-full h-[55vh] rounded-xl border border-border bg-white"}
             />
-            <p className="text-[11px] text-content-tertiary">
-              Drive may show a "you don't have access" notice for private or unshared files. Use
-              Open link below if the preview is blank.
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] text-content-tertiary">
+                Drive may show a "you don't have access" notice for private or unshared files.
+              </p>
+              <button onClick={openLink} className={`${btn} shrink-0 border border-border text-content-secondary hover:text-content-primary hover:bg-bg-elevated`}>
+                <ExternalLink className="w-4 h-4" /> Open link
+              </button>
+            </div>
           </>
         )}
 
@@ -179,21 +203,11 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
           </div>
         )}
 
-        {/* Actions stay available regardless of whether the preview works. */}
-        {kind !== 'opaque' && kind !== 'none' && (
-          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border/50 pt-4">
-            {resource.blob && (
-              <button onClick={download} className={`${btn} border border-border text-content-secondary hover:text-content-primary hover:bg-bg-elevated`}>
-                <Download className="w-4 h-4" /> Download
-              </button>
-            )}
-            {(kind === 'drive' || (kind === 'image' && resource.urlOrPath)) && (
-              <button onClick={openLink} className={`${btn} border border-border text-content-secondary hover:text-content-primary hover:bg-bg-elevated`}>
-                <ExternalLink className="w-4 h-4" /> Open link
-              </button>
-            )}
-          </div>
-        )}
+        {/* The bottom action bar is gone. For a PDF its controls now live in
+            the viewer's own toolbar; for the remaining kinds the single
+            relevant action is already part of the branch above, so a second
+            row only added dead space. */}
+
       </div>
   );
 
@@ -204,7 +218,6 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
   if (embedded) {
     return (
       <div className="flex flex-col h-full min-h-0 overflow-hidden rounded-xl border border-border bg-bg-surface p-2">
-        <p className="mb-1.5 shrink-0 truncate text-[11px] font-semibold text-content-primary">{resource.title}</p>
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">{body}</div>
       </div>
     );

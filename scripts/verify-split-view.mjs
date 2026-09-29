@@ -272,7 +272,7 @@ const CHAT = { kind: 'assistant' };
   check('10 AppLayout passes the split toggle to the top bar',
     /onToggleSplit=\{onToggleSplit\}/.test(appLayout) && /splitOpen=\{splitOpen\}/.test(appLayout));
   check('10 the layout column is positioned for the overlay',
-    /flex-1 min-w-0 h-full flex flex-col pb-16 md:pb-0 relative/.test(appLayout));
+    /flex-1 min-w-0 min-h-0 h-full flex flex-col pb-16 md:pb-0 relative/.test(appLayout));
 }
 
 // ---- 11. PDF continuous scrolling ------------------------------------
@@ -310,8 +310,8 @@ const CHAT = { kind: 'assistant' };
   // are painted far below the visible area.
   check('12 the page surface is height-bounded so it can actually scroll',
     /maxHeight: 'min\(72vh, 720px\)'/.test(pdf));
-  check('12 the bound is lifted for standalone (definite parent)',
-    /style=\{variant === 'standalone' \? undefined : \{ maxHeight/.test(pdf));
+  check('12 the bound is lifted for standalone and fullscreen (definite parent)',
+    /style=\{variant === 'standalone' \|\| fullScreen \? undefined : \{ maxHeight/.test(pdf));
   check('12 the surface still declares overflow-auto', /overflow-auto/.test(pdf));
   check('12 the nav-sync effect can now take effect', /el\.scrollTo\(\{ top: entry\.top/.test(pdf));
   check('12 handleScroll is bound to the scrolling element',
@@ -386,8 +386,12 @@ const CHAT = { kind: 'assistant' };
     /absolute inset-x-0 top-14 bottom-0 z-20 bg-bg overflow-hidden/.test(appSrc));
   // The pane CLIPPS; the PDF's own surface is what scrolls. An `overflow-auto`
   // wrapper here made the whole pane scroll as well.
+  // No top inset any more: the PDF toolbar floats inside the viewer itself,
+  // so the pane hands its whole height to the document.
   check('16 each pane content area is bounded and clipped',
-    /flex-1 min-h-0 overflow-hidden pt-9/.test(
+    /flex-1 min-h-0 overflow-hidden/.test(
+      readFileSync('src/features/split/SplitView.tsx', 'utf8')) &&
+    !/overflow-hidden pt-9/.test(
       readFileSync('src/features/split/SplitView.tsx', 'utf8')));
   check('16 the pane itself is bounded and does not push the page',
     /min-w-0 min-h-0 relative flex flex-col overflow-hidden/.test(
@@ -402,10 +406,10 @@ const CHAT = { kind: 'assistant' };
     /flex-1 min-h-0 flex items-stretch justify-center overflow-hidden/.test(fsp));
   check('16 standalone PDF fills its host height instead of collapsing',
     /variant === 'standalone'/.test(pdf) && /h-full min-h-0/.test(pdf));
-  check('16 the inline PDF cap is lifted for standalone',
-    /variant === 'standalone' \? undefined : \{ maxHeight/.test(pdf));
-  check('16 the viewer full-screen overlay also clips overflow',
-    /z-\[60\] flex flex-col bg-bg-primary p-3 sm:p-5 overflow-hidden/.test(pdf));
+  check('16 the inline PDF cap is lifted for standalone AND fullscreen',
+    /variant === 'standalone' \|\| fullScreen \? undefined : \{ maxHeight/.test(pdf));
+  check('16 the viewer full-screen overlay clips overflow and adds no padding',
+    /z-\[60\] flex flex-col gap-0 p-0 h-full w-full bg-bg-primary overflow-hidden/.test(pdf));
 
   // ---- 17. Fix 2: stacked, windowed page rendering -------------------
   check('17 pages are a vertical STACK, not one swapped canvas',
@@ -529,13 +533,15 @@ const CHAT = { kind: 'assistant' };
 
     check('FM the shell has a definite height so the split can reach the floor',
       /h-\[100dvh\] overflow-hidden flex/.test(layout)
-      && /flex-1 min-w-0 h-full flex flex-col/.test(layout));
+      && /flex-1 min-w-0 min-h-0 h-full flex flex-col/.test(layout));
     check('FM main is a bounded, scrollable flex child',
       /flex-1 min-h-0 p-4 md:p-6 max-w-7xl w-full mx-auto overflow-y-auto/.test(layout));
 
-    check('FM the split controls float and cost no vertical space',
-      /absolute top-1\.5 left-1\/2 -translate-x-1\/2 z-30/.test(sv)
-      && /role="toolbar"/.test(sv));
+    // Anchored to the DIVIDER, not to the top of a pane: absolutely
+    // positioning them at the top put them straight over the pane title.
+    check('FM the split controls are anchored to the divider, not a pane title',
+      /role="toolbar"[\s\S]{0,400}top-1\/2 -translate-y-1\/2 -translate-x-1\/2 left-1\/2 flex-col/.test(sv)
+      && /relative shrink-0 flex items-center justify-center bg-border/.test(sv));
     check('FM the pane header floats over the pane instead of stacking',
       /absolute inset-x-0 top-0 z-20 flex justify-start pointer-events-none/.test(sv)
       && /pointer-events-auto/.test(sv));
@@ -544,7 +550,15 @@ const CHAT = { kind: 'assistant' };
     check('FM the split container stretches edge to edge',
       /flex-1 min-h-0 w-full relative flex/.test(sv));
     check('FM the pane clips and the PDF scroll area scrolls',
-      /relative flex flex-col overflow-hidden/.test(sv) && /flex-1 min-h-0 overflow-hidden pt-9/.test(sv));
+      /relative flex flex-col overflow-hidden/.test(sv) && /flex-1 min-h-0 overflow-hidden/.test(sv));
+    // The AI FAB is fixed bottom-right; in split view that is the chat
+    // composer, so it must be docked rather than floating over the input.
+    const launcher = readFileSync('src/features/ai/components/AssistantLauncher.tsx', 'utf8');
+    const app = readFileSync('src/App.tsx', 'utf8');
+    check('FM the AI launcher can be hidden in split view',
+      /hidden\?: boolean/.test(launcher) && /if \(hidden\) return null;/.test(launcher));
+    check('FM split view hides the AI launcher',
+      /<AssistantLauncher[\s\S]{0,200}hidden=\{splitOpen\}/.test(app));
     check('FM the embedded viewer fills the pane height',
       /flex flex-col h-full min-h-0 overflow-hidden rounded-xl border border-border bg-bg-surface/.test(rv));
     check('FM a pane PDF is rendered standalone so it fills the host',

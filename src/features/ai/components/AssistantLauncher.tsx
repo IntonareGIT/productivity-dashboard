@@ -7,15 +7,27 @@ interface AssistantLauncherProps {
   onOpenSettings: () => void;
   /** True when a default provider exists with a non-empty API key. */
   configured: boolean;
+  /**
+   * Split view is open. The launcher is a fixed bottom-right button, and in
+   * split view that corner is the assistant pane's chat composer and the right
+   * PDF pane — the FAB sat on top of the input field. Docking it in split view
+   * keeps every control reachable.
+   */
+  hidden?: boolean;
 }
 
 /**
  * Floating chat button (bottom-right, every page). Disabled — but still
  * visible and explanatory — until a provider is configured in Settings.
  */
-export const AssistantLauncher: React.FC<AssistantLauncherProps> = ({ onOpenSettings, configured }) => {
+export const AssistantLauncher: React.FC<AssistantLauncherProps> = ({
+  onOpenSettings, configured, hidden = false,
+}) => {
   const open = useAssistantStore((s) => s.open);
   const setOpen = useAssistantStore((s) => s.setOpen);
+
+  // Rendered only when needed, so it cannot overlap anything in split view.
+  if (hidden) return null;
 
   return (
     <button

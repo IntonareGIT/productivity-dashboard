@@ -255,7 +255,13 @@ export const App: React.FC = () => {
           />
 
           {/* Global AI assistant: floating launcher (every page) + chat panel. */}
-          <AssistantLauncher configured={assistantConfigured} onOpenSettings={openAssistantSettings} />
+          {/* Hidden in split view: a fixed bottom-right FAB would sit on top of
+          the assistant pane's chat input and the right PDF pane. */}
+      <AssistantLauncher
+        configured={assistantConfigured}
+        onOpenSettings={openAssistantSettings}
+        hidden={splitOpen}
+      />
           <AssistantPanel onOpenSettings={openAssistantSettings} onExpand={openAssistantPage} />
 
           {/* Action confirmations raised by the assistant's function calls. */}

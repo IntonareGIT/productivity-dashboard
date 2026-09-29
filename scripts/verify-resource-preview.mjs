@@ -243,7 +243,9 @@ const res = (over = {}) => ({
     /setContainerHeight/.test(pdf));
   check('F the fit accounts for the padding (16px) on both axes',
     /const availW = Math\.max\(1, containerWidth - PAGE_PAD\)/.test(pdf) &&
-    /const availH = Math\.max\(1, containerHeight - PAGE_PAD\)/.test(pdf));
+    /const availH = Math\.max\(1, containerHeight - PAGE_PAD - TOOLBAR_H\)/.test(pdf));
+  check('F the fit reserves the floating toolbar strip',
+    /const TOOLBAR_H = 40/.test(pdf));
   check('F the fit takes BOTH axes, not width alone',
     /Math\.min\(availW \/ pageW, availH \/ pageH, MAX_FIT\)/.test(pdf));
   check('F the fit is rotation-aware (rotated pages swap width and height)',
@@ -276,6 +278,47 @@ const res = (over = {}) => ({
     /dir === -1 && atTop\) \{ onPrevPage\(\); return; \}/.test(pdf));
   check('K the scroll ends are measured against real overflow',
     /el\.scrollHeight - el\.clientHeight/.test(pdf) && /atTop = el\.scrollTop <= 2/.test(pdf));
+
+  // ---- one toolbar, overlaid, with Download; no duplicate title ---------
+  check('T there is exactly ONE toolbar element in the viewer',
+    (pdf.match(/aria-label="PDF controls"/g) || []).length === 1);
+  check('T the toolbar is an overlay inside the page surface, not a sibling row',
+    /role="toolbar"[\s\S]{0,200}className="sticky top-0 z-10/.test(pdf));
+  check('T the toolbar holds page nav, zoom, fit, rotate, download and fullscreen',
+    /aria-label="Previous page"/.test(pdf) && /aria-label="Next page"/.test(pdf) &&
+    /aria-label="Zoom out"/.test(pdf) && /aria-label="Zoom in"/.test(pdf) &&
+    /aria-label="Fit page to the window"/.test(pdf) && /Rotate, currently/.test(pdf) &&
+    /aria-label="Download this file"/.test(pdf) && /Enter full screen/.test(pdf));
+  check('T fullscreen is driven by one identical class list in both paths',
+    /const boxClass = fullScreen/.test(pdf) &&
+    /fixed inset-0 z-\[60\] flex flex-col gap-0 p-0 h-full w-full/.test(pdf));
+  check('T fullscreen no longer imposes a max-height on the surface',
+    /variant === 'standalone' \|\| fullScreen \? undefined : \{ maxHeight/.test(pdf));
+  check('T the viewer is focusable so arrows reach it', /tabIndex=\{0\}/.test(pdf));
+  check('T Up/Down are handled by the viewer', /case 'ArrowDown'/.test(pdf) && /case 'ArrowUp'/.test(pdf));
+  check('T Up/Down prevent the dashboard behind from scrolling',
+    /case 'ArrowDown': e\.preventDefault\(\); onArrowScroll\(1\)/.test(pdf) &&
+    /case 'ArrowUp': e\.preventDefault\(\); onArrowScroll\(-1\)/.test(pdf));
+  check('T arrows scroll the surface by a real step',
+    /el\.scrollBy\(\{ top: dir \* step, behavior: 'smooth' \}\)/.test(pdf));
+  check('T Down at the bottom hands over to the next page',
+    /dir === 1 && atBottom\) \{ onNextPage\(\); return; \}/.test(pdf));
+  check('T Up at the top hands over to the previous page',
+    /dir === -1 && atTop\) \{ onPrevPage\(\); return; \}/.test(pdf));
+  check('T the scroll ends are measured against real overflow',
+    /el\.scrollHeight - el\.clientHeight/.test(pdf) && /atTop = el\.scrollTop <= 2/.test(pdf));
+
+  // ---- the separate bottom action bar is gone, and nothing was orphaned --
+  check('T the separate bottom action bar no longer exists',
+    !/justify-end gap-2 border-t border-border\/50 pt-4/.test(viewer));
+  check('T an image still offers Download in its own branch',
+    /kind === 'image' && resource\.blob/.test(viewer) &&
+    /Open original/.test(viewer));
+  check('T a Drive preview still offers its Open link fallback',
+    /Drive may show a "you don't have access"/.test(viewer) &&
+    /kind === 'drive'[\s\S]{0,1400}Open link/.test(viewer));
+  check('T the embedded pane does not repeat the document title',
+    !/font-semibold text-content-primary">\{resource\.title\}<\/p>/.test(viewer));
   check('N the current page and total are shown', /of \{pageCount \|\| '—'\}/.test(pdf));
   check('L a rendering placeholder is shown while rendering', /\{rendering && \(/.test(pdf) && /Rendering…/.test(pdf));
   check('L the loading state has a spinner', /Loading PDF…/.test(pdf));
@@ -290,11 +333,16 @@ const res = (over = {}) => ({
 
   // Drive + fallback.
   check('6 drive uses a preview iframe', /<iframe[\s\S]{0,200}driveEmbed/.test(viewer));
-  check('6 drive keeps an Open link fallback', /kind === 'drive'[\s\S]{0,400}Open link/.test(viewer));
+  // Slice the Drive branch itself rather than guessing a character distance.
+  const driveBranch = viewer.slice(viewer.indexOf("{kind === 'drive' && driveEmbed && ("));
+  check('6 drive keeps an Open link fallback', /openLink[\s\S]{0,400}Open link/.test(driveBranch));
   check('6 drive warns it may be private', /access/i.test(viewer));
 
-  // Actions available regardless of preview success.
-  check('6 Download is offered whenever a blob exists', /\{resource\.blob && \(/.test(viewer));
+  // Actions available regardless of preview success. A PDF hosts its own
+  // Download in the viewer toolbar; the other kinds carry theirs in-branch.
+  check('6 Download is offered whenever a blob exists',
+    /onDownload=\{resource\.blob \? download : undefined\}/.test(viewer) &&
+    /kind === 'opaque'/.test(viewer) && /onClick=\{download\}/.test(viewer));
   // Slice the link branch itself instead of guessing a character distance, so
   // this cannot silently pass or fail on formatting changes.
   const linkBranch = viewer.slice(viewer.indexOf("{kind === 'link' && ("));

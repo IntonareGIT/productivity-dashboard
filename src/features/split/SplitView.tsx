@@ -149,7 +149,7 @@ const SplitBody: React.FC<SplitBodyProps> = ({
                 scrolling the page. The chain is
                 pane(relative, flex) -> region(flex-1 min-h-0) -> PaneContent
                 (h-full) -> ResourceViewer/PdfViewer (h-full min-h-0). */}
-            <div className="flex-1 min-h-0 overflow-hidden pt-9">
+            <div className="flex-1 min-h-0 overflow-hidden">
               <PaneContent
                 slot={slot}
                 onNavigate={onNavigate}
@@ -186,7 +186,7 @@ const SplitBody: React.FC<SplitBodyProps> = ({
             setState((s) => ({ ...s, ratio: clampRatio(s.ratio + step) }));
           }
         }}
-        className={`shrink-0 flex items-center justify-center bg-border hover:bg-accent/60 transition-colors touch-none select-none ${
+        className={`relative shrink-0 flex items-center justify-center bg-border hover:bg-accent/60 transition-colors touch-none select-none ${
           // `self-stretch` rather than `h-full`: stretch always fills the row,
           // whereas a percentage height collapses to 0 if the row height is not
           // definite, which made the divider disappear. The background is a
@@ -199,47 +199,52 @@ const SplitBody: React.FC<SplitBodyProps> = ({
           className="rounded-full bg-content-tertiary/70"
           style={{ width: stacked ? 32 : 3, height: stacked ? 3 : 32 }}
         />
+
+        {/* The split controls live ON the divider, centred on it. Positioning
+            them absolutely at the top of the pane put them straight over the
+            pane title/picker; anchoring them to the divider means they sit in
+            the gutter between the panes and can never cover content. */}
+        {isSplit(state) && (
+          <div
+            role="toolbar"
+            aria-label="Split view controls"
+            className={`absolute z-30 flex items-center gap-0.5 rounded-full bg-bg-surface/90 backdrop-blur-md border border-border shadow-md p-0.5 ${
+              stacked
+                ? 'left-1/2 -translate-x-1/2 -translate-y-1/2 top-1/2 flex-row'
+                : 'top-1/2 -translate-y-1/2 -translate-x-1/2 left-1/2 flex-col'
+            }`}
+          >
+      <button
+        onClick={() => setState((s) => (s.maximized === null ? toggleMaximize(s, 0) : { ...s, maximized: null }))}
+        aria-label={maximized === null ? 'Maximize a pane' : 'Restore both panes'}
+        title={maximized === null ? 'Maximize a pane' : 'Restore both panes'}
+        className={ico}
+      >
+        {maximized === null ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
+      </button>
+      <button
+        onClick={() => setState((s) => swapPanes(s))}
+        aria-label="Swap panes"
+        title="Swap panes"
+        className={ico}
+      >
+        <ArrowLeftRight className="w-4 h-4" />
+      </button>
+            {onCloseSplit && (
+              <button
+                onClick={onCloseSplit}
+                aria-label="Close split view"
+                title="Close split view"
+                className={`${ico} hover:text-red-400`}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {pane(1, b, secondFlex)}
-
-      {/* Focus Mode: one compact translucent pill centred on the divider. It is
-          absolutely positioned, so the split controls cost ZERO vertical space
-          and both panes start at the very top of the split area. */}
-      {isSplit(state) && (
-        <div
-          role="toolbar"
-          aria-label="Split view controls"
-          className="absolute top-1.5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-0.5 rounded-full bg-bg-surface/85 backdrop-blur-md border border-border shadow-md px-1.5 py-1"
-        >
-          <button
-            onClick={() => setState((s) => (s.maximized === null ? toggleMaximize(s, 0) : { ...s, maximized: null }))}
-            aria-label={maximized === null ? 'Maximize a pane' : 'Restore both panes'}
-            title={maximized === null ? 'Maximize a pane' : 'Restore both panes'}
-            className={ico}
-          >
-            {maximized === null ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
-          </button>
-          <button
-            onClick={() => setState((s) => swapPanes(s))}
-            aria-label="Swap panes"
-            title="Swap panes"
-            className={ico}
-          >
-            <ArrowLeftRight className="w-4 h-4" />
-          </button>
-          {onCloseSplit && (
-            <button
-              onClick={onCloseSplit}
-              aria-label="Close split view"
-              title="Close split view"
-              className={`${ico} hover:text-red-400`}
-            >
-              <X className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 };
