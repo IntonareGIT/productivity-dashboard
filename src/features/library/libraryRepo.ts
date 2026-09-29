@@ -179,6 +179,7 @@ export interface ResourceInput {
   topicId?: string | null;
   kind?: ResourceKind;
   title: string;
+  /** Mandatory for kind 'link', omitted for kind 'file'. See Resource.urlOrPath. */
   urlOrPath?: string;
   fileName?: string | null;
   mimeType?: string | null;

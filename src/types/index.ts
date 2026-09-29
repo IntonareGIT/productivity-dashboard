@@ -33,7 +33,12 @@ export interface Resource {
   topicId: string | null;  // FK -> Topic.id (null = legacy subject-level, shown under default topic)
   kind: ResourceKind;      // 'link' = urlOrPath is a URL/path; 'file' = blob holds the upload
   title: string;           // Resource title
-  urlOrPath: string;       // Web URL or local file path (links)
+  /**
+   * Web URL or local file path. Mandatory for 'link', absent for 'file' —
+   * an upload carries no URL. Always read it defensively (it is undefined for
+   * file rows), never as a bare string.
+   */
+  urlOrPath?: string;
   fileName?: string | null;// Original upload name (files)
   mimeType?: string | null;// Upload MIME (files)
   fileSize?: number | null;// Upload bytes (files)

@@ -56,11 +56,14 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
     setSaving(true);
     try {
       const tags = tagsInput.split(',').map((t) => t.trim()).filter(Boolean);
+      // `kind` MUST be passed: saveResource defaults it to 'link', which would
+      // require a URL and reject every upload.
       if (kind === 'link') {
         await saveResource({
           id: resource?.id,
           subjectId,
           topicId,
+          kind,
           title,
           urlOrPath,
           tags,
@@ -71,7 +74,9 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
           id: resource?.id,
           subjectId,
           topicId,
+          kind,
           title,
+          // Uploads carry no URL. Only keep a previous value when editing.
           urlOrPath: resource?.urlOrPath ?? '',
           blob: file ?? undefined,
           fileName: file?.name,

@@ -123,7 +123,9 @@ export interface Resource {
   topicId: string | null;  // FK -> topics.id (null = legacy subject-level row)
   kind: ResourceKind;      // 'link' = urlOrPath; 'file' = blob holds the upload
   title: string;           // Title / label
-  urlOrPath: string;       // Web URL or file reference/path (links)
+  urlOrPath?: string;      // Web URL or file reference/path — REQUIRED for
+                           // 'link', ABSENT for 'file' (an upload has no URL).
+                           // Read it defensively: `(x.urlOrPath ?? '')`.
   fileName?: string | null;// Original upload name (files)
   mimeType?: string | null;// Upload MIME (files)
   fileSize?: number | null;// Upload bytes (files)
@@ -138,6 +140,21 @@ export interface Resource {
 Uploads (PDF/image/doc) are stored as Blobs in IndexedDB and opened via
 `URL.createObjectURL(blob)` for view/download. JSON backup skips `blob`
 bytes (keeps metadata only) — see §1.10.
+
+**Two modes, and `kind` must be explicit.** `ResourceModal` offers *Link*
+(title + URL) and *Upload file* (title + file). `saveResource()` validates per
+mode: `'link'` requires a non-empty `urlOrPath`, `'file'` requires a blob and
+requires **no** URL. Because `kind` defaults to `'link'`, **every call site must
+pass it** — omitting it made uploads fail with "A URL or file path is
+required", which is exactly the bug fixed here. `urlOrPath` is optional on both
+`Resource` and `ResourceInput` for the same reason: it is mandatory only in link
+mode, so consumers must read it as `resource.urlOrPath ?? ''`.
+
+Verified by `scripts/verify-resource-form.mjs` (run by `npm run verify`): link
+mode saves and still rejects a missing URL or title; a PDF, a PNG and a DOCX
+each save with **no** URL and keep their blob, fileName, mimeType and fileSize;
+editing an upload's title without re-picking a file keeps the stored bytes; and
+an upload that omits `kind` is still rejected, which pins the original bug.
 
 ### 1.4 `assessments` — exams/quizzes/assignments/projects per subject (v5)
 

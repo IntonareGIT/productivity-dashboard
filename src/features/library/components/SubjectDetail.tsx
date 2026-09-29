@@ -18,7 +18,7 @@ interface SubjectDetailProps {
   onDeleteSubject: () => void;
 }
 
-const isUrl = (value: string) => /^https?:\/\//i.test(value);
+const isUrl = (value: string | undefined) => /^https?:\/\//i.test(value ?? '');
 
 const STATUS_META: Record<TopicStatus, { label: string; classes: string }> = {
   not_started: { label: 'Not started', classes: 'bg-bg-elevated text-content-secondary' },
@@ -75,15 +75,21 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
                 <button onClick={onOpen} className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><Eye className="w-3 h-3" /> View</button>
                 {resource.blob && <button onClick={onDownload} className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><Download className="w-3 h-3" /> Download</button>}
               </div>
-            ) : isUrl(resource.urlOrPath) ? (
-              <a href={resource.urlOrPath} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-accent hover:underline min-w-0">
-                <ExternalLink className="w-3 h-3 shrink-0" /><span className="truncate">{resource.urlOrPath}</span>
-              </a>
+            ) : resource.urlOrPath ? (
+              isUrl(resource.urlOrPath) ? (
+                <a href={resource.urlOrPath} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-accent hover:underline min-w-0">
+                  <ExternalLink className="w-3 h-3 shrink-0" /><span className="truncate">{resource.urlOrPath}</span>
+                </a>
+              ) : (
+                <button onClick={onCopy} title="Copy path" className="flex items-center gap-1 text-xs text-content-secondary hover:text-accent min-w-0">
+                  <FileText className="w-3 h-3 shrink-0" /><span className="font-mono truncate">{resource.urlOrPath}</span><Copy className="w-3 h-3 shrink-0" />
+                  {copied && <span className="text-emerald-500">copied</span>}
+                </button>
+              )
             ) : (
-              <button onClick={onCopy} title="Copy path" className="flex items-center gap-1 text-xs text-content-secondary hover:text-accent min-w-0">
-                <FileText className="w-3 h-3 shrink-0" /><span className="font-mono truncate">{resource.urlOrPath}</span><Copy className="w-3 h-3 shrink-0" />
-                {copied && <span className="text-emerald-500">copied</span>}
-              </button>
+              // A link row with no URL (e.g. an imported record). Show a
+              // placeholder rather than an empty, dead "copy path" button.
+              <span className="text-[11px] text-content-tertiary">No URL</span>
             )}
           </div>
 
@@ -164,7 +170,7 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
       return a.title.localeCompare(b.title);
     });
     if (!q) return sorted;
-    return sorted.filter((r) => r.title.toLowerCase().includes(q) || r.urlOrPath.toLowerCase().includes(q) || (r.fileName ?? '').toLowerCase().includes(q) || r.tags.some((t) => t.toLowerCase().includes(q)));
+    return sorted.filter((r) => r.title.toLowerCase().includes(q) || (r.urlOrPath ?? '').toLowerCase().includes(q) || (r.fileName ?? '').toLowerCase().includes(q) || r.tags.some((t) => t.toLowerCase().includes(q)));
   }, [resources, selectedTopic, filter, topics.length]);
 
   const sortedAssessments = useMemo(() => [...assessments].sort((a, b) => a.date.localeCompare(b.date)), [assessments]);
@@ -191,6 +197,8 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   };
 
   const copyPath = async (resource: Resource) => {
+    // A file row has no path; there is nothing to copy.
+    if (!resource.urlOrPath) return;
     try {
       await navigator.clipboard.writeText(resource.urlOrPath);
       setCopiedId(resource.id);
