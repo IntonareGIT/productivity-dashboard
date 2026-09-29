@@ -127,7 +127,10 @@ const res = (over = {}) => ({
   check('6 exactly one Preview button in the resource row',
     (detail.match(/>\s*Preview\s*</g) || []).length === 1);
   check('6 the Preview button opens the viewer', /onPreview=\{\(\) => setPreviewingResource\(resource\)\}/.test(detail));
-  check('6 the viewer modal is mounted', /<ResourceViewer resource=\{previewingResource\}/.test(detail));
+  // The JSX is multi-line, so match the tag and its binding separately rather
+  // than assuming one line.
+  check('6 the viewer modal is mounted',
+    /<ResourceViewer/.test(detail) && /resource=\{previewingResource\}/.test(detail));
 
   // PDF must go through the shared component, not be re-rendered locally.
   check('6 PDF uses the shared PdfViewer', /<PdfViewer\b/.test(viewer));

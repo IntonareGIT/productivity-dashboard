@@ -449,6 +449,64 @@ const CHAT = { kind: 'assistant' };
     /setRendering\(true\)/.test(pdf) && /renderTasksRef\.current\.size === 0\) setRendering\(false\)/.test(pdf));
   check('17 the old single-canvas-per-page band is gone',
     !/top: `\$\{\(page - 1\) \* band\}px`/.test(pdf) && !/const band = /.test(pdf));
+
+  // ---- 18. ONE PDF codepath, and full screen reachable everywhere -----
+  {
+    // The real regression risk: a second renderer appearing and drifting.
+    const pdfjsHolders = [];
+    const renderers = [];
+    const walk = (d) => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const p = join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.tsx?$/.test(e.name)) {
+          const src = readFileSync(p, 'utf8');
+          if (/from 'pdfjs-dist'/.test(src)) pdfjsHolders.push(p);
+          if (/\.render\(\{ canvas/.test(src)) renderers.push(p);
+        }
+      }
+    };
+    walk('src');
+    check('18 exactly ONE file imports pdfjs-dist',
+      pdfjsHolders.length === 1 &&
+      pdfjsHolders[0].replace(/\\/g, '/').endsWith('library/components/PdfViewer.tsx'),
+      pdfjsHolders.map((p) => p.split(/[\\/]/).pop()).join(','));
+    check('18 exactly ONE place calls pdf.js render()',
+      renderers.length === 1 && renderers[0] === pdfjsHolders[0],
+      renderers.map((p) => p.split(/[\\/]/).pop()).join(','));
+
+    const rv = readFileSync('src/features/library/components/ResourceViewer.tsx', 'utf8');
+    const sd = readFileSync('src/features/library/components/SubjectDetail.tsx', 'utf8');
+    const pc = readFileSync('src/features/split/PaneContent.tsx', 'utf8');
+
+    // Both hosts must render the same viewer, not a copy.
+    check('18 the Library preview renders the shared PdfViewer',
+      /<PdfViewer\b/.test(rv) && /<ResourceViewer/.test(sd));
+    check('18 split panes render the same ResourceViewer/PdfViewer path',
+      /<ResourceViewer/.test(pc) && /<PdfViewer\b/.test(rv));
+    check('18 the Library preview wires onOpenFullScreen (the missing prop)',
+      /onOpenFullScreen=\{\(\) => void openFullScreen\(previewingResource\.id\)\}/.test(sd));
+    check('18 split panes wire onOpenFullScreen too',
+      /onOpenFullScreen=\{openFullScreen\}/.test(pc) ||
+      /onOpenFullScreen=\{onRequestFullScreen\}/.test(pc));
+    check('18 both hosts use the ONE shared full-screen hook',
+      /useResourceFullScreen\(\)/.test(sd) && /useResourceFullScreen\(\)/.test(sv));
+    check('18 both hosts render the one shared FullScreenPreview',
+      /ResourceFullScreen resource=\{fullScreenResource\}/.test(sd) &&
+      /ResourceFullScreen resource=\{fullScreenResource\}/.test(sv));
+    check('18 the full-screen hook wraps the shared preview',
+      /<FullScreenPreview resource=\{resource\} onClose=\{onClose\} \/>/.test(
+        readFileSync('src/features/split/useResourceFullScreen.tsx', 'utf8')));
+
+    // Default size: a fit-to-width PDF needs room, not the compact dialog.
+    const modal = readFileSync('src/components/ui/Modal.tsx', 'utf8');
+    check('18 the modal keeps its compact default for other dialogs',
+      /sm:max-w-md/.test(modal) && /size\?: 'md' \| 'lg'/.test(modal));
+    check('18 the modal has a wide size for readable documents',
+      /lg: 'sm:max-w-6xl'/.test(modal));
+    check('18 a PDF/image preview opens wide, not cramped',
+      /size=\{kind === 'pdf' \|\| kind === 'image' \? 'lg' : 'md'\}/.test(rv));
+  }
 }
 
 console.log('');

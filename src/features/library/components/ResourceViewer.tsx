@@ -218,7 +218,15 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
   }
 
   return (
-    <Modal open onClose={onClose} title={resource.title} subtitle={`${typeLabel}${size ? ` · ${size}` : ''}`}>
+    <Modal
+      open
+      onClose={onClose}
+      title={resource.title}
+      subtitle={`${typeLabel}${size ? ` · ${size}` : ''}`}
+      // A fit-to-width PDF or an image needs room to be readable; the compact
+      // dialog would squeeze it to ~28rem and look like a low-zoom thumbnail.
+      size={kind === 'pdf' || kind === 'image' ? 'lg' : 'md'}
+    >
       {body}
     </Modal>
   );

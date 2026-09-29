@@ -8,6 +8,7 @@ import { MarkdownNotes } from './MarkdownNotes';
 import { TopicModal } from './TopicModal';
 import { ResourceModal } from './ResourceModal';
 import { ResourceViewer } from './ResourceViewer';
+import { ResourceFullScreen, useResourceFullScreen } from '../../split/useResourceFullScreen';
 import { AssessmentModal } from './AssessmentModal';
 import { deleteAssessment, deleteResource, deleteTopicCascade, ensureDefaultTopic, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes } from '../libraryRepo';
 import type { Assessment, Resource, Subject, Topic, TopicStatus } from '../../../types';
@@ -144,6 +145,9 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   const [editingResource, setEditingResource] = useState<Resource | null>(null);
   // The resource currently open in the preview modal, if any.
   const [previewingResource, setPreviewingResource] = useState<Resource | null>(null);
+  // Real-browser full screen for the preview, wired through the SAME shared
+  // hook the split view uses.
+  const { fullScreenResource, openFullScreen, closeFullScreen } = useResourceFullScreen();
   const [addingAssessment, setAddingAssessment] = useState(false);
   const [editingAssessment, setEditingAssessment] = useState<Assessment | null>(null);
   const [confirmDeleteSubject, setConfirmDeleteSubject] = useState(false);
@@ -459,8 +463,16 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
         <AssessmentModal subjectId={subject.id} assessment={editingAssessment} onClose={() => { setEditingAssessment(null); setAddingAssessment(false); }} />
       )}
       {previewingResource && (
-        <ResourceViewer resource={previewingResource} onClose={() => setPreviewingResource(null)} />
+        // `onOpenFullScreen` is what makes the shared PdfViewer show its
+        // full-screen control; without it the Library preview had none at all.
+        <ResourceViewer
+          resource={previewingResource}
+          onClose={() => setPreviewingResource(null)}
+          onOpenFullScreen={() => void openFullScreen(previewingResource.id)}
+        />
       )}
+      {/* The same shared full-screen preview the split view uses. */}
+      <ResourceFullScreen resource={fullScreenResource} onClose={closeFullScreen} />
     </div>
   );
 };

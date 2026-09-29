@@ -7,7 +7,7 @@ import { db } from '../../db/db';
 import type { NavTab } from '../../components/layout/Sidebar';
 import type { Resource, Topic } from '../../types';
 import { PaneContent } from './PaneContent';
-import { FullScreenPreview } from './FullScreenPreview';
+import { ResourceFullScreen, useResourceFullScreen } from './useResourceFullScreen';
 import {
   addSecondPane, clampRatio, closePane, initialSplitState, isSplit, setPane,
   swapPanes, toggleMaximize, type PaneSlot, type SplitState,
@@ -27,14 +27,10 @@ interface SplitViewProps {
 export const SplitView: React.FC<SplitViewProps> = ({
   state, setState, onNavigate, onOpenAssistantSettings, onCloseSplit,
 }) => {
-  const [fullScreenResource, setFullScreenResource] = useState<Resource | null>(null);
+  // Full screen uses the SAME shared hook as the Library preview, so the two
+  // hosts cannot drift apart again.
+  const { fullScreenResource, openFullScreen, closeFullScreen } = useResourceFullScreen();
   const split = isSplit(state);
-
-  const openFullScreenFor = useCallback(async (resourceId?: string) => {
-    if (!resourceId) return;
-    const r = await db.resources.get(resourceId);
-    if (r) setFullScreenResource(r);
-  }, []);
 
   const onDrag = useCallback((clientX: number, rect: DOMRect) => {
     const next = clampRatio((clientX - rect.left) / rect.width);
@@ -49,7 +45,7 @@ export const SplitView: React.FC<SplitViewProps> = ({
           setState={setState}
           onNavigate={onNavigate}
           onOpenAssistantSettings={onOpenAssistantSettings}
-          onOpenFullScreen={openFullScreenFor}
+          onOpenFullScreen={openFullScreen}
           onCloseSplit={onCloseSplit}
         />
       )}
@@ -65,12 +61,8 @@ export const SplitView: React.FC<SplitViewProps> = ({
         </div>
       )}
 
-      {fullScreenResource && (
-        <FullScreenPreview
-          resource={fullScreenResource}
-          onClose={() => setFullScreenResource(null)}
-        />
-      )}
+      {/* The same shared full-screen preview the Library preview uses. */}
+      <ResourceFullScreen resource={fullScreenResource} onClose={closeFullScreen} />
     </div>
   );
 };
