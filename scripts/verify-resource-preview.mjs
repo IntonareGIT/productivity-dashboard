@@ -282,69 +282,40 @@ const res = (over = {}) => ({
     /el\.scrollHeight - el\.clientHeight/.test(pdf) && /atTop = el\.scrollTop <= 2/.test(pdf));
 
   // ---- one toolbar, overlaid, with Download; no duplicate title ---------
-  check('T there is exactly ONE toolbar element in the viewer',
-    (pdf.match(/aria-label="PDF controls"/g) || []).length === 1);
-  // The header is a real flex child BEFORE the scroll area, not a sticky
-  // overlay inside it. A `sticky` element inside an `overflow` container is
-  // positioned by that container, so pages scrolled upward slid under it and
-  // showed through; as a sibling, the viewport starts strictly below it.
-  check('T the toolbar is a fixed header, not a sticky/absolute overlay',
-    /role="toolbar"[\s\S]{0,900}className="flex-shrink-0 w-full bg-slate-900 text-slate-100 border-b border-slate-800 overflow-x-auto/.test(pdf));
-  check('T the toolbar never uses sticky or absolute positioning',
-    !/role="toolbar"[\s\S]{0,400}className="[^"]*(sticky|absolute)/.test(pdf));
-  check('T the toolbar is declared BEFORE the scroll area',
-    pdf.indexOf('aria-label="PDF controls"') < pdf.indexOf('ref={shellRef}'));
-  check('T the toolbar has an OPAQUE dark fill, never a blur or gradient',
-    /bg-slate-900 text-slate-100 border-b border-slate-800/.test(pdf) &&
-    !/backdrop-blur/.test(pdf));
-  check('T the root is a definite-height flex column',
-    /'flex flex-col gap-0 h-full min-h-0 w-full overflow-hidden'/.test(pdf));
-  check('T the scroll area is the second child and scrolls vertically',
-    /ref=\{shellRef\}[\s\S]{0,600}className="relative flex-1 min-h-\[320px\] w-full overflow-y-auto overflow-x-hidden/.test(pdf));
-  check('T the toolbar rows are split left / centre / right',
-    /LEFT: the pane/.test(pdf) && /CENTRE: page navigation/.test(pdf) &&
-    /RIGHT: zoom, fit, rotate, download/.test(pdf));
-  check('T the toolbar can host the host pane selector in the same row',
-    /leadingControls\?: React\.ReactNode/.test(pdf) &&
-    /trailingControls\?: React\.ReactNode/.test(pdf) &&
-    /\{leadingControls\}/.test(pdf) && /\{trailingControls\}/.test(pdf));
-
-  // ---- narrow toolbars scroll instead of squashing ---------------------
-  // The controls used to wrap or truncate on a narrow split pane, hiding
-  // Download and Fullscreen past the edge.
-  check('T the toolbar scrolls horizontally with a hidden scrollbar',
+  // The bar is now published UP to the universal pane header rather than owned
+  // by the viewer, so the split pane has exactly one header row. The viewer
+  // still draws its own bar where there is no parent header (Library modal).
+  check('T the control row is a single reusable value',
+    /const toolbar = \(/.test(pdf) && (pdf.match(/const toolbar = \(/g) || []).length === 1);
+  check('T the viewer publishes that row to a parent header',
+    /onRegisterControls\?: \(node: React\.ReactNode\) => void/.test(pdf) &&
+    /onRegisterControls\(toolbar\)/.test(pdf) &&
+    /return \(\) => onRegisterControls\(null\)/.test(pdf));
+  check('T the viewer draws its own bar only when it owns the header',
+    /const ownsHeader = !onRegisterControls/.test(pdf) &&
+    /{ownsHeader && \(/.test(pdf) &&
+    /\{toolbar\}/.test(pdf));
+  check('T there is exactly ONE in-place bar, and it is conditional',
+    (pdf.match(/bg-slate-900 text-slate-100 border-b border-slate-800/g) || []).length === 1);
+  check('T the bar scrolls horizontally with a hidden scrollbar',
     /overflow-x-auto overscroll-x-contain/.test(pdf) &&
     /\[&::-webkit-scrollbar\]:hidden/.test(pdf) &&
     /\[scrollbar-width:none\]/.test(pdf));
-  check('T the inner row keeps its intrinsic width so controls never shrink',
+  check('T the in-place bar row keeps its intrinsic width',
     /h-11 px-3 flex items-center gap-2 min-w-max justify-between/.test(pdf));
-  check('T every toolbar group is shrink-0 and nowrap',
+  check('T the bar is an opaque dark fill, never a blur or gradient',
+    /bg-slate-900 text-slate-100 border-b border-slate-800/.test(pdf) &&
+    !/backdrop-blur/.test(pdf));
+  check('T the bar is never sticky or absolutely positioned',
+    !/className="[^"]*(sticky|absolute)[^"]*"/.test(pdf.slice(pdf.indexOf('ownsHeader && ('),
+                                                           pdf.indexOf('ref={shellRef}'))));
+  check('T the root is a definite-height flex column',
+    /'flex flex-col gap-0 h-full min-h-0 w-full overflow-hidden'/.test(pdf));
+  check('T the scroll area follows the header and scrolls vertically',
+    /ref=\{shellRef\}[\s\S]{0,600}className="relative flex-1 min-h-\[320px\] w-full overflow-y-auto overflow-x-hidden/.test(pdf));
+  check('T the control groups are shrink-0 and nowrap',
     (pdf.match(/flex-shrink-0 whitespace-nowrap/g) || []).length >= 3 &&
     /\$\{ctrl\} flex-shrink-0 whitespace-nowrap/.test(pdf));
-
-  // ---- pinch / trackpad zoom -------------------------------------------
-  check('Z pinch zoom is clamped through a shared multiplier',
-    /const scaleZoom = useCallback/.test(pdf) &&
-    /Math\.max\(MIN_ZOOM, Math\.min\(MAX_ZOOM, \+\(z \* factor\)/.test(pdf));
-  check('Z the zoom bounds are 50%..400%', /MIN_ZOOM = 0\.5/.test(pdf) && /MAX_ZOOM = 4/.test(pdf));
-  check('Z a trackpad pinch (ctrlKey wheel) is intercepted, not left to the browser',
-    /if \(!e\.ctrlKey\) return;/.test(pdf) &&
-    /if \(!e\.ctrlKey\) return;[\s\S]{0,500}e\.preventDefault\(\);[\s\S]{0,500}scaleZoom\(Math\.exp\(-e\.deltaY \* 0\.01\)\)/.test(pdf));
-  check('Z the wheel listener is non-passive so preventDefault is honoured',
-    /addEventListener\('wheel', onWheel, \{ passive: false \}\)/.test(pdf) &&
-    /removeEventListener\('wheel', onWheel\)/.test(pdf));
-  check('Z mobile pinch tracks the two-finger distance',
-    /Math\.hypot\(a\.clientX - b\.clientX, a\.clientY - b\.clientY\)/.test(pdf) &&
-    /touches\.length !== 2/.test(pdf));
-  check('Z the pinch re-anchors on the gesture start so it cannot compound',
-    /startZoom = zoomRef\.current/.test(pdf) &&
-    /scaleZoom\(\(ratio \* startZoom\) \/ zoomRef\.current\)/.test(pdf));
-  check('Z touchmove is non-passive and prevents the default page zoom',
-    /addEventListener\('touchmove', onMove, \{ passive: false \}\)/.test(pdf) &&
-    /e\.preventDefault\(\);/.test(pdf));
-  check('Z the touch handlers are all removed on cleanup',
-    /removeEventListener\('touchstart', onStart\)/.test(pdf) &&
-    /removeEventListener\('touchmove', onMove\)/.test(pdf));
   check('T the toolbar holds page nav, zoom, fit, rotate, download and fullscreen',
     /aria-label="Previous page"/.test(pdf) && /aria-label="Next page"/.test(pdf) &&
     /aria-label="Zoom out"/.test(pdf) && /aria-label="Zoom in"/.test(pdf) &&

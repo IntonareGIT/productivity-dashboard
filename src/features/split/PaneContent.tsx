@@ -18,8 +18,12 @@ interface PaneContentProps {
    * INSIDE the viewer's single toolbar row. Passing nothing means the PDF pane
    * would need its own header, which is what caused the doubled header.
    */
-  leadingControls?: React.ReactNode;
-  trailingControls?: React.ReactNode;
+  /**
+   * Lets the mounted PDF viewer publish its page/zoom controls up to the
+   * universal PaneHeader, which is what keeps exactly one header per pane
+   * instead of a header plus a second toolbar inside the viewer.
+   */
+  onRegisterPdfControls?: (node: React.ReactNode) => void;
 }
 
 const Blank = ({ children }: { children: React.ReactNode }) => (
@@ -36,7 +40,7 @@ const Blank = ({ children }: { children: React.ReactNode }) => (
  * completely independent viewer state.
  */
 export const PaneContent: React.FC<PaneContentProps> = ({
-  slot, onNavigate, onOpenAssistantSettings, leadingControls, trailingControls,
+  slot, onNavigate, onOpenAssistantSettings, onRegisterPdfControls,
 }) => {
   // Resources are read live, so a pane opened on a file picks up edits.
   const resource = useLiveQuery(
@@ -92,8 +96,7 @@ export const PaneContent: React.FC<PaneContentProps> = ({
         <div className="flex flex-col h-full min-h-0 overflow-hidden p-1">
           <EmbeddedResourceViewer
           resource={resource}
-          leadingControls={leadingControls}
-          trailingControls={trailingControls}
+          onRegisterPdfControls={onRegisterPdfControls}
         />
         </div>
       );
@@ -110,12 +113,15 @@ export const PaneContent: React.FC<PaneContentProps> = ({
 // The viewer owns its own fullscreen, so nothing is threaded in from the pane.
 const EmbeddedResourceViewer: React.FC<{
   resource: Resource;
-  leadingControls?: React.ReactNode;
-  trailingControls?: React.ReactNode;
-}> = ({ resource, leadingControls, trailingControls }) => (
+  /**
+   * Lets the mounted PDF viewer publish its page/zoom controls up to the
+   * universal PaneHeader, which is what keeps exactly one header per pane
+   * instead of a header plus a second toolbar inside the viewer.
+   */
+  onRegisterPdfControls?: (node: React.ReactNode) => void;
+}> = ({ resource, onRegisterPdfControls }) => (
   <ResourceViewer
-    leadingControls={leadingControls}
-    trailingControls={trailingControls}
+    onRegisterPdfControls={onRegisterPdfControls}
     resource={resource}
     onClose={() => { /* panes are closed by the pane header, not the viewer */ }}
     embedded

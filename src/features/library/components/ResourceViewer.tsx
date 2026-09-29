@@ -48,8 +48,8 @@ interface ResourceViewerProps {
    * here so the selector and the viewer controls are a single row rather than
    * two headers stacked on the pane.
    */
-  leadingControls?: React.ReactNode;
-  trailingControls?: React.ReactNode;
+  /** Publishes the viewer's controls up to the universal pane header. */
+  onRegisterPdfControls?: (node: React.ReactNode) => void;
 }
 
 /**
@@ -67,7 +67,7 @@ interface ResourceViewerProps {
  * regardless of whether the inline preview works.
  */
 export const ResourceViewer: React.FC<ResourceViewerProps> = ({
-  resource, onClose, embedded = false, leadingControls, trailingControls,
+  resource, onClose, embedded = false, onRegisterPdfControls,
 }) => {
   const kind = previewKindFor(resource);
   const [imgUrl, setImgUrl] = useState<string | null>(null);
@@ -147,8 +147,7 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
               title={resource.title}
               variant={embedded ? 'standalone' : 'inline'}
               onDownload={resource.blob ? download : undefined}
-              leadingControls={leadingControls}
-              trailingControls={trailingControls}
+              onRegisterControls={onRegisterPdfControls}
             />
           </Suspense>
         )}

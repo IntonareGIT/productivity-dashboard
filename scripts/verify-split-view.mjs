@@ -149,6 +149,12 @@ const CHAT = { kind: 'assistant' };
     isSplit(initialSplitState) === false && initialSplitState.maximized === null);
 }
 
+// The header and its universal wrapper were extracted out of SplitView into
+// their own module, so header assertions read that file. Declared at module
+// scope because later blocks assert against it too.
+const paneHeader = readFileSync('src/features/split/PaneHeader.tsx', 'utf8');
+const pdfViewer = readFileSync('src/features/library/components/PdfViewer.tsx', 'utf8');
+
 // ---- 10. Components honour the model --------------------------------
 {
   const splitView = readFileSync('src/features/split/SplitView.tsx', 'utf8');
@@ -203,9 +209,9 @@ const CHAT = { kind: 'assistant' };
         }
       };
       walk('src');
-      return hits.length === 1 && hits[0].replace(/\\/g, '/').endsWith('features/split/SplitView.tsx');
+      return hits.length === 1 && hits[0].replace(/\\/g, '/').endsWith('features/split/PaneHeader.tsx');
     })(),
-    'only SplitView may add a pane generically');
+    'only the pane header may add a pane generically');
   check('10 no other surface exposes a generic start-split button',
     !/Start split screen|startSplitScreen/.test(
       readFileSync('src/components/layout/Sidebar.tsx', 'utf8') +
@@ -220,7 +226,7 @@ const CHAT = { kind: 'assistant' };
   check('10 the icon opens a default empty split',
     /emptySplitState/.test(app) && /panes\.length > 1 \? s : emptySplitState/.test(app));
   check('10 every pane still has its own picker control',
-    /Pane \$\{index \+ 1\} content/.test(splitView));
+    /Pane \$\{index \+ 1\} content/.test(paneHeader));
 
 
   check('10 two panes are side by side, stacked under 768px',
@@ -231,22 +237,22 @@ const CHAT = { kind: 'assistant' };
     /role="separator"/.test(splitView) && /aria-label="Resize panes"/.test(splitView));
 
   check('10 each pane header has a content picker',
-    /Pane \$\{index \+ 1\} content/.test(splitView));
+    /Pane \$\{index \+ 1\} content/.test(paneHeader));
   check('10 the picker offers all four kinds',
-    /value="dashboard"/.test(splitView) && /value="pdf"/.test(splitView) &&
-    /value="notes"/.test(splitView) && /value="assistant"/.test(splitView));
+    /value="dashboard"/.test(paneHeader) && /value="pdf"/.test(paneHeader) &&
+    /value="notes"/.test(paneHeader) && /value="assistant"/.test(paneHeader));
   // ONE document dropdown on every pane kind, grouping PDFs and notes, rather
   // than two sub-pickers that only appeared for pdf/notes kinds.
   check('10 the picker has one document dropdown covering PDFs and notes',
-    /Select file/.test(splitView) && /optgroup label="PDFs"/.test(splitView) &&
-    /optgroup label="Notes"/.test(splitView));
+    /Select file/.test(paneHeader) && /optgroup label="PDFs"/.test(paneHeader) &&
+    /optgroup label="Notes"/.test(paneHeader));
   check('10 the document dropdown is always rendered, not kind-gated',
-    !/\{(slot\.kind === 'pdf' \|\| slot\.kind === 'notes') && \(\s*<select/.test(splitView));
-  check('10 there is a swap control', /swapPanes\(s\)/.test(splitView));
-  check('10 there is a close control collapsing to one pane', /closePane\(s, index\)/.test(splitView));
-  check('10 a single pane can open the split', /addSecondPane\(s, \{ kind: 'assistant' \}\)/.test(splitView));
-  check('10 a single pane can return to the dashboard', /setState\(initialSplitState\)/.test(splitView));
-  check('10 a pane can be maximized and restored', /toggleMaximize\(s, index\)/.test(splitView));
+    !/\{(slot\.kind === 'pdf' \|\| slot\.kind === 'notes') && \(\s*<select/.test(paneHeader));
+  check('10 there is a swap control', /swapPanes\(s\)/.test(splitView) || /swapPanes\(s\)/.test(paneHeader));
+  check('10 there is a close control collapsing to one pane', /closePane\(s, index\)/.test(paneHeader));
+  check('10 a single pane can open the split', /addSecondPane\(s, \{ kind: 'assistant' \}\)/.test(paneHeader));
+  check('10 a single pane can return to the dashboard', /setState\(initialSplitState\)/.test(paneHeader));
+  check('10 a pane can be maximized and restored', /toggleMaximize\(s, index\)/.test(paneHeader));
   check('10 the maximized-away pane stays mounted, keeping its state',
     /hidden \? 'hidden' : ''/.test(splitView) && /!hidden && \(/.test(splitView));
 
@@ -394,10 +400,7 @@ const CHAT = { kind: 'assistant' };
   // No top inset any more: the PDF toolbar floats inside the viewer itself,
   // so the pane hands its whole height to the document.
   check('16 each pane content area is bounded and clipped',
-    /flex-1 min-h-0 overflow-hidden/.test(
-      readFileSync('src/features/split/SplitView.tsx', 'utf8')) &&
-    !/overflow-hidden pt-9/.test(
-      readFileSync('src/features/split/SplitView.tsx', 'utf8')));
+    /flex-1 min-h-0 overflow-y-auto overflow-x-hidden/.test(paneHeader));
   check('16 the pane itself is bounded and does not push the page',
     /min-w-0 min-h-0 relative flex flex-col overflow-hidden/.test(
       readFileSync('src/features/split/SplitView.tsx', 'utf8')));
@@ -547,15 +550,18 @@ const CHAT = { kind: 'assistant' };
     check('FM the split controls are anchored to the divider, not a pane title',
       /role="toolbar"[\s\S]{0,400}top-1\/2 -translate-y-1\/2 -translate-x-1\/2 left-1\/2 flex-col/.test(sv)
       && /relative shrink-0 flex items-center justify-center bg-border/.test(sv));
-    check('FM the pane header floats over the pane instead of stacking',
-      /absolute inset-x-0 top-0 z-20 flex justify-start pointer-events-none/.test(sv)
-      && /pointer-events-auto/.test(sv));
+    // The header is no longer a floating overlay: it is the shrink-0 first
+    // child of the wrapper, so content can never appear above it.
+    check('FM the pane header is a flex sibling, not a floating overlay',
+      /flex-shrink-0 w-full bg-slate-900/.test(paneHeader) &&
+      !/pointer-events-none/.test(paneHeader));
     check('FM the pane header no longer takes layout height',
       !/border-b border-border bg-bg-elevated\/40 shrink-0/.test(sv));
     check('FM the split container stretches edge to edge',
       /flex-1 min-h-0 w-full relative flex/.test(sv));
     check('FM the pane clips and the PDF scroll area scrolls',
-      /relative flex flex-col overflow-hidden/.test(sv) && /flex-1 min-h-0 overflow-hidden/.test(sv));
+      /relative flex flex-col overflow-hidden/.test(sv) &&
+      /flex h-full min-h-0 flex-col overflow-hidden/.test(paneHeader));
     // The AI FAB is fixed bottom-right; in split view that is the chat
     // composer, so it must be docked rather than floating over the input.
     const launcher = readFileSync('src/features/ai/components/AssistantLauncher.tsx', 'utf8');
@@ -565,32 +571,41 @@ const CHAT = { kind: 'assistant' };
     check('FM split view hides the AI launcher',
       /<AssistantLauncher[\s\S]{0,200}hidden=\{splitOpen\}/.test(app));
 
-    // ---- ONE header on a PDF pane, no duplicate title -------------------
-    // The doubled header came from the pane floating its own selector bar over
-    // the viewer's toolbar. A PDF pane now injects BOTH halves into the
-    // viewer's single row instead.
-    // The bar is suppressed only for a pdf pane that has actually loaded a
-    // document. With no resourceId the pane shows just a "pick a PDF" message,
-    // so hiding the bar would remove the only way to choose a file.
-    check('H a PDF pane with a loaded document renders no second header',
-      /\(slot\.kind !== 'pdf' \|\| !slot\.resourceId\) && \(/.test(sv));
-    check('H an empty PDF pane still shows the bar, so the file picker is reachable',
-      /!slot\.resourceId/.test(sv) &&
-      /slot\.kind === 'pdf' && slot\.resourceId \? \(/.test(sv));
-    check('H a PDF pane injects its selectors into the viewer toolbar',
-      /part="selectors"/.test(sv) && /part="buttons"/.test(sv) &&
-      /leadingControls=\{/.test(sv) && /trailingControls=\{/.test(sv));
-    check('H PaneHeader can render each half on its own',
-      /part\?: 'all' \| 'selectors' \| 'buttons'/.test(sv) &&
-      /part === 'selectors' \? selectors : actions/.test(sv));
-    check('H the duplicate static title label is gone',
-      !/const label =/.test(sv) &&
-      !/truncate max-w-\[8rem\]">\{label\}/.test(sv));
-    check('H the pane chrome no longer uses a blur bar',
-      !/backdrop-blur/.test(sv));
+    // ---- ONE universal header for every pane kind ----------------------
+    // The header used to be a floating overlay for non-PDF panes and part of
+    // the viewer toolbar for PDF panes, which is what produced the doubled
+    // header. It is now extracted and rendered by the wrapper for every kind.
+    check('H the header and wrapper live in their own module',
+      /export const PaneHeader/.test(paneHeader) &&
+      /export const PaneContainer/.test(paneHeader));
+    check('H SplitView no longer defines a header of its own',
+      !/const PaneHeader/.test(sv) && !/<PaneHeader/.test(sv));
+    check('H every pane goes through the universal wrapper',
+      (sv.match(/<PaneContainer/g) || []).length === 2);
+    check('H the wrapper is a height-filling flex column',
+      /flex h-full min-h-0 flex-col overflow-hidden/.test(paneHeader));
+    check('H the header is shrink-0 and the content flex-1 min-h-0',
+      /flex-shrink-0 w-full bg-slate-900/.test(paneHeader) &&
+      /flex-1 min-h-0 overflow-y-auto overflow-x-hidden/.test(paneHeader));
+    check('H the view and document dropdowns are unconditional',
+      /{selectors}/.test(paneHeader) && !/part ===/.test(paneHeader));
+    check('H the document dropdown is present on every pane kind',
+      /aria-label={`Pane \$\{index \+ 1\} document`}/.test(paneHeader) &&
+      /Select file/.test(paneHeader));
+    check('H the PDF controls are conditional on the view type',
+      /pdfControls && \(/.test(paneHeader) &&
+      /pdfControls\?: React\.ReactNode/.test(paneHeader));
+    check('H the viewer publishes its controls upward instead of its own bar',
+      /onRegisterControls\?: \(node: React\.ReactNode\) => void/.test(pdfViewer) &&
+      /onRegisterControls\(toolbar\)/.test(pdfViewer) &&
+      /const ownsHeader = !onRegisterControls/.test(pdfViewer));
+    check('H the viewer clears its published controls on unmount',
+      /return \(\) => onRegisterControls\(null\)/.test(pdfViewer));
     check('H the pane chrome is dark like the viewer toolbar',
-      /rounded-xl bg-slate-900 border border-slate-700/.test(sv) &&
-      /bg-slate-800 text-slate-100 border border-slate-600/.test(sv));
+      /border-b border-slate-800/.test(paneHeader) &&
+      /bg-slate-800 text-slate-100 border border-slate-600/.test(paneHeader));
+    check('H the pane chrome no longer uses a blur bar',
+      !/backdrop-blur/.test(paneHeader));
 
     // ---- the dashboard pane must scroll internally ----------------------
     const dash = readFileSync('src/features/dashboard/DashboardPage.tsx', 'utf8');

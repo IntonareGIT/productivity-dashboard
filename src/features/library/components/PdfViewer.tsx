@@ -24,14 +24,12 @@ interface PdfViewerProps {
    */
   onDownload?: () => void;
   /**
-   * Rendered at the START of the toolbar. The split pane passes its document
-   * selector here, so the selector and the page/zoom controls form ONE row.
-   * Without this the pane had to float its own header above this toolbar,
-   * which is what produced the doubled, overlapping header.
+   * Publishes this viewer's controls to a parent. In a split pane the
+   * universal PaneHeader calls this so the page/zoom controls appear in the ONE
+   * header instead of in a second toolbar inside the viewer. Omit it (the
+   * Library modal) and the viewer renders its own header as before.
    */
-  leadingControls?: React.ReactNode;
-  /** Rendered at the END of the toolbar (the pane's own pane-level buttons). */
-  trailingControls?: React.ReactNode;
+  onRegisterControls?: (node: React.ReactNode) => void;
 }
 
 /** Zoom bounds. 1 = fit-to-width (the default), so zoom is a multiplier. */
@@ -71,7 +69,7 @@ const isCancel = (e: unknown) =>
  * lands after a newer render has started.
  */
 export const PdfViewer: React.FC<PdfViewerProps> = ({
-  blob, title, variant = 'inline', onDownload, leadingControls, trailingControls,
+  blob, title, variant = 'inline', onDownload, onRegisterControls,
 }) => {
   const docRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
   // In pdf.js v6 destroy() lives on the loading task, so the task is what we
@@ -602,6 +600,20 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   };
 
   const zoomPct = Math.round(zoom * 100);
+
+  // Publish the controls to a parent header when asked. Registering on every
+  // render (and clearing to null on unmount) is what lets the parent show them
+  // only while this viewer is mounted, i.e. only for a PDF view.
+  useEffect(() => {
+    if (!onRegisterControls) return;
+    onRegisterControls(toolbar);
+    return () => onRegisterControls(null);
+  });
+
+  // True when the viewer draws its own header (Library modal, or anywhere with
+  // no parent header to host them). In a split pane the header belongs to the
+  // universal PaneHeader, so the viewer contributes controls only.
+  const ownsHeader = !onRegisterControls;
   // Full screen is a real overlay using the viewport, not a scaled-up inline
   // canvas, so the page gets genuinely more room. `standalone` must FILL the
   // height its host gives it, otherwise it collapses to its content and the
@@ -619,6 +631,84 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   const boxClass = fullScreen
     ? 'fixed inset-0 z-[60] flex flex-col gap-0 p-0 h-full w-full bg-bg-primary overflow-hidden'
     : 'flex flex-col gap-0 h-full min-h-0 w-full overflow-hidden';
+  // The control row. Published to a parent header when there is one, and
+  // rendered in place otherwise, so the two paths can never drift.
+  // The control row. Published to a parent header when there is one, and
+  // rendered in place otherwise, so the two paths can never drift.
+  const toolbar = (
+    <>
+      <div className="flex items-center gap-2 flex-shrink-0 whitespace-nowrap">
+      {/* LEFT: page navigation. In the modal this bar is the only header; in a
+          split pane the universal PaneHeader owns the row and the viewer
+          contributes these controls into it. */}      {/* CENTRE: page navigation. */}
+      <div className="flex items-center gap-1 flex-shrink-0 whitespace-nowrap">
+      <button onClick={onPrevPage} disabled={page <= 1 || pageCount === 0} aria-label="Previous page" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
+        <ChevronLeft className="w-4 h-4" />
+      </button>
+      <label className="flex items-center gap-1.5 text-xs text-slate-400 flex-shrink-0 whitespace-nowrap">
+        <span className="sr-only">Page number</span>
+        <input
+          value={pageInput}
+          onChange={(e) => setPageInput(e.target.value.replace(/[^\d]/g, ''))}
+          onBlur={() => { const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); } }}
+          inputMode="numeric"
+          aria-label="Page number"
+          className="w-10 text-center bg-slate-800 border border-slate-600 rounded-md px-1 py-1 text-xs text-slate-100 tabular-nums outline-none focus:border-accent"
+        />
+        <span className="tabular-nums whitespace-nowrap text-slate-400">of {pageCount || '—'}</span>
+      </label>
+      <button onClick={onNextPage} disabled={page >= pageCount || pageCount === 0} aria-label="Next page" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
+        <ChevronRight className="w-4 h-4" />
+      </button>
+      </div>
+
+      {/* RIGHT: zoom, fit, rotate, download, fullscreen, then the host's pane
+          buttons. The row is already justify-between, so no ml-auto is needed. */}
+      <div className="flex items-center gap-1 flex-shrink-0 whitespace-nowrap">
+
+      <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
+
+      <button onClick={() => changeZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label="Zoom out" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
+        <Minus className="w-4 h-4" />
+      </button>
+      <span className="min-w-[2.75rem] text-center text-xs text-slate-300 tabular-nums">{zoomPct}%</span>
+      <button onClick={() => changeZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label="Zoom in" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
+        <Plus className="w-4 h-4" />
+      </button>
+      <button onClick={() => setZoom(1)} aria-label="Fit page to the window" className={`${ctrl} px-2`}>Fit</button>
+
+      <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
+
+      <button onClick={() => setRotation((r) => (r + 90) % 360)} aria-label={`Rotate, currently ${rotation} degrees`} className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
+        <RotateCw className="w-4 h-4" />
+      </button>
+
+      {onDownload && (
+        <>
+          <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
+          <button onClick={onDownload} aria-label="Download this file" title="Download" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
+            <Download className="w-4 h-4" />
+          </button>
+        </>
+      )}
+
+      {/* One control, always present, always operating on THIS viewer. */}
+      <button
+        onClick={toggleFullScreen}
+        aria-label={fullScreen ? 'Exit full screen' : 'Enter full screen'}
+        title={fullScreen ? 'Exit full screen (Esc)' : 'Full screen'}
+        className={ctrl}
+      >
+        {fullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+        {!fullScreen && 'Full screen'}
+      </button>
+
+      </div>
+    </div>
+    </>
+  );
+
   if (status === 'error') {
     return (
       <div className="flex items-start gap-2 p-4 rounded-xl border border-amber-500/40 bg-amber-500/10">
@@ -650,91 +740,19 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
           the surface, so the page began partly above it. As a sibling BEFORE
           the scroll area the viewport starts strictly under the header, so
           content can only ever appear below it. */}
-      <div
-        role="toolbar"
-        aria-label="PDF controls"
-        // Narrow panes used to squash or wrap the controls, hiding Download and
-        // Fullscreen behind an edge. The row now lives in a horizontal scroll
-        // container, and the inner row is `min-w-max`, so the bar overflows and
-        // can be swiped (touch) or shifted (trackpad) instead of truncating.
-        // The scrollbar is hidden via arbitrary variants because this project
-        // has no scrollbar plugin, and `scrollbar-width` covers Firefox.
-        className="flex-shrink-0 w-full bg-slate-900 text-slate-100 border-b border-slate-800 overflow-x-auto overscroll-x-contain [&::-webkit-scrollbar]:hidden [scrollbar-width:none]"
-      >
-      <div className="h-11 px-3 flex items-center gap-2 min-w-max justify-between">
-    {/* LEFT: the pane's own view + document selectors, injected by the host. */}
-    <div className="flex items-center gap-1.5 flex-shrink-0 whitespace-nowrap">
-      {leadingControls}
-    </div>
 
-    {/* CENTRE: page navigation. */}
-    <div className="flex items-center gap-1 flex-shrink-0 whitespace-nowrap">
-    <button onClick={onPrevPage} disabled={page <= 1 || pageCount === 0} aria-label="Previous page" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
-      <ChevronLeft className="w-4 h-4" />
-    </button>
-    <label className="flex items-center gap-1.5 text-xs text-slate-400 flex-shrink-0 whitespace-nowrap">
-      <span className="sr-only">Page number</span>
-      <input
-        value={pageInput}
-        onChange={(e) => setPageInput(e.target.value.replace(/[^\d]/g, ''))}
-        onBlur={() => { const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); }}
-        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); } }}
-        inputMode="numeric"
-        aria-label="Page number"
-        className="w-10 text-center bg-slate-800 border border-slate-600 rounded-md px-1 py-1 text-xs text-slate-100 tabular-nums outline-none focus:border-accent"
-      />
-      <span className="tabular-nums whitespace-nowrap text-slate-400">of {pageCount || '—'}</span>
-    </label>
-    <button onClick={onNextPage} disabled={page >= pageCount || pageCount === 0} aria-label="Next page" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
-      <ChevronRight className="w-4 h-4" />
-    </button>
-    </div>
-
-    {/* RIGHT: zoom, fit, rotate, download, fullscreen, then the host's pane
-        buttons. The row is already justify-between, so no ml-auto is needed. */}
-    <div className="flex items-center gap-1 flex-shrink-0 whitespace-nowrap">
-
-    <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
-
-    <button onClick={() => changeZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label="Zoom out" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
-      <Minus className="w-4 h-4" />
-    </button>
-    <span className="min-w-[2.75rem] text-center text-xs text-slate-300 tabular-nums">{zoomPct}%</span>
-    <button onClick={() => changeZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label="Zoom in" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
-      <Plus className="w-4 h-4" />
-    </button>
-    <button onClick={() => setZoom(1)} aria-label="Fit page to the window" className={`${ctrl} px-2`}>Fit</button>
-
-    <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
-
-    <button onClick={() => setRotation((r) => (r + 90) % 360)} aria-label={`Rotate, currently ${rotation} degrees`} className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
-      <RotateCw className="w-4 h-4" />
-    </button>
-
-    {onDownload && (
-      <>
-        <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
-        <button onClick={onDownload} aria-label="Download this file" title="Download" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
-          <Download className="w-4 h-4" />
-        </button>
-      </>
-    )}
-
-    {/* One control, always present, always operating on THIS viewer. */}
-    <button
-      onClick={toggleFullScreen}
-      aria-label={fullScreen ? 'Exit full screen' : 'Enter full screen'}
-      title={fullScreen ? 'Exit full screen (Esc)' : 'Full screen'}
-      className={trailingControls ? ctrl : `${ctrl} ml-auto`}
-    >
-      {fullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-      {!fullScreen && 'Full screen'}
-    </button>
-
-      {trailingControls}
-    </div>
-    </div>
-    </div>
+      {/* The bar exists in place only when no parent header is hosting it. When
+          one is, this same `toolbar` is published upward instead, so there is
+          exactly one row either way. */}
+      {ownsHeader && (
+        <div
+          className="flex-shrink-0 w-full bg-slate-900 text-slate-100 border-b border-slate-800 overflow-x-auto overscroll-x-contain [&::-webkit-scrollbar]:hidden [scrollbar-width:none]"
+        >
+          <div className="h-11 px-3 flex items-center gap-2 min-w-max justify-between">
+            {toolbar}
+          </div>
+        </div>
+      )}
 
       <div
         ref={shellRef}
