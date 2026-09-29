@@ -43,6 +43,13 @@ interface ResourceViewerProps {
   onClose: () => void;
   /** Render without the modal wrapper, for use inside a split pane. */
   embedded?: boolean;
+  /**
+   * Forwarded to the PDF toolbar. The split pane passes its document selector
+   * here so the selector and the viewer controls are a single row rather than
+   * two headers stacked on the pane.
+   */
+  leadingControls?: React.ReactNode;
+  trailingControls?: React.ReactNode;
 }
 
 /**
@@ -60,7 +67,7 @@ interface ResourceViewerProps {
  * regardless of whether the inline preview works.
  */
 export const ResourceViewer: React.FC<ResourceViewerProps> = ({
-  resource, onClose, embedded = false,
+  resource, onClose, embedded = false, leadingControls, trailingControls,
 }) => {
   const kind = previewKindFor(resource);
   const [imgUrl, setImgUrl] = useState<string | null>(null);
@@ -140,6 +147,8 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
               title={resource.title}
               variant={embedded ? 'standalone' : 'inline'}
               onDownload={resource.blob ? download : undefined}
+              leadingControls={leadingControls}
+              trailingControls={trailingControls}
             />
           </Suspense>
         )}

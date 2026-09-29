@@ -13,10 +13,14 @@ import {
   swapPanes, toggleMaximize, type PaneSlot, type SplitState,
 } from './splitModel';
 
-const ico = 'inline-flex items-center justify-center p-1.5 min-h-[30px] rounded-lg border border-transparent text-content-secondary hover:text-content-primary hover:bg-bg-elevated transition-colors shrink-0';
+const ico = 'inline-flex items-center justify-center p-1.5 min-h-[30px] rounded-lg border border-transparent text-slate-300 hover:text-white hover:bg-slate-700/70 transition-colors shrink-0';
 // Focus Mode: the pane pickers float over the content, so they need their own
 // translucent surface to stay readable against a PDF page.
-const field = 'min-w-0 bg-bg-surface/90 border border-border rounded-lg px-1.5 py-1 text-[11px] text-content-primary outline-none focus:border-accent backdrop-blur-sm';
+// The dropdowns now render INSIDE the PDF viewer's opaque slate-900 toolbar,
+// so they use a solid dark treatment. The old `bg-bg-surface/90
+// backdrop-blur-sm` was a light, translucent field: on the dark bar it both
+// clashed and reintroduced the blur-glow the solid bar was meant to remove.
+const field = 'min-w-0 bg-slate-800 text-slate-100 border border-slate-600 rounded-lg px-1.5 py-1 text-[11px] outline-none focus:border-accent';
 
 interface SplitViewProps {
   state: SplitState;
@@ -128,32 +132,60 @@ const SplitBody: React.FC<SplitBodyProps> = ({
       >
         {!hidden && (
           <>
-            {/* Focus Mode: the header is absolutely positioned, so it overlays
-                the pane instead of taking a slice of its height. The content
-                underneath gets the full pane and only a small top inset so the
-                float does not sit on top of the viewer's own toolbar. */}
-            <div className="absolute inset-x-0 top-0 z-20 flex justify-start pointer-events-none px-1.5 pt-1.5">
-              <div className="pointer-events-auto flex items-center gap-1 max-w-full overflow-x-auto rounded-xl bg-bg-surface/85 backdrop-blur-md border border-border shadow-sm px-1 py-0.5">
-                <PaneHeader
-                  index={index}
-                  slot={slot}
-                  split={isSplit(state)}
-                  maximized={maximized === index}
-                  setState={setState}
-                  onCloseSplit={onCloseSplit}
-                />
+            {/* A PDF pane has NO header of its own: the dropdowns and the pane
+                actions are injected into the viewer's single solid toolbar
+                (leadingControls / trailingControls), so there is exactly one
+                header row. Every other kind keeps this compact floating bar,
+                because it has no viewer toolbar to live in. */}
+            {slot.kind !== 'pdf' && (
+              <div className="absolute inset-x-0 top-0 z-20 flex justify-start pointer-events-none px-1.5 pt-1.5">
+                <div className="pointer-events-auto flex items-center gap-1 max-w-full overflow-x-auto rounded-xl bg-slate-900 border border-slate-700 px-1 py-0.5">
+                  <PaneHeader
+                    index={index}
+                    slot={slot}
+                    split={isSplit(state)}
+                    maximized={maximized === index}
+                    setState={setState}
+                    onCloseSplit={onCloseSplit}
+                  />
+                </div>
               </div>
-            </div>
-            {/* `overflow-hidden` on the pane plus `overflow-y-auto` inside the
-                viewer is what keeps scrolling inside the PDF rather than
-                scrolling the page. The chain is
-                pane(relative, flex) -> region(flex-1 min-h-0) -> PaneContent
-                (h-full) -> ResourceViewer/PdfViewer (h-full min-h-0). */}
+            )}
+            {/* `overflow-hidden` on the pane plus internal scrolling is what
+                keeps scrolling inside the pane rather than the page. The chain
+                is pane(relative, flex) -> region(flex-1 min-h-0) ->
+                PaneContent (h-full) -> ResourceViewer/PdfViewer (h-full). */}
             <div className="flex-1 min-h-0 overflow-hidden">
               <PaneContent
                 slot={slot}
                 onNavigate={onNavigate}
                 onOpenAssistantSettings={onOpenAssistantSettings}
+                leadingControls={
+                  slot.kind === 'pdf' ? (
+                    <PaneHeader
+                      index={index}
+                      slot={slot}
+                      split={isSplit(state)}
+                      maximized={maximized === index}
+                      setState={setState}
+                      onCloseSplit={onCloseSplit}
+                      part="selectors"
+                    />
+                  ) : undefined
+                }
+                trailingControls={
+                  slot.kind === 'pdf' ? (
+                    <PaneHeader
+                      index={index}
+                      slot={slot}
+                      split={isSplit(state)}
+                      maximized={maximized === index}
+                      setState={setState}
+                      onCloseSplit={onCloseSplit}
+                      part="buttons"
+                    />
+                  ) : undefined
+                }
               />
             </div>
           </>
@@ -208,7 +240,7 @@ const SplitBody: React.FC<SplitBodyProps> = ({
           <div
             role="toolbar"
             aria-label="Split view controls"
-            className={`absolute z-30 flex items-center gap-0.5 rounded-full bg-bg-surface/90 backdrop-blur-md border border-border shadow-md p-0.5 ${
+            className={`absolute z-30 flex items-center gap-0.5 rounded-full bg-slate-900 border border-slate-600 shadow-lg p-0.5 ${
               stacked
                 ? 'left-1/2 -translate-x-1/2 -translate-y-1/2 top-1/2 flex-row'
                 : 'top-1/2 -translate-y-1/2 -translate-x-1/2 left-1/2 flex-col'
@@ -257,14 +289,22 @@ interface PaneHeaderProps {
   maximized: boolean;
   setState: React.Dispatch<React.SetStateAction<SplitState>>;
   onCloseSplit?: () => void;
+  /**
+   * Which half to render. A PDF pane needs the dropdowns INSIDE the viewer's
+   * toolbar, so the pane renders `selectors` as the viewer's leading controls
+   * and `buttons` as its trailing ones. Every other kind renders both together
+   * in its own floating header.
+   */
+  part?: 'all' | 'selectors' | 'buttons';
 }
 
 /**
- * The small per-pane header: what this pane shows (with a picker), plus swap,
- * close, maximize and open-split controls.
+ * The per-pane header, in two halves: the content/document dropdowns, and the
+ * pane-level actions. A PDF pane injects both into the viewer's own single
+ * toolbar row; other kinds render them in a compact floating header.
  */
 const PaneHeader: React.FC<PaneHeaderProps> = ({
-  index, slot, split, maximized, setState, onCloseSplit,
+  index, slot, split, maximized, setState, onCloseSplit, part = 'all',
 }) => {
   // Pickers are driven by the currently selected kind, so each pane chooses
   // "Dashboard / PDF / Notes / Assistant" and then its own resource or topic.
@@ -281,15 +321,12 @@ const PaneHeader: React.FC<PaneHeaderProps> = ({
     setState((s) => setPane(s, index, next));
   };
 
-  const label =
-    slot.kind === 'dashboard' ? 'Dashboard'
-      : slot.kind === 'assistant' ? 'Assistant'
-        : slot.kind === 'notes'
-          ? topics.find((t: Topic) => t.id === slot.topicId)?.title ?? 'Notes'
-          : pdfs.find((p: Resource) => p.id === slot.resourceId)?.title ?? 'PDF preview';
-
-  return (
-    <div className="flex items-center gap-1 shrink-0">
+  // The two dropdowns, as a value so they can be rendered in two different
+  // places: inside the PDF viewer's own toolbar (a PDF pane) or in the pane's
+  // own header (every other kind). This is what makes ONE header possible for
+  // a PDF instead of a selector bar stacked on a viewer toolbar.
+  const selectors = (
+    <>
       <select
         aria-label={`Pane ${index + 1} content`}
         value={slot.kind}
@@ -314,13 +351,20 @@ const PaneHeader: React.FC<PaneHeaderProps> = ({
           }}
           className={`${field} w-[8rem] sm:w-[11rem] shrink-0`}
         >
-          <option value="">{slot.kind === 'pdf' ? 'Choose a file…' : 'Choose a topic…'}</option>
+          <option value="">{slot.kind === 'pdf' ? 'Choose a file\u2026' : 'Choose a topic\u2026'}</option>
           {slot.kind === 'pdf'
             ? (pdfs as Resource[]).map((r) => <option key={r.id} value={r.id}>{r.title}</option>)
             : (topics as Topic[]).map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
         </select>
       )}
+    </>
+  );
 
+  // The pane-level actions. NOTE: there is deliberately no static title label
+  // here any more. The dropdown beside it already shows the document name, so
+  // the label was a second, identical rendering of the same word.
+  const actions = (
+    <>
       {!split && (
         <button
           onClick={() => setState((s) => addSecondPane(s, { kind: 'assistant' }))}
@@ -334,7 +378,6 @@ const PaneHeader: React.FC<PaneHeaderProps> = ({
 
       {split && (
         <>
-          <span className="hidden lg:inline text-[11px] text-content-tertiary truncate max-w-[8rem]">{label}</span>
           <button
             onClick={() => setState((s) => toggleMaximize(s, index))}
             aria-label={maximized ? `Restore pane ${index + 1}` : `Maximize pane ${index + 1}`}
@@ -364,7 +407,12 @@ const PaneHeader: React.FC<PaneHeaderProps> = ({
           <X className="w-4 h-4" />
         </button>
       )}
+    </>
+  );
+
+  return (
+    <div className="flex items-center gap-1 shrink-0">
+      {part === 'selectors' ? selectors : actions}
     </div>
   );
 };
-

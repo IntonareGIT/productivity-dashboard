@@ -283,7 +283,16 @@ const res = (over = {}) => ({
   check('T there is exactly ONE toolbar element in the viewer',
     (pdf.match(/aria-label="PDF controls"/g) || []).length === 1);
   check('T the toolbar is an overlay inside the page surface, not a sibling row',
-    /role="toolbar"[\s\S]{0,200}className="sticky top-0 z-10/.test(pdf));
+    /role="toolbar"[\s\S]{0,200}className="sticky top-0 z-20/.test(pdf));
+  check('T the toolbar has an OPAQUE dark fill, never a blur or gradient',
+    /sticky top-0 z-20 flex flex-wrap items-center gap-1 bg-slate-900/.test(pdf) &&
+    !/backdrop-blur/.test(pdf));
+  check('T the toolbar is flush with the top edge (no negative margin)',
+    /sticky top-0 z-20 flex/.test(pdf) && !/-mx-4/.test(pdf));
+  check('T the toolbar can host the host pane selector in the same row',
+    /leadingControls\?: React\.ReactNode/.test(pdf) &&
+    /trailingControls\?: React\.ReactNode/.test(pdf) &&
+    /\{leadingControls\}/.test(pdf) && /\{trailingControls\}/.test(pdf));
   check('T the toolbar holds page nav, zoom, fit, rotate, download and fullscreen',
     /aria-label="Previous page"/.test(pdf) && /aria-label="Next page"/.test(pdf) &&
     /aria-label="Zoom out"/.test(pdf) && /aria-label="Zoom in"/.test(pdf) &&

@@ -23,6 +23,15 @@ interface PdfViewerProps {
    * control in the ONE toolbar instead of a separate bottom bar.
    */
   onDownload?: () => void;
+  /**
+   * Rendered at the START of the toolbar. The split pane passes its document
+   * selector here, so the selector and the page/zoom controls form ONE row.
+   * Without this the pane had to float its own header above this toolbar,
+   * which is what produced the doubled, overlapping header.
+   */
+  leadingControls?: React.ReactNode;
+  /** Rendered at the END of the toolbar (the pane's own pane-level buttons). */
+  trailingControls?: React.ReactNode;
 }
 
 /** Zoom bounds. 1 = fit-to-width (the default), so zoom is a multiplier. */
@@ -70,7 +79,7 @@ const isCancel = (e: unknown) =>
  * lands after a newer render has started.
  */
 export const PdfViewer: React.FC<PdfViewerProps> = ({
-  blob, title, variant = 'inline', onDownload,
+  blob, title, variant = 'inline', onDownload, leadingControls, trailingControls,
 }) => {
   const docRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
   // In pdf.js v6 destroy() lives on the loading task, so the task is what we
@@ -562,7 +571,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         // same value subtracted from the measured width/height when fitting, so
         // the page lands exactly on the padding box: no dead grey margin, and
         // no horizontal scrollbar from a border/padding miscount.
-        className="relative flex-1 min-h-[320px] w-full overflow-auto overscroll-contain rounded-xl border border-border bg-bg-elevated/40 outline-none p-4"
+        className="relative flex-1 min-h-[320px] w-full overflow-auto overscroll-contain bg-bg-elevated/40 outline-none p-4"
         // CRITICAL: the page surface must be height-bounded or `overflow-auto`
         // never engages. Without a bound it grows to the full spacer height
         // (pageCount x pageHeight), so it cannot scroll, every scrollTop write
@@ -582,8 +591,10 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       <div
         role="toolbar"
         aria-label="PDF controls"
-        className="sticky top-0 z-10 -mx-4 flex flex-wrap items-center gap-1 bg-bg-surface/85 backdrop-blur-md border-b border-border/60 px-4 py-1.5"
+        className="sticky top-0 z-20 flex flex-wrap items-center gap-1 bg-slate-900 px-2 py-1.5 text-slate-100 border-b border-slate-700"
       >
+      {leadingControls}
+
       <button onClick={onPrevPage} disabled={page <= 1 || pageCount === 0} aria-label="Previous page" className={ctrl}>
         <ChevronLeft className="w-4 h-4" />
       </button>
@@ -635,11 +646,13 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         onClick={toggleFullScreen}
         aria-label={fullScreen ? 'Exit full screen' : 'Enter full screen'}
         title={fullScreen ? 'Exit full screen (Esc)' : 'Full screen'}
-        className={`${ctrl} ml-auto`}
+        className={trailingControls ? ctrl : `${ctrl} ml-auto`}
       >
         {fullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
         {!fullScreen && 'Full screen'}
       </button>
+
+        {trailingControls}
       </div>
 
         {status === 'loading' ? (

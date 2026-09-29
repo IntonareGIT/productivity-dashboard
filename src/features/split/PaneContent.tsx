@@ -13,6 +13,13 @@ interface PaneContentProps {
   slot: PaneSlot;
   onNavigate: (tab: NavTab) => void;
   onOpenAssistantSettings: () => void;
+  /**
+   * The pane's document selector, handed to the PDF viewer so it renders
+   * INSIDE the viewer's single toolbar row. Passing nothing means the PDF pane
+   * would need its own header, which is what caused the doubled header.
+   */
+  leadingControls?: React.ReactNode;
+  trailingControls?: React.ReactNode;
 }
 
 const Blank = ({ children }: { children: React.ReactNode }) => (
@@ -29,7 +36,7 @@ const Blank = ({ children }: { children: React.ReactNode }) => (
  * completely independent viewer state.
  */
 export const PaneContent: React.FC<PaneContentProps> = ({
-  slot, onNavigate, onOpenAssistantSettings,
+  slot, onNavigate, onOpenAssistantSettings, leadingControls, trailingControls,
 }) => {
   // Resources are read live, so a pane opened on a file picks up edits.
   const resource = useLiveQuery(
@@ -50,7 +57,9 @@ export const PaneContent: React.FC<PaneContentProps> = ({
       );
 
     case 'dashboard':
-      return <DashboardPage onNavigate={onNavigate} />;
+      // `fill` makes the dashboard scroll INSIDE the pane rather than growing
+      // past it, so the bottom cards stay reachable in a short split pane.
+      return <DashboardPage onNavigate={onNavigate} fill />;
 
     case 'assistant':
       // The same AssistantChat the bubble and /assistant page use, so history
@@ -80,7 +89,11 @@ export const PaneContent: React.FC<PaneContentProps> = ({
       // would drift away from the page.
       return (
         <div className="flex flex-col h-full min-h-0 overflow-hidden p-1">
-          <EmbeddedResourceViewer resource={resource} />
+          <EmbeddedResourceViewer
+          resource={resource}
+          leadingControls={leadingControls}
+          trailingControls={trailingControls}
+        />
         </div>
       );
 
@@ -94,8 +107,14 @@ export const PaneContent: React.FC<PaneContentProps> = ({
  * pane. Full-screen preview is raised by the split so it can cover everything.
  */
 // The viewer owns its own fullscreen, so nothing is threaded in from the pane.
-const EmbeddedResourceViewer: React.FC<{ resource: Resource }> = ({ resource }) => (
+const EmbeddedResourceViewer: React.FC<{
+  resource: Resource;
+  leadingControls?: React.ReactNode;
+  trailingControls?: React.ReactNode;
+}> = ({ resource, leadingControls, trailingControls }) => (
   <ResourceViewer
+    leadingControls={leadingControls}
+    trailingControls={trailingControls}
     resource={resource}
     onClose={() => { /* panes are closed by the pane header, not the viewer */ }}
     embedded

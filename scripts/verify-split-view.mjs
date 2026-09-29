@@ -559,6 +559,40 @@ const CHAT = { kind: 'assistant' };
       /hidden\?: boolean/.test(launcher) && /if \(hidden\) return null;/.test(launcher));
     check('FM split view hides the AI launcher',
       /<AssistantLauncher[\s\S]{0,200}hidden=\{splitOpen\}/.test(app));
+
+    // ---- ONE header on a PDF pane, no duplicate title -------------------
+    // The doubled header came from the pane floating its own selector bar over
+    // the viewer's toolbar. A PDF pane now injects BOTH halves into the
+    // viewer's single row instead.
+    check('H a PDF pane does not render its own floating header',
+      /slot\.kind !== 'pdf' && \(\s*<div className="absolute inset-x-0 top-0/.test(sv));
+    check('H a PDF pane injects its selectors into the viewer toolbar',
+      /part="selectors"/.test(sv) && /part="buttons"/.test(sv) &&
+      /leadingControls=\{/.test(sv) && /trailingControls=\{/.test(sv));
+    check('H PaneHeader can render each half on its own',
+      /part\?: 'all' \| 'selectors' \| 'buttons'/.test(sv) &&
+      /part === 'selectors' \? selectors : actions/.test(sv));
+    check('H the duplicate static title label is gone',
+      !/const label =/.test(sv) &&
+      !/truncate max-w-\[8rem\]">\{label\}/.test(sv));
+    check('H the pane chrome no longer uses a blur bar',
+      !/backdrop-blur/.test(sv));
+    check('H the pane chrome is dark like the viewer toolbar',
+      /rounded-xl bg-slate-900 border border-slate-700/.test(sv) &&
+      /bg-slate-800 text-slate-100 border border-slate-600/.test(sv));
+
+    // ---- the dashboard pane must scroll internally ----------------------
+    const dash = readFileSync('src/features/dashboard/DashboardPage.tsx', 'utf8');
+    const pc2 = readFileSync('src/features/split/PaneContent.tsx', 'utf8');
+    check('H the dashboard pane root is a height-filling flex column',
+      /h-full min-h-0 flex flex-col overflow-hidden/.test(dash));
+    check('H the dashboard cards live in one scrollable region',
+      /flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain/.test(dash));
+    check('H the split pane asks the dashboard to fill and scroll',
+      /<DashboardPage onNavigate=\{onNavigate\} fill \/>/.test(pc2));
+    check('H the card grid gap was tightened',
+      /grid grid-cols-1 md:grid-cols-3 gap-3/.test(dash) &&
+      !/md:grid-cols-3 gap-4/.test(dash));
     check('FM the embedded viewer fills the pane height',
       /flex flex-col h-full min-h-0 overflow-hidden rounded-xl border border-border bg-bg-surface/.test(rv));
     check('FM a pane PDF is rendered standalone so it fills the host',
