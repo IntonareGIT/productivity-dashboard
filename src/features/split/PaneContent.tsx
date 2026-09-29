@@ -1,0 +1,96 @@
+import React from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../../db/db';
+import { AssistantChat } from '../ai/components/AssistantChat';
+import { ResourceViewer } from '../library/components/ResourceViewer';
+import { DashboardPage } from '../dashboard/DashboardPage';
+import type { NavTab } from '../../components/layout/Sidebar';
+import type { Resource } from '../../types';
+import { NotesPane } from './NotesPane';
+import type { PaneSlot } from './splitModel';
+
+interface PaneContentProps {
+  slot: PaneSlot;
+  onNavigate: (tab: NavTab) => void;
+  onOpenAssistantSettings: () => void;
+  /** The PDF viewer's own "full screen" control, lifted to the split so it can
+   *  cover the whole screen (see FullScreenPreview). */
+  onRequestFullScreen?: () => void;
+}
+
+const Blank = ({ children }: { children: React.ReactNode }) => (
+  <p className="p-4 text-xs text-content-tertiary">{children}</p>
+);
+
+/**
+ * Renders whatever one pane is set to.
+ *
+ * PDF preview mounts the shared `ResourceViewer` (and therefore the shared
+ * `PdfViewer`), so zoom/rotate/page nav and the render-cancellation fix behave
+ * identically here, in a modal, and in full-screen preview. Each pane mounts
+ * its OWN instance, so the same file can be open in both panes at once with
+ * completely independent viewer state.
+ */
+export const PaneContent: React.FC<PaneContentProps> = ({
+  slot, onNavigate, onOpenAssistantSettings, onRequestFullScreen,
+}) => {
+  // Resources are read live, so a pane opened on a file picks up edits.
+  const resource = useLiveQuery(
+    () => (slot.kind === 'pdf' && slot.resourceId
+      ? db.resources.get(slot.resourceId)
+      : Promise.resolve(undefined)),
+    [slot.kind, slot.resourceId],
+  ) as Resource | undefined;
+
+  switch (slot.kind) {
+    case 'dashboard':
+      return <DashboardPage onNavigate={onNavigate} />;
+
+    case 'assistant':
+      // The same AssistantChat the bubble and /assistant page use, so history
+      // and tools are shared; only the surrounding layout is narrower.
+      return (
+        <div className="h-full min-h-0 flex flex-col bg-bg-surface">
+          <AssistantChat
+            onOpenSettings={onOpenAssistantSettings}
+            className="flex-1 min-h-0"
+          />
+        </div>
+      );
+
+    case 'notes':
+      return <NotesPane topicId={slot.topicId} />;
+
+    case 'pdf':
+      if (!slot.resourceId) return <Blank>Pick a PDF in this pane&apos;s header.</Blank>;
+      if (!resource) return <Blank>Loading resource…</Blank>;
+      // `embedded` renders the viewer without its own modal chrome, and
+      // `onFullScreen` exposes the viewer's own full-screen control.
+      return (
+        <div className="h-full min-h-0 overflow-auto p-2">
+          <EmbeddedResourceViewer
+            resource={resource}
+            onOpenFullScreen={onRequestFullScreen}
+          />
+        </div>
+      );
+
+    default:
+      return <Blank>Nothing selected.</Blank>;
+  }
+};
+
+/**
+ * The shared ResourceViewer body, minus the modal wrapper, for use inside a
+ * pane. Full-screen preview is raised by the split so it can cover everything.
+ */
+const EmbeddedResourceViewer: React.FC<{ resource: Resource; onOpenFullScreen?: () => void }> = ({
+  resource, onOpenFullScreen,
+}) => (
+  <ResourceViewer
+    resource={resource}
+    onClose={() => { /* panes are closed by the pane header, not the viewer */ }}
+    onOpenFullScreen={onOpenFullScreen}
+    embedded
+  />
+);

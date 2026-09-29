@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { endOfWeek, format, isBefore, isToday, isWithinInterval, parseISO, startOfWeek } from 'date-fns';
-import { ArrowLeft, BookOpenCheck, CalendarClock, Check, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Pencil, Plus, Search, Timer, Trash2 } from 'lucide-react';
+import { ArrowLeft, BookOpenCheck, CalendarClock, Check, Columns2, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Pencil, Plus, Search, Timer, Trash2 } from 'lucide-react';
 import { db } from '../../../db/db';
 import { Card } from '../../../components/ui/Card';
 import { MarkdownNotes } from './MarkdownNotes';
@@ -17,6 +17,8 @@ interface SubjectDetailProps {
   onBack: () => void;
   onEditSubject: () => void;
   onDeleteSubject: () => void;
+  /** Open the split view with a PDF and its topic notes. */
+  onSplitWithNotes?: (resourceId: string, topicId: string | null) => void;
 }
 
 const isUrl = (value: string | undefined) => /^https?:\/\//i.test(value ?? '');
@@ -48,9 +50,13 @@ interface ResourceRowProps {
   resource: Resource; copied: boolean; confirmDelete: boolean;
   onToggle: () => void; onEdit: () => void; onDelete: () => void;
   onCopy: () => void; onPreview: () => void; onDownload: () => void;
+  /** Opens the split with this resource and its topic notes. */
+  onSplitWithNotes?: (resourceId: string, topicId: string | null) => void;
+  /** The topic currently selected in the detail view, for the notes fallback. */
+  fallbackTopicId?: string | null;
 }
 
-function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onPreview, onDownload }: ResourceRowProps) {
+function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onPreview, onDownload, onSplitWithNotes, fallbackTopicId }: ResourceRowProps) {
   const meta = dueMeta(resource);
   const isFile = resource.kind === 'file';
   return (
@@ -74,6 +80,15 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
                   {resource.fileSize != null && <span className="text-content-tertiary">({fmtBytes(resource.fileSize)})</span>}
                 </span>
                 <button onClick={onPreview} className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><Eye className="w-3 h-3" /> Preview</button>
+                {onSplitWithNotes && (
+                  <button
+                    onClick={() => onSplitWithNotes(resource.id, resource.topicId ?? fallbackTopicId ?? null)}
+                    className="flex items-center gap-1 text-[11px] font-semibold text-content-secondary hover:text-accent hover:underline"
+                    title="Open side by side with this resource's topic notes"
+                  >
+                    <Columns2 className="w-3 h-3" /> Split with notes
+                  </button>
+                )}
                 {resource.blob && <button onClick={onDownload} className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><Download className="w-3 h-3" /> Download</button>}
               </div>
             ) : resource.urlOrPath ? (
@@ -112,7 +127,7 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
 }
 
 /** Subject detail: progress + topics grid + two-pane topic view + assessments + focus stats. */
-export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, onEditSubject, onDeleteSubject }) => {
+export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, onEditSubject, onDeleteSubject, onSplitWithNotes }) => {
   const topics = useLiveQuery(() => db.topics.where('subjectId').equals(subject.id).toArray(), [subject.id]) ?? [];
   const resources = useLiveQuery(() => db.resources.where('subjectId').equals(subject.id).toArray(), [subject.id]) ?? [];
   const assessments = useLiveQuery(() => db.assessments.where('subjectId').equals(subject.id).toArray(), [subject.id]) ?? [];
@@ -375,6 +390,8 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
                   onCopy={() => copyPath(resource)}
                   onPreview={() => setPreviewingResource(resource)}
                   onDownload={() => downloadFile(resource)}
+                  onSplitWithNotes={onSplitWithNotes}
+                  fallbackTopicId={selectedTopic?.id ?? null}
                 />
               ))}
             </div>

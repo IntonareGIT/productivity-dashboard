@@ -41,6 +41,14 @@ const Notice: React.FC<{ title: string; body: string }> = ({ title, body }) => (
 interface ResourceViewerProps {
   resource: Resource;
   onClose: () => void;
+  /** Render without the modal wrapper, for use inside a split pane. */
+  embedded?: boolean;
+  /**
+   * Raised by the PDF viewer's own full-screen control so a host can cover the
+   * whole screen (the split does this). The viewer mounts a FRESH PdfViewer for
+   * it, so full-screen keeps its own zoom/rotation/page.
+   */
+  onOpenFullScreen?: () => void;
 }
 
 /**
@@ -57,7 +65,9 @@ interface ResourceViewerProps {
  * Download / Open link stay available whenever there is something to act on,
  * regardless of whether the inline preview works.
  */
-export const ResourceViewer: React.FC<ResourceViewerProps> = ({ resource, onClose }) => {
+export const ResourceViewer: React.FC<ResourceViewerProps> = ({
+  resource, onClose, embedded = false, onOpenFullScreen,
+}) => {
   const kind = previewKindFor(resource);
   const [imgUrl, setImgUrl] = useState<string | null>(null);
   const [imgFailed, setImgFailed] = useState(false);
@@ -94,8 +104,8 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({ resource, onClos
   const size = resource.fileSize != null ? formatBytes(resource.fileSize) : null;
   const typeLabel = fileTypeLabel(resource);
   const driveEmbed = kind === 'drive' ? googleDriveEmbedUrl(resource.urlOrPath ?? '') : null;
-  return (
-    <Modal open onClose={onClose} title={resource.title} subtitle={`${typeLabel}${size ? ` · ${size}` : ''}`}>
+
+  const body = (
       <div className="space-y-4">
         {kind === 'image' && resource.blob && !imgFailed && (
           imgUrl ? (
@@ -116,7 +126,11 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({ resource, onClos
 
         {kind === 'pdf' && resource.blob && (
           <Suspense fallback={<PdfLoading />}>
-            <PdfViewer blob={resource.blob} title={resource.title} />
+            <PdfViewer
+              blob={resource.blob}
+              title={resource.title}
+              onRequestFullScreen={onOpenFullScreen}
+            />
           </Suspense>
         )}
 
@@ -191,6 +205,21 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({ resource, onClos
           </div>
         )}
       </div>
+  );
+
+  // `embedded` drops the modal chrome so a split pane can host the same viewer.
+  if (embedded) {
+    return (
+      <div className="rounded-xl border border-border bg-bg-surface p-3">
+        <p className="mb-2 truncate text-xs font-semibold text-content-primary">{resource.title}</p>
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <Modal open onClose={onClose} title={resource.title} subtitle={`${typeLabel}${size ? ` · ${size}` : ''}`}>
+      {body}
     </Modal>
   );
 };

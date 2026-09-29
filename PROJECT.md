@@ -850,6 +850,46 @@ browser back button) returns to that tab. The page and the bubble share one
 Dexie history and one provider configuration — switching between them keeps
 the same conversation open.
 
+## 1.14 Two-pane split view
+
+`src/features/split/` hosts a two-pane layout where **either** pane can show the
+Dashboard, a PDF preview, topic notes, or the assistant chat.
+
+| File | Role |
+| --- | --- |
+| `splitModel.ts` | Pure reducer: pane slots, swap, close, maximize, ratio clamp |
+| `SplitView.tsx` | Container, draggable divider, per-pane headers |
+| `PaneContent.tsx` | Dispatches a slot to its renderer |
+| `NotesPane.tsx` | The Library notes editor in a narrow layout |
+| `FullScreenPreview.tsx` | Full-screen overlay for one resource |
+
+**Nothing is persisted.** The split, the ratio, which pane holds what and any
+maximized pane are React state only — `splitModel.ts` references no storage or
+Dexie at all — so a refresh always returns to a single full-width dashboard.
+
+Side by side on desktop, **stacked under 768px** (`matchMedia`), with a
+`role="separator"` divider that is draggable by pointer and arrow-key operable.
+The ratio is clamped to 0.2–0.8. Each pane header carries a content picker
+(Dashboard / PDF / Notes / Assistant) plus a sub-picker for the PDF or topic,
+and the swap, close, maximize and open-split controls. Close collapses to a
+single full-width pane holding the other pane's content.
+
+A PDF's half-screen mode is just a starting state: `splitWithNotes(resourceId,
+topicId)` opens the split with that PDF in one pane and **its own topic notes**
+in the other, both still changeable through their own pickers. Reached from the
+Library resource row's "Split with notes".
+
+**Three distinct zoom levels, deliberately.** Pane maximize hides the other pane
+with `display:none` but keeps it **mounted**, so it retains its page/zoom/
+rotation and restores instantly. Full-screen preview is separate: a
+`fixed inset-0` overlay that mounts a **fresh** `PdfViewer`, giving it its own
+independent zoom/rotation/page, and the split underneath is never unmounted, so
+exiting returns to exactly the layout that was active. Each pane mounts its own
+`PdfViewer`, so the same file can be open in both panes at once with completely
+independent state. The assistant pane mounts the shared `AssistantChat` (same
+history, same tools); the notes pane mounts the shared `MarkdownNotes` and
+writes through the same `updateTopicNotes()`.
+
 ---
 
 ## 2. Folder Structure
@@ -927,6 +967,12 @@ the same conversation open.
 │   │   │   ├── FocusPage.tsx     # large circular countdown + controls
 │   │   │   └── components/
 │   │   │       └── SessionLog.tsx  # collapsed Dexie session history
+│   │   ├── split/                # two-pane split view + full-screen preview
+│   │   │   ├── splitModel.ts     # pure pane reducer (swap/close/maximize/ratio)
+│   │   │   ├── SplitView.tsx     # container, draggable divider, pane headers
+│   │   │   ├── PaneContent.tsx   # dispatches a pane to its renderer
+│   │   │   ├── NotesPane.tsx     # topic notes in a narrow layout
+│   │   │   └── FullScreenPreview.tsx # one resource, full screen, own viewer state
 │   │   ├── ai/                  # global AI assistant (schema v6/v7)
 │   │   │   ├── aiProviderRepo.ts # provider CRUD + getDefaultProvider()
 │   │   │   ├── aiClient.ts      # OpenAI-compatible chat/completions + tool loop

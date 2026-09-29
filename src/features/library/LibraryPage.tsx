@@ -13,7 +13,12 @@ const STATUS_LABEL: Record<Topic['status'], string> = {
 
 interface SubjectHits { subject: Subject; topics: Topic[]; resources: Resource[]; assessments: Assessment[]; }
 
-export const LibraryPage: React.FC = () => {
+interface LibraryPageProps {
+  /** Open the split view with a PDF in one pane and its topic notes in the other. */
+  onSplitWithNotes?: (resourceId: string, topicId: string | null) => void;
+}
+
+export const LibraryPage: React.FC<LibraryPageProps> = ({ onSplitWithNotes }) => {
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [subjectModal, setSubjectModal] = useState<{ open: boolean; subject: Subject | null }>({ open: false, subject: null });
@@ -79,7 +84,7 @@ export const LibraryPage: React.FC = () => {
   };
 
   if (selectedSubject) {
-    return <SubjectDetail subject={selectedSubject} onBack={() => setSelectedId(null)} onEditSubject={() => setSubjectModal({ open: true, subject: selectedSubject })} onDeleteSubject={() => handleDeleteSubject(selectedSubject.id)} />;
+    return <SubjectDetail subject={selectedSubject} onBack={() => setSelectedId(null)} onSplitWithNotes={onSplitWithNotes} onEditSubject={() => setSubjectModal({ open: true, subject: selectedSubject })} onDeleteSubject={() => handleDeleteSubject(selectedSubject.id)} />;
   }
 
 

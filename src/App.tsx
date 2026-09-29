@@ -5,6 +5,8 @@ import type { NavTab } from './components/layout/Sidebar';
 import { CommandPalette } from './components/ui/CommandPalette';
 import { Toaster } from './components/ui/Toaster';
 import { DashboardPage } from './features/dashboard/DashboardPage';
+import { SplitView } from './features/split/SplitView';
+import { initialSplitState, splitWithNotes, type SplitState } from './features/split/splitModel';
 import { LibraryPage } from './features/library/LibraryPage';
 import { CalendarPage } from './features/calendar/CalendarPage';
 import { ShiftsPage } from './features/shifts/ShiftsPage';
@@ -41,6 +43,9 @@ export const App: React.FC = () => {
   // Bumped whenever "New event" runs from the palette; CalendarPage opens
   // its event modal for today when this changes.
   const [quickAddEventNonce, setQuickAddEventNonce] = useState(0);
+  // Two-pane split view. React state ONLY — never persisted, so a refresh
+  // always returns to the default single full-width dashboard.
+  const [splitState, setSplitState] = useState<SplitState>(initialSplitState);
   const loadPomodoroSettings = usePomodoroStore((s) => s.loadSettings);
   const refreshAssistantProvider = useAssistantStore((s) => s.refreshProvider);
   // Live status -> theme mapping (synced); re-applies the theme when it changes.
@@ -161,12 +166,20 @@ export const App: React.FC = () => {
     };
   }, [loadPomodoroSettings]);
 
+  // A PDF's half-screen mode: the split with that PDF in one pane and its own
+  // topic notes in the other. Both panes stay fully changeable afterwards.
+  const openPdfWithNotes = useCallback((resourceId: string, topicId: string | null) => {
+    setAssistantPage(false);
+    useAssistantStore.getState().setOpen(false);
+    setSplitState(splitWithNotes(resourceId, topicId));
+  }, []);
+
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
         return <DashboardPage onNavigate={(tab) => setActiveTab(tab)} />;
       case 'library':
-        return <LibraryPage />;
+        return <LibraryPage onSplitWithNotes={openPdfWithNotes} />;
       case 'calendar':
         return <CalendarPage quickAddNonce={quickAddEventNonce} />;
       case 'shifts':
@@ -190,7 +203,18 @@ export const App: React.FC = () => {
         />
       ) : (
         <>
-          {renderContent()}
+          {activeTab === 'dashboard' ? (
+            /* The Dashboard tab hosts the split view, so a pane can show the
+               normal dashboard layout alongside a PDF, notes or the assistant. */
+            <SplitView
+              state={splitState}
+              setState={setSplitState}
+              onNavigate={(tab) => setActiveTab(tab)}
+              onOpenAssistantSettings={openAssistantSettings}
+            />
+          ) : (
+            renderContent()
+          )}
           <CommandPalette
             open={paletteOpen}
             onClose={() => setPaletteOpen(false)}

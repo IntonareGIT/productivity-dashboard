@@ -18,6 +18,12 @@ interface PdfViewerProps {
   /** `inline` sits inside the ResourceViewer modal; `standalone` is for a page
    *  of its own and offers full screen. */
   variant?: 'inline' | 'standalone';
+  /**
+   * Raised by this viewer's own full-screen control. The host renders the
+   * full-screen preview with a FRESH PdfViewer, so it has its own
+   * zoom/rotation/page and does not share this instance's state.
+   */
+  onRequestFullScreen?: () => void;
 }
 
 /** Zoom bounds. 1 = fit-to-width (the default), so zoom is a multiplier. */
@@ -43,7 +49,9 @@ const isCancel = (e: unknown) =>
  * cancellation, and a monotonic token discards any stale completion that still
  * lands after a newer render has started.
  */
-export const PdfViewer: React.FC<PdfViewerProps> = ({ blob, title, variant = 'inline' }) => {
+export const PdfViewer: React.FC<PdfViewerProps> = ({
+  blob, title, variant = 'inline', onRequestFullScreen,
+}) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const docRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
   // In pdf.js v6 destroy() lives on the loading task, so the task is what we
@@ -281,6 +289,18 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ blob, title, variant = 'in
         {variant === 'standalone' && (
           <button onClick={() => setFullScreen((f) => !f)} aria-label={fullScreen ? 'Exit full screen' : 'Enter full screen'} className={ctrl}>
             {fullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          </button>
+        )}
+        {/* The host's full-screen preview: available from a single pane AND from
+            inside the split, and independent of this viewer's own state. */}
+        {onRequestFullScreen && !fullScreen && (
+          <button
+            onClick={onRequestFullScreen}
+            aria-label="Open full screen preview"
+            title="Full screen preview"
+            className={ctrl}
+          >
+            <Maximize2 className="w-4 h-4" /> Full screen
           </button>
         )}
         {fullScreen && (
