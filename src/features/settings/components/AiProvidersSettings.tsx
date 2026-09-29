@@ -228,7 +228,7 @@ export const AiProvidersSettings: React.FC = () => {
             </label>
             <label className="block">
               <span className="block text-xs text-content-secondary mb-1">Model name</span>
-              <input value={form.modelName} onChange={(e) => setForm({ ...form, modelName: e.target.value })} placeholder="e.g. gemini-2.0-flash" spellCheck={false} className={`${inputCls} font-mono`} />
+              <input value={form.modelName} onChange={(e) => setForm({ ...form, modelName: e.target.value })} placeholder="e.g. gemini-3.1-flash-lite" spellCheck={false} className={`${inputCls} font-mono`} />
             </label>
             {error && <p className="text-xs text-rose-500">{error}</p>}
             <div className="flex items-center justify-end gap-2 border-t border-border/50 pt-4">

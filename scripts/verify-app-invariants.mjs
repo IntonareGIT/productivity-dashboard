@@ -1,15 +1,13 @@
 /**
- * Not-signed-in dashboard banner verification.
+ * App invariants that span several features.
  *
- * Two layers:
- *  1. The pure decision function (shouldShowBanner), covering every
- *     initialized/signedIn/dismissed combination.
- *  2. The real <SignInBanner/> rendered through react-dom/server against a
- *     MOCKED account hook, MOCKED Dexie cloud observable and MOCKED icons, so
- *     the component under test is the real one.
- *
- * The shared useCloudAccount() hook and the db module are stubbed; the banner
- * logic, markup and decision function are NOT.
+ * 1-7. Not-signed-in dashboard banner: the pure decision function plus the real
+ *     <SignInBanner/> rendered through react-dom/server against a MOCKED
+ *     account hook, MOCKED Dexie cloud observable and MOCKED icons. The shared
+ *     useCloudAccount() hook and the db module are stubbed; the banner logic,
+ *     markup and decision function are NOT.
+ * 8.   AI provider sync policy (aiProviders is synced, seeding is guarded) and
+ *     the absence of the deprecated `gemini-2.0-flash` model.
  */
 import { build } from 'esbuild';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
@@ -218,6 +216,56 @@ const renderWith = ({ signedIn, currentUserValue }) => {
   check('7 only DashboardPage mounts it',
     users.length === 1 && users[0].replace(/\\/g, '/').endsWith('features/dashboard/DashboardPage.tsx'),
     users.map((u) => u.split(/[\\/]/).pop()).join(','));
+}
+
+// ---- 8. AI provider sync policy + no deprecated model -------------------
+{
+  const read = (p) => readFileSync(p, 'utf8');
+
+  // 8a. aiProviders must NOT be excluded from sync any more.
+  const cloudConfig = read('src/db/cloudConfig.ts');
+  check('8 aiProviders is not in UNSYNCED_TABLES',
+    !/UNSYNCED_TABLES[^=]*=\s*\[[^\]]*aiProviders/.test(cloudConfig));
+  check('8 UNSYNCED_TABLES still exists as the single opt-out point',
+    /export const UNSYNCED_TABLES/.test(cloudConfig));
+
+  // 8b. The deprecated model is gone from code and docs, and the new one is in.
+  const sources = [];
+  const walkAll = (d) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) walkAll(p);
+      else if (/\.(ts|tsx|mjs|js|css|json|md)$/.test(e.name)) sources.push(p);
+    }
+  };
+  walkAll('src');
+  // PROJECT.md is documentation, not code. The verify scripts are excluded:
+  // this file necessarily names the deprecated model in order to assert it is
+  // gone, so scanning itself would always fail.
+  sources.push('PROJECT.md');
+  const stale = sources.filter((f) => read(f).includes('gemini-2.0-flash'));
+  check('8 no source or doc still names gemini-2.0-flash',
+    stale.length === 0, stale.join(','));
+  check('8 the default provider uses the new model',
+    read('src/db/defaultData.ts').includes("modelName: 'gemini-3.1-flash-lite'"));
+  check('8 the model placeholder uses the new model',
+    read('src/features/settings/components/AiProvidersSettings.tsx')
+      .includes('placeholder="e.g. gemini-3.1-flash-lite"'));
+
+  // 8c. Seeding a now-synced table must be limited to signed-out devices.
+  const defaults = read('src/db/defaultData.ts');
+  const initBody = defaults.slice(defaults.indexOf('export async function initializeDatabaseDefaults'));
+  check('8 aiProviders seeding is guarded by a signed-in check',
+    /if \(!db\.cloud\?\.currentUser\?\.value\?\.isLoggedIn\)[\s\S]*db\.aiProviders\.put/.test(initBody));
+  check('8 the guard uses the real isLoggedIn flag, not currentUser truthiness',
+    initBody.includes('isLoggedIn') && !/db\.cloud\.currentUserId/.test(initBody));
+
+  // 8d. No schema change for this: no new version, no upgrade on a synced table.
+  const dbSrc = read('src/db/db.ts');
+  check('8 no new schema version was added', !/this\.version\(9\)/.test(dbSrc));
+  check('8 no Version.upgrade() on any synced table',
+    !/upgrade\s*\(\s*\)\s*\.modify\(\s*async\s*\(\s*t\s*,\s*c\s*\)\s*=>\s*\{[\s\S]*?aiProviders/i
+      .test(dbSrc));
 }
 
 console.log('');

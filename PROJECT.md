@@ -334,7 +334,7 @@ export interface AiProvider {
   label: string;        // User-facing name, e.g. "Gemini Flash"
   baseUrl: string;      // OpenAI-compatible root, no /chat/completions suffix
   apiKey: string;       // Empty on first run — user must paste a key
-  modelName: string;    // e.g. 'gemini-2.0-flash'
+  modelName: string;    // e.g. 'gemini-3.1-flash-lite'
   isDefault: boolean;   // Exactly one provider is default at a time
   createdAt: string;    // ISO 8601
   updatedAt: string;    // ISO 8601
@@ -352,7 +352,7 @@ that already includes it.
 On first run `initializeDatabaseDefaults()` seeds exactly one default row
 pointing at Gemini's OpenAI-compatible endpoint
 (`https://generativelanguage.googleapis.com/v1beta/openai`, model
-`gemini-2.0-flash`) with an **empty apiKey**, so the assistant stays disabled
+`gemini-3.1-flash-lite`) with an **empty apiKey**, so the assistant stays disabled
 until the user supplies a key. Any OpenAI-compatible endpoint (OpenRouter,
 Groq, Ollama, LM Studio, …) can be added via "+ Add model".
 
@@ -552,7 +552,7 @@ in `src/db/cloudConfig.ts`.
 ```typescript
 db.cloud?.configure({
   databaseUrl: 'https://zmofmso62.dexie.cloud', // committed on purpose
-  unsyncedTables: ['aiProviders'],
+  unsyncedTables: [],                    // every table syncs, aiProviders included
   blobMode: 'lazy',
 });
 ```
@@ -576,8 +576,12 @@ primary key — never `++id` and never `@id`. This is deliberate:
 keys. These are deterministic, so two devices writing concurrently converge on
 the same row rather than duplicating it.
 
-**Unsynced tables.** `aiProviders` is excluded so API keys never leave the
-device — each device configures its own key. Nothing else is device-specific.
+**Unsynced tables.** None. `UNSYNCED_TABLES` is now an empty list, so every
+table syncs — `aiProviders` included. Provider records (label, baseUrl, apiKey,
+modelName, isDefault, supportsImages) are available on every signed-in device,
+and the key stays inside the user's own account. While signed out nothing
+syncs, so a provider added then works on that device exactly as before. The
+export is kept (rather than removed) as the single place to opt a table out.
 
 **Blob handling.** `resources.blob` (uploaded files) uses `blobMode: 'lazy'`,
 so bytes are offloaded to remote storage on first sync. The upload UI warns
@@ -595,8 +599,11 @@ above 20 MB because that first sync is slow.
 - Nothing is seeded on a signed-*out* device either. `defaultPomodoroSettings`
   is the in-memory fallback at both read sites (`App.tsx` and
   `PomodoroSettingsSection.tsx`), so a local start still works.
-- `aiProviders` is still seeded (it is unsynced, so it cannot reach another
-  account) and uses a fixed id.
+- `aiProviders` is seeded **only on a signed-out device**. It is a synced table,
+  and the default uses the fixed id `ai-provider-gemini-default`, so seeding on a
+  fresh signed-in device would push an empty-key row over the account's real
+  provider. Signed-in devices take their providers from the live query instead.
+  Signed out, the seed is written locally and the app works exactly as before.
 
 **Service worker.** `vite-plugin-pwa` precaches only same-origin build assets
 and `runtimeCaching` is empty, so Dexie Cloud requests are never cached or
@@ -721,7 +728,7 @@ Full width on desktop; buttons sit beside the text at `sm` and above, and stack
 below it under 768px. Both keep the 44px touch target used elsewhere, and
 `role="status"` is set for assistive technology.
 
-**Verification** — `scripts/verify-signin-banner.mjs` (also run by
+**Verification** — `scripts/verify-app-invariants.mjs` (also run by
 `npm run verify`) renders the real component through `react-dom/server` against
 a **mocked account hook**, a **mocked `currentUser` observable** and mocked
 icons. It covers: hidden while loading, shown when signed out, hidden when
@@ -1086,8 +1093,9 @@ the same conversation open.
 - **Cross-device sync via Dexie Cloud:** `dexie-cloud-addon` is attached in
   `db.ts` and configured from the committed `db/cloudConfig.ts` with the
   database URL — deliberately not read from the gitignored `dexie-cloud.json`,
-  which does not exist on the build server. `aiProviders` is excluded from sync
-  so API keys stay per-device; `resources` blobs use `blobMode: 'lazy'` with a
+  which does not exist on the build server. Every table syncs, `aiProviders`
+  included, so a provider and its key are available on each signed-in device;
+  `UNSYNCED_TABLES` is empty and `resources` blobs use `blobMode: 'lazy'` with a
   20 MB upload warning. Primary keys are unchanged: all remain plain `'id'`
   string UUIDs, with no `Version.upgrade()` on any synced table, per Dexie
   Cloud's rule that primary keys must never change and synced-table migrations

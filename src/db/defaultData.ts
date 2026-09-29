@@ -48,7 +48,7 @@ export function makeDefaultAiProvider(): AiProvider {
     label: 'Gemini Flash (OpenAI-compatible)',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     apiKey: '',
-    modelName: 'gemini-2.0-flash',
+    modelName: 'gemini-3.1-flash-lite',
     isDefault: true,
     createdAt: now,
     updatedAt: now,
