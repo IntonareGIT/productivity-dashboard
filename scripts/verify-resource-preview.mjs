@@ -12,7 +12,7 @@
  * and a missing blob producing a clear message rather than a broken viewer.
  */
 import { build } from 'esbuild';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -134,9 +134,57 @@ const res = (over = {}) => ({
   check('6 PdfViewer is code-split (lazy)', /lazy\(\(\) =>\s*import\('\.\/PdfViewer'\)/.test(viewer));
   check('6 pdf.js is imported only in PdfViewer',
     !/from 'pdfjs-dist'/.test(viewer) && /from 'pdfjs-dist'/.test(pdf));
+  check('8 exactly one component imports pdf.js (one shared viewer)',
+    (() => {
+      const hits = [];
+      const walk = (d) => {
+        for (const e of readdirSync(d, { withFileTypes: true })) {
+          const p = join(d, e.name);
+          if (e.isDirectory()) walk(p);
+          else if (/\.tsx?$/.test(e.name) && /from 'pdfjs-dist'/.test(readFileSync(p, 'utf8'))) hits.push(p);
+        }
+      };
+      walk('src');
+      return hits.length === 1 && hits[0].replace(/\\/g, '/').endsWith('library/components/PdfViewer.tsx');
+    })(),
+    'import count must be 1');
   check('6 the shared PdfViewer has page navigation',
-    /Page \{page\} of \{pageCount\}/.test(pdf) && /Previous page/.test(pdf) && /Next page/.test(pdf));
+    /goToPage\(page - 1\)/.test(pdf) && /goToPage\(page \+ 1\)/.test(pdf) && /aria-label="Previous page"/.test(pdf) && /aria-label="Next page"/.test(pdf));
   check('6 the worker is registered at module load', /GlobalWorkerOptions\.workerSrc/.test(pdf));
+
+  // ---- render safety: the bug this fixes ----
+  check('R1 the in-flight render is held in a ref', /renderTaskRef = useRef<pdfjsLib\.RenderTask \| null>\(null\)/.test(pdf));
+  check('R1 the previous render is cancelled', /previous\.cancel\(\)/.test(pdf));
+  check('R1 the cancellation is AWAITED before a new render', /previous\.cancel\(\);[\s\S]{0,80}await previous\.promise/.test(pdf));
+  check('R1 a monotonic token guards stale renders', /renderTokenRef\.current/.test(pdf) && /token !== renderTokenRef\.current/.test(pdf));
+  check('R1 the effect cleanup cancels on unmount/input change', /t\?\.cancel\(\)/.test(pdf));
+  check('R1 cancellation rejections are swallowed, not surfaced as errors', /isCancel\(e\)/.test(pdf) && /RenderingCancelledException/.test(pdf));
+  check('R1 the token is claimed AFTER the awaited cancellation', pdf.indexOf('const token = ++renderTokenRef.current;') > pdf.indexOf('await previous.promise;'));
+
+  // ---- zoom / rotate / full screen / keyboard ----
+  check('Z zoom in and out exist', /changeZoom\(ZOOM_STEP\)/.test(pdf) && /changeZoom\(-ZOOM_STEP\)/.test(pdf));
+  check('Z the current zoom percentage is shown', /zoomPct}%/.test(pdf) && /Math\.round\(zoom \* 100\)/.test(pdf));
+  check('Z zoom resets to a consistent default (fit = 1)', /setZoom\(1\)/.test(pdf) && /aria-label="Reset zoom to fit width"/.test(pdf));
+  check('Z zoom is clamped to a sane range', /MIN_ZOOM/.test(pdf) && /MAX_ZOOM/.test(pdf) && /Math\.max\(MIN_ZOOM, Math\.min\(MAX_ZOOM/.test(pdf));
+  check('Z zoom/rotation reset per document, not global', /setZoom\(1\);\s*\n\s*setRotation\(0\);/.test(pdf));
+  check('Z they are local state, not a module-level variable', !/^const (zoom|rotation) = /m.test(pdf));
+
+  check('R2 rotation cycles 0/90/180/270', /setRotation\(\(r\) => \(r \+ 90\) % 360\)/.test(pdf));
+  check('R2 rotation is passed to getViewport', /getViewport\(\{ scale: [^}]*rotation \}\)/.test(pdf));
+  check('R2 rotation drives the canvas CSS box', /const rotated = rotation % 180 !== 0/.test(pdf));
+  check('R2 the current angle is displayed', /\{rotation\}°/.test(pdf));
+
+  check('F full screen is a real overlay, not a scaled canvas',
+    /fixed inset-0 z-\[60\]/.test(pdf) && !/scale-\(/.test(pdf));
+  check('F full screen re-measures the available width', /\}, \[fullScreen\]\)/.test(pdf));
+  check('F Escape exits full screen', /case 'Escape'/.test(pdf) && /setFullScreen\(false\)/.test(pdf));
+  check('F the viewer is focusable so shortcuts work', /tabIndex=\{0\}/.test(pdf) && /onKeyDown=\{onKeyDown\}/.test(pdf));
+
+  check('N a page number input exists', /aria-label="Page number"/.test(pdf) && /onBlur=\{\(\) => goToPage/.test(pdf));
+  check('N the current page and total are shown', /of \{pageCount \|\| '—'\}/.test(pdf));
+  check('L a rendering placeholder is shown while rendering', /\{rendering && \(/.test(pdf) && /Rendering…/.test(pdf));
+  check('L the loading state has a spinner', /Loading PDF…/.test(pdf));
+
 
   // Word/PPT must not be rendered inline.
   check('6 opaque branch shows name, type and size',

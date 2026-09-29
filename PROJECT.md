@@ -155,12 +155,34 @@ pure and separately testable):
 | `none` | No local blob → "File not available on this device" |
 
 `PdfViewer` is the **single place** pdf.js page-render logic lives; the Library
-viewer uses it and any future "Ask about this PDF" flow must reuse it rather
-than re-implementing page rendering. `pdfjs-dist` is **code-split** via
-`React.lazy` (~474 kB) with its worker (~1.2 MB) as a separate hashed asset, so
-neither is downloaded until a PDF is actually previewed. In pdf.js v6,
-`destroy()` lives on the loading task, not the document proxy, so the task is
-retained and aborted on unmount to avoid leaking the worker.
+viewer mounts it and any "Ask about this PDF" flow must reuse the same component
+rather than re-implementing page rendering. A test asserts that **exactly one**
+file in `src/` imports `pdfjs-dist`, so a second renderer cannot creep in.
+`pdfjs-dist` is **code-split** via `React.lazy` (~474 kB) with its worker
+(~1.2 MB) as a separate hashed asset, so neither is downloaded until a PDF is
+actually previewed. In pdf.js v6, `destroy()` lives on the loading task, not the
+document proxy, so the task is retained and aborted on unmount.
+
+**Render safety.** pdf.js permits one render per canvas and throws *"Cannot use
+the same canvas during multiple render() operations"* otherwise. Every render:
+
+1. cancels the previous `RenderTask` and **awaits** that cancellation, then
+2. claims a monotonic token, discarding any stale completion that lands after a
+   newer render has started (so an old page can never repaint the canvas).
+
+The effect cleanup also cancels on unmount or input change. A cancelled render
+rejects with `RenderingCancelledException`, which is swallowed rather than shown
+as an error.
+
+**Viewer controls.** Zoom is a multiplier over fit-to-width (`1` = fit, clamped
+to 0.5–4, reset via **Fit**) with the percentage always displayed; rotation
+cycles 0/90/180/270 via `getViewport({ rotation })`; a **page number input** and
+Prev/Next show the current page and total; a **Rendering…** overlay prevents
+zoom/rotate/page changes from looking frozen. Full screen is a real
+`fixed inset-0` overlay that re-measures the available width, not a scaled
+canvas, and is offered by the `standalone` variant. While the viewer has focus
+(`tabIndex=0`): ←/→ change page, +/− zoom, Esc exits full screen. Zoom and
+rotation are local state reset per opened document, never global.
 
 Drive embeds are best-effort: Drive serves its own "no access" page inside the
 iframe for private or unshared files, which the parent cannot detect, so
