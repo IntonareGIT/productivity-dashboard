@@ -24,7 +24,20 @@ const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 4;
 const ZOOM_STEP = 0.25;
 
-const ctrl = 'inline-flex items-center justify-center gap-1.5 px-2.5 min-h-[40px] rounded-lg border border-border text-content-secondary hover:text-content-primary hover:bg-bg-elevated disabled:opacity-40 transition-colors text-xs font-semibold';
+/**
+ * The only breathing room around the page. Deliberately small: the whole point
+ * is that the canvas reaches the edges of its parent, and 16px is just enough
+ * to see the page edge against the surface behind it.
+ */
+const PAGE_PAD = 16;
+
+/** The gap between two consecutive pages in the stack. */
+const PAGE_GAP = 10;
+
+/** An upper bound on auto-fit, so a tiny page can't be blown up to 8x. */
+const MAX_FIT = 3;
+
+const ctrl = 'inline-flex items-center justify-center gap-1.5 px-2 min-h-[32px] rounded-lg border border-border text-content-secondary hover:text-content-primary hover:bg-bg-elevated disabled:opacity-40 transition-colors text-xs font-semibold';
 
 const isCancel = (e: unknown) =>
   e instanceof Error && e.name === 'RenderingCancelledException';
@@ -68,6 +81,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   const [rendering, setRendering] = useState(false);
   const [error, setError] = useState('');
   const [containerWidth, setContainerWidth] = useState(720);
+  const [containerHeight, setContainerHeight] = useState(640);
   // CSS height of each rendered page, keyed by page number. Pages that have not
   // been rendered yet fall back to an estimate, so the scroll height is stable
   // and the last page is always reachable.
@@ -107,7 +121,9 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     for (let n = 1; n <= pageCount; n += 1) {
       const height = pageHeights[n] ?? fallbackHeight;
       out.push({ top: y, height });
-      y += height;
+      // A small gap so consecutive pages read as separate sheets. It is added
+      // only BETWEEN pages, so the first page still starts flush at the top.
+      y += height + (n < pageCount ? PAGE_GAP : 0);
     }
     return out;
   }, [pageHeights, pageCount, fallbackHeight]);
@@ -127,15 +143,29 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   }, [layout]);
 
 
-  // Track the available width so fit-to-width and full screen both use the
-  // space properly instead of stretching a small canvas.
+  // Track the AVAILABLE box for the page: the surface's content box minus the
+  // padding, minus its own 1px borders. Measuring the raw element width (which
+  // is what this used to do) included the borders, so every page was rendered
+  // ~2px wider than the space it had to live in — which forced a horizontal
+  // scrollbar and made the canvas look like it was overflowing its frame.
+  // Reading contentBox/paddingBox keeps this honest when the border or padding
+  // changes, and the ResizeObserver keeps it correct when the window resizes or
+  // the split divider is dragged.
   useEffect(() => {
     const el = shellRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
-    const apply = (w: number) => { if (w > 0) setContainerWidth(Math.floor(w)); };
-    const ro = new ResizeObserver((entries) => apply(entries[0].contentRect.width));
+    const apply = () => {
+      const cs = getComputedStyle(el);
+      const padX = parseFloat(cs.paddingLeft || '0') + parseFloat(cs.paddingRight || '0');
+      const padY = parseFloat(cs.paddingTop || '0') + parseFloat(cs.paddingBottom || '0');
+      const w = el.clientWidth - padX;
+      const h = el.clientHeight - padY;
+      if (w > 0) setContainerWidth(Math.floor(w));
+      if (h > 0) setContainerHeight(Math.floor(h));
+    };
+    const ro = new ResizeObserver(apply);
     ro.observe(el);
-    apply(el.getBoundingClientRect().width);
+    apply();
     return () => ro.disconnect();
   }, [fullScreen]);
 
@@ -225,23 +255,43 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       const pdfPage = await doc.getPage(n);
       if (!isCurrent()) return;
 
-      // The unrotated page, used to derive the fit-to-width scale.
+      // The unrotated page, used to derive the fit scale.
       const unit = pdfPage.getViewport({ scale: 1 });
       // Cap DPR at 2: beyond that a canvas costs memory for no visible gain.
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const rotated = rotation % 180 !== 0;
+
+      // FIT, not a fixed "100%". `zoom` stays a multiplier on top of the
+      // fitted scale, so zoom === 1 always means "as large as this container
+      // allows" and the page is never stranded at the document's intrinsic
+      // size with dead grey space around it.
+      //
+      // Rotation swaps the page's effective width and height, so the fit has to
+      // be computed against the ROTATED dimensions — otherwise a landscape or
+      // 90-degree page is fitted to the wrong edge and still overflows.
+      const pageW = rotated ? unit.height : unit.width;
+      const pageH = rotated ? unit.width : unit.height;
+      const availW = Math.max(1, containerWidth - PAGE_PAD);
+      const availH = Math.max(1, containerHeight - PAGE_PAD);
+      // Fit both axes and take the smaller, so a short page is not blown up
+      // past the bottom of the pane and a long one still fits the width.
+      const fitScale = Math.min(availW / pageW, availH / pageH, MAX_FIT);
       // Zoom and rotation apply identically to every page in the stack.
-      const cssScale = (containerWidth / unit.width) * zoom;
+      const cssScale = fitScale * zoom;
       const viewport = pdfPage.getViewport({ scale: cssScale * dpr, rotation });
 
       const context = canvas.getContext('2d');
       if (!context) return;
-      const rotated = rotation % 180 !== 0;
-      const cssH = Math.floor(rotated ? unit.width * cssScale : unit.height * cssScale);
-      const cssW = Math.floor(rotated ? unit.height * cssScale : unit.width * cssScale);
+      const cssH = Math.floor(pageH * cssScale);
+      const cssW = Math.floor(pageW * cssScale);
       canvas.width = Math.floor(viewport.width);
       canvas.height = Math.floor(viewport.height);
+      // `maxWidth: 100%` is a last-resort guard: if a stale measurement ever
+      // produced a page wider than its box, it shrinks to fit instead of
+      // forcing a horizontal scrollbar.
       canvas.style.width = `${cssW}px`;
       canvas.style.height = `${cssH}px`;
+      canvas.style.maxWidth = '100%';
 
       // Record the real height so the stack layout stays accurate.
       setPageHeights((prev) => (prev[n] === cssH ? prev : { ...prev, [n]: cssH }));
@@ -258,7 +308,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       // The spinner clears once no page is still rendering.
       if (renderTasksRef.current.size === 0) setRendering(false);
     }
-  }, [zoom, rotation, containerWidth]);
+  }, [zoom, rotation, containerWidth, containerHeight]);
 
   // Render only the pages near the current one, so a long document does not
   // allocate a canvas per page. Canvases that scroll out of range are simply
@@ -284,7 +334,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     };
     // `windowKey` stands in for the array identity of renderWindow.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, windowKey, zoom, rotation, containerWidth, renderInto]);
+  }, [status, windowKey, zoom, rotation, containerWidth, containerHeight, renderInto]);
 
   // A different document starts a fresh set of measured heights.
   useEffect(() => {
@@ -414,10 +464,39 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   }, [page, goToPage, scrollPageIntoView]);
 
 
+  /**
+   * ArrowUp / ArrowDown: scroll the surface, and hand over to page navigation
+   * at the ends. Scrolling is done by us (not by the browser) so that reaching
+   * the bottom of the last line of page N continues into page N+1 rather than
+   * stopping dead. A small epsilon absorbs sub-pixel scroll positions.
+   */
+  const onArrowScroll = useCallback((dir: 1 | -1) => {
+    const el = shellRef.current;
+    if (!el) return;
+    const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+    // Within 2px of an end counts as "at" that end.
+    const atTop = el.scrollTop <= 2;
+    const atBottom = el.scrollTop >= maxScroll - 2;
+
+    if (dir === 1 && atBottom) { onNextPage(); return; }
+    if (dir === -1 && atTop) { onPrevPage(); return; }
+
+    // A smooth, substantial step — roughly a line or two — reads as continuous
+    // scrolling, and matches what a PDF reader does with the down arrow.
+    const step = Math.max(48, Math.round(el.clientHeight * 0.12));
+    el.scrollBy({ top: dir * step, behavior: 'smooth' });
+    // `handleScroll` will resync `page` from the new midpoint, so no state is
+    // set here and the nav effect correctly stands down.
+  }, [onNextPage, onPrevPage]);
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     switch (e.key) {
       case 'ArrowLeft': e.preventDefault(); onPrevPage(); break;
       case 'ArrowRight': e.preventDefault(); onNextPage(); break;
+      // preventDefault stops the dashboard behind the viewer from scrolling,
+      // and stops the browser from jumping the focused element.
+      case 'ArrowDown': e.preventDefault(); onArrowScroll(1); break;
+      case 'ArrowUp': e.preventDefault(); onArrowScroll(-1); break;
       case '+': case '=': e.preventDefault(); changeZoom(ZOOM_STEP); break;
       case '-': case '_': e.preventDefault(); changeZoom(-ZOOM_STEP); break;
       case 'Escape': if (fullScreen && noFullscreenApiRef.current) { e.preventDefault(); setFullScreen(false); } break;
@@ -436,8 +515,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   const boxClass = noFullscreenApiRef.current && fullScreen
     ? 'fixed inset-0 z-[60] flex flex-col bg-bg-primary p-3 sm:p-5 overflow-hidden'
     : variant === 'standalone'
-      ? 'flex flex-col gap-3 h-full min-h-0 w-full'
-      : 'flex flex-col gap-3 h-full min-h-0 w-full';
+      ? 'flex flex-col gap-2 h-full min-h-0 w-full'
+      : 'flex flex-col gap-2 h-full min-h-0 w-full';
   if (status === 'error') {
     return (
       <div className="flex items-start gap-2 p-4 rounded-xl border border-amber-500/40 bg-amber-500/10">
@@ -489,7 +568,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         <button onClick={() => changeZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label="Zoom in" className={ctrl}>
           <Plus className="w-4 h-4" />
         </button>
-        <button onClick={() => setZoom(1)} aria-label="Reset zoom to fit width" className={`${ctrl} px-2`}>Fit</button>
+        <button onClick={() => setZoom(1)} aria-label="Fit page to the window" className={`${ctrl} px-2`}>Fit</button>
 
         <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
 
@@ -516,7 +595,11 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       <div
         ref={shellRef}
         onScroll={handleScroll}
-        className="relative flex-1 min-h-[320px] overflow-auto overscroll-contain rounded-xl border border-border bg-bg-elevated/40 outline-none"
+        // `p-4` is the ONLY padding around the document, and `PAGE_PAD` is the
+        // same value subtracted from the measured width/height when fitting, so
+        // the page lands exactly on the padding box: no dead grey margin, and
+        // no horizontal scrollbar from a border/padding miscount.
+        className="relative flex-1 min-h-[320px] overflow-auto overscroll-contain rounded-xl border border-border bg-bg-elevated/40 outline-none p-4"
         // CRITICAL: the page surface must be height-bounded or `overflow-auto`
         // never engages. Without a bound it grows to the full spacer height
         // (pageCount x pageHeight), so it cannot scroll, every scrollTop write
@@ -546,7 +629,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
                 <div
                   key={n}
                   ref={setPageEl(n)}
-                  className="absolute inset-x-0 flex justify-center"
+                  className="absolute inset-x-0 flex justify-center px-0"
                   style={{ top: `${entry.top}px` }}
                 >
                   <canvas
@@ -571,9 +654,12 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         )}
       </div>
 
-      <p className="text-[11px] text-content-tertiary">
-        {zoomPct}% · {rotation}° · Page {page} of {pageCount || '—'}
-        <span className="hidden sm:inline"> · Arrow keys change page, +/− zoom, Esc exits full screen.</span>
+      {/* The hint used to sit here as a real paragraph, costing a line of canvas
+          height and pushing the page down. It is now visually hidden and still
+          announced to screen readers, so the page gets the space back. */}
+      <p className="sr-only">
+        {zoomPct}% · {rotation}° · Page {page} of {pageCount || '—'}.{' '}
+        Arrow keys change page, Up and Down arrows scroll, +/− zoom, Esc exits full screen.
       </p>
     </div>
   );

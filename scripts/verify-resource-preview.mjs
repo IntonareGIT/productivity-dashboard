@@ -177,7 +177,8 @@ const res = (over = {}) => ({
   // ---- zoom / rotate / full screen / keyboard ----
   check('Z zoom in and out exist', /changeZoom\(ZOOM_STEP\)/.test(pdf) && /changeZoom\(-ZOOM_STEP\)/.test(pdf));
   check('Z the current zoom percentage is shown', /zoomPct}%/.test(pdf) && /Math\.round\(zoom \* 100\)/.test(pdf));
-  check('Z zoom resets to a consistent default (fit = 1)', /setZoom\(1\)/.test(pdf) && /aria-label="Reset zoom to fit width"/.test(pdf));
+  check('Z zoom resets to a consistent default (fit = 1)',
+    /setZoom\(1\)/.test(pdf) && /aria-label="Fit page to the window"/.test(pdf));
   check('Z zoom is clamped to a sane range', /MIN_ZOOM/.test(pdf) && /MAX_ZOOM/.test(pdf) && /Math\.max\(MIN_ZOOM, Math\.min\(MAX_ZOOM/.test(pdf));
   check('Z zoom/rotation reset per document, not global', /setZoom\(1\);\s*\n\s*setRotation\(0\);/.test(pdf));
   check('Z they are local state, not a module-level variable', !/^const (zoom|rotation) = /m.test(pdf));
@@ -232,6 +233,49 @@ const res = (over = {}) => ({
     /GlobalWorkerOptions\.workerSrc = pdfWorkerUrl/.test(pdf));
   check('O cross-origin sync is still never cached',
     /runtimeCaching:\s*\[\]/.test(viteCfg));
+
+  // ---- fit-to-container: no dead grey space around the page --------------
+  // The bug this guards: the page was sized from the surface's raw width, which
+  // included its border, so it overflowed by ~2px; and the scale was derived
+  // only from the width, so a short page left a large grey band below it.
+  check('F the surface subtracts its own padding from the available box',
+    /const padX = parseFloat/.test(pdf) && /const padY = parseFloat/.test(pdf) &&
+    /setContainerHeight/.test(pdf));
+  check('F the fit accounts for the padding (16px) on both axes',
+    /const availW = Math\.max\(1, containerWidth - PAGE_PAD\)/.test(pdf) &&
+    /const availH = Math\.max\(1, containerHeight - PAGE_PAD\)/.test(pdf));
+  check('F the fit takes BOTH axes, not width alone',
+    /Math\.min\(availW \/ pageW, availH \/ pageH, MAX_FIT\)/.test(pdf));
+  check('F the fit is rotation-aware (rotated pages swap width and height)',
+    /const pageW = rotated \? unit\.height : unit\.width/.test(pdf) &&
+    /const pageH = rotated \? unit\.width : unit\.height/.test(pdf));
+  check('F zoom is a multiplier on the FITTED scale, not a fixed 100%',
+    /const cssScale = fitScale \* zoom/.test(pdf));
+  check('F the auto-fit is capped so a small page is not blown up',
+    /MAX_FIT = 3/.test(pdf) && /Math\.min\(availW \/ pageW, availH \/ pageH, MAX_FIT\)/.test(pdf));
+  check('F a resize or split-pane drag re-measures and re-fits',
+    /new ResizeObserver\(apply\)/.test(pdf) && /ro\.observe\(el\)/.test(pdf));
+  check('F the canvas cannot force a horizontal scrollbar',
+    /canvas\.style\.maxWidth = '100%'/.test(pdf));
+  check('F the page surface has only the small padding around the document',
+    /bg-bg-elevated\/40 outline-none p-4/.test(pdf));
+  check('F the status hint no longer steals canvas height',
+    /<p className="sr-only">/.test(pdf) && !/text-\[11px\] text-content-tertiary">\s*\{zoomPct/.test(pdf));
+
+  // ---- Up/Down arrow scrolling -----------------------------------------
+  check('K the viewer is focusable so arrows reach it', /tabIndex=\{0\}/.test(pdf));
+  check('K Up/Down are handled by the viewer', /case 'ArrowDown'/.test(pdf) && /case 'ArrowUp'/.test(pdf));
+  check('K Up/Down prevent the dashboard behind from scrolling',
+    /case 'ArrowDown': e\.preventDefault\(\); onArrowScroll\(1\)/.test(pdf) &&
+    /case 'ArrowUp': e\.preventDefault\(\); onArrowScroll\(-1\)/.test(pdf));
+  check('K arrows scroll the surface by a real step',
+    /el\.scrollBy\(\{ top: dir \* step, behavior: 'smooth' \}\)/.test(pdf));
+  check('K Down at the bottom hands over to the next page',
+    /dir === 1 && atBottom\) \{ onNextPage\(\); return; \}/.test(pdf));
+  check('K Up at the top hands over to the previous page',
+    /dir === -1 && atTop\) \{ onPrevPage\(\); return; \}/.test(pdf));
+  check('K the scroll ends are measured against real overflow',
+    /el\.scrollHeight - el\.clientHeight/.test(pdf) && /atTop = el\.scrollTop <= 2/.test(pdf));
   check('N the current page and total are shown', /of \{pageCount \|\| '—'\}/.test(pdf));
   check('L a rendering placeholder is shown while rendering', /\{rendering && \(/.test(pdf) && /Rendering…/.test(pdf));
   check('L the loading state has a spinner', /Loading PDF…/.test(pdf));

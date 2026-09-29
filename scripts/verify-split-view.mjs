@@ -446,10 +446,10 @@ const CHAT = { kind: 'assistant' };
     /scrollDrivenRef\.current = false; return/.test(pdf));
   check('17 zoom and rotation apply to EVERY page, not just the current one',
     /const renderInto = useCallback\(async \(n: number\)/.test(pdf) &&
-    /const cssScale = \(containerWidth \/ unit\.width\) \* zoom/.test(pdf) &&
+    /const cssScale = fitScale \* zoom/.test(pdf) &&
     /cssScale \* dpr, rotation/.test(pdf));
   check('17 the render window re-runs on zoom/rotation change',
-    /\[status, windowKey, zoom, rotation, containerWidth, renderInto\]/.test(pdf));
+    /\[status, windowKey, zoom, rotation, containerWidth, containerHeight, renderInto\]/.test(pdf));
   check('17 the rendering spinner still reflects real work',
     /setRendering\(true\)/.test(pdf) && /renderTasksRef\.current\.size === 0\) setRendering\(false\)/.test(pdf));
   check('17 the old single-canvas-per-page band is gone',
