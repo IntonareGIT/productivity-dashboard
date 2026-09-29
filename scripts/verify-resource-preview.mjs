@@ -289,7 +289,7 @@ const res = (over = {}) => ({
   // positioned by that container, so pages scrolled upward slid under it and
   // showed through; as a sibling, the viewport starts strictly below it.
   check('T the toolbar is a fixed header, not a sticky/absolute overlay',
-    /role="toolbar"[\s\S]{0,400}className="flex-shrink-0 w-full h-11 px-3 flex items-center justify-between gap-2 bg-slate-900/.test(pdf));
+    /role="toolbar"[\s\S]{0,900}className="flex-shrink-0 w-full bg-slate-900 text-slate-100 border-b border-slate-800 overflow-x-auto/.test(pdf));
   check('T the toolbar never uses sticky or absolute positioning',
     !/role="toolbar"[\s\S]{0,400}className="[^"]*(sticky|absolute)/.test(pdf));
   check('T the toolbar is declared BEFORE the scroll area',
@@ -308,6 +308,43 @@ const res = (over = {}) => ({
     /leadingControls\?: React\.ReactNode/.test(pdf) &&
     /trailingControls\?: React\.ReactNode/.test(pdf) &&
     /\{leadingControls\}/.test(pdf) && /\{trailingControls\}/.test(pdf));
+
+  // ---- narrow toolbars scroll instead of squashing ---------------------
+  // The controls used to wrap or truncate on a narrow split pane, hiding
+  // Download and Fullscreen past the edge.
+  check('T the toolbar scrolls horizontally with a hidden scrollbar',
+    /overflow-x-auto overscroll-x-contain/.test(pdf) &&
+    /\[&::-webkit-scrollbar\]:hidden/.test(pdf) &&
+    /\[scrollbar-width:none\]/.test(pdf));
+  check('T the inner row keeps its intrinsic width so controls never shrink',
+    /h-11 px-3 flex items-center gap-2 min-w-max justify-between/.test(pdf));
+  check('T every toolbar group is shrink-0 and nowrap',
+    (pdf.match(/flex-shrink-0 whitespace-nowrap/g) || []).length >= 3 &&
+    /\$\{ctrl\} flex-shrink-0 whitespace-nowrap/.test(pdf));
+
+  // ---- pinch / trackpad zoom -------------------------------------------
+  check('Z pinch zoom is clamped through a shared multiplier',
+    /const scaleZoom = useCallback/.test(pdf) &&
+    /Math\.max\(MIN_ZOOM, Math\.min\(MAX_ZOOM, \+\(z \* factor\)/.test(pdf));
+  check('Z the zoom bounds are 50%..400%', /MIN_ZOOM = 0\.5/.test(pdf) && /MAX_ZOOM = 4/.test(pdf));
+  check('Z a trackpad pinch (ctrlKey wheel) is intercepted, not left to the browser',
+    /if \(!e\.ctrlKey\) return;/.test(pdf) &&
+    /if \(!e\.ctrlKey\) return;[\s\S]{0,500}e\.preventDefault\(\);[\s\S]{0,500}scaleZoom\(Math\.exp\(-e\.deltaY \* 0\.01\)\)/.test(pdf));
+  check('Z the wheel listener is non-passive so preventDefault is honoured',
+    /addEventListener\('wheel', onWheel, \{ passive: false \}\)/.test(pdf) &&
+    /removeEventListener\('wheel', onWheel\)/.test(pdf));
+  check('Z mobile pinch tracks the two-finger distance',
+    /Math\.hypot\(a\.clientX - b\.clientX, a\.clientY - b\.clientY\)/.test(pdf) &&
+    /touches\.length !== 2/.test(pdf));
+  check('Z the pinch re-anchors on the gesture start so it cannot compound',
+    /startZoom = zoomRef\.current/.test(pdf) &&
+    /scaleZoom\(\(ratio \* startZoom\) \/ zoomRef\.current\)/.test(pdf));
+  check('Z touchmove is non-passive and prevents the default page zoom',
+    /addEventListener\('touchmove', onMove, \{ passive: false \}\)/.test(pdf) &&
+    /e\.preventDefault\(\);/.test(pdf));
+  check('Z the touch handlers are all removed on cleanup',
+    /removeEventListener\('touchstart', onStart\)/.test(pdf) &&
+    /removeEventListener\('touchmove', onMove\)/.test(pdf));
   check('T the toolbar holds page nav, zoom, fit, rotate, download and fullscreen',
     /aria-label="Previous page"/.test(pdf) && /aria-label="Next page"/.test(pdf) &&
     /aria-label="Zoom out"/.test(pdf) && /aria-label="Zoom in"/.test(pdf) &&

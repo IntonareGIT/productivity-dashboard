@@ -110,6 +110,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   const renderTokensRef = useRef<Map<number, number>>(new Map());
 
   const shellRef = useRef<HTMLDivElement | null>(null);
+  // Mirrors `zoom` so the touch handler can read it without re-binding.
+  const zoomRef = useRef(zoom);
   // One canvas ref per page in the render window, so React can keep each
   // mounted and we paint into the right element.
   const canvasRefs = useRef<Map<number, HTMLCanvasElement>>(new Map());
@@ -233,9 +235,89 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     setPageInput(String(next));
   }, [pageCount]);
 
+  zoomRef.current = zoom;
+
   const changeZoom = useCallback((delta: number) => {
     setZoom((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, +(z + delta).toFixed(2))));
   }, []);
+
+  /** Apply a multiplicative zoom, clamped. Used by the pinch handlers. */
+  const scaleZoom = useCallback((factor: number) => {
+    if (!Number.isFinite(factor) || factor <= 0) return;
+    setZoom((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, +(z * factor).toFixed(2))));
+  }, []);
+
+  // ---- Trackpad pinch-to-zoom -----------------------------------------
+  // A trackpad pinch is delivered as a `wheel` event with ctrlKey set (that is
+  // how browsers report the gesture), NOT as a touch gesture. Left alone it
+  // zooms the whole browser page, which is jarring and scrolls the dashboard
+  // behind the viewer. Intercepting it and mapping it onto the viewer's own
+  // zoom keeps the gesture inside the document.
+  useEffect(() => {
+    const el = shellRef.current;
+    if (!el) return;
+    // `passive: false` is required: preventDefault on wheel is ignored
+    // otherwise, and the page would still zoom/scroll behind the viewer.
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      // deltaY is negative for a fingers-apart (zoom in) gesture. Negating it
+      // and using a small exponent makes the response feel linear rather than
+      // jumping a whole zoom step per event; trackpads fire these at high
+      // rates, so a naive `deltaY / 100` would slam to the clamp instantly.
+      scaleZoom(Math.exp(-e.deltaY * 0.01));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [scaleZoom]);
+
+  // ---- Mobile / tablet two-finger pinch --------------------------------
+  // Touch is tracked natively because React's synthetic touch events do not
+  // expose the two-touch distance this needs.
+  useEffect(() => {
+    const el = shellRef.current;
+    if (!el) return;
+    // The distance between the two active touch points at gesture start.
+    let startDist = 0;
+    let startZoom = 1;
+
+    const dist = (t: TouchList) => {
+      const [a, b] = [t[0], t[1]];
+      return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    };
+
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length !== 2) return;
+      startDist = dist(e.touches);
+      startZoom = zoomRef.current;
+    };
+
+    const onMove = (e: TouchEvent) => {
+      if (e.touches.length !== 2 || startDist <= 0) return;
+      // Two fingers means a pinch/zoom gesture, not a pan, so the default
+      // page-zoom and scroll are suppressed while it is in progress.
+      e.preventDefault();
+      const ratio = dist(e.touches) / startDist;
+      // Re-anchor on every move against the ORIGINAL start, otherwise the
+      // zoom would compound frame over frame and run away to the clamp.
+      scaleZoom((ratio * startZoom) / zoomRef.current);
+    };
+
+    const onEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) startDist = 0;
+    };
+
+    el.addEventListener('touchstart', onStart, { passive: true });
+    el.addEventListener('touchmove', onMove, { passive: false });
+    el.addEventListener('touchend', onEnd, { passive: true });
+    el.addEventListener('touchcancel', onEnd, { passive: true });
+    return () => {
+      el.removeEventListener('touchstart', onStart);
+      el.removeEventListener('touchmove', onMove);
+      el.removeEventListener('touchend', onEnd);
+      el.removeEventListener('touchcancel', onEnd);
+    };
+  }, [scaleZoom]);
 
   // ---- Rendering a single page into its own canvas -------------------
   // The document is a vertical STACK of pages, so several pages can be in
@@ -571,19 +653,26 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       <div
         role="toolbar"
         aria-label="PDF controls"
-        className="flex-shrink-0 w-full h-11 px-3 flex items-center justify-between gap-2 bg-slate-900 text-slate-100 border-b border-slate-800"
+        // Narrow panes used to squash or wrap the controls, hiding Download and
+        // Fullscreen behind an edge. The row now lives in a horizontal scroll
+        // container, and the inner row is `min-w-max`, so the bar overflows and
+        // can be swiped (touch) or shifted (trackpad) instead of truncating.
+        // The scrollbar is hidden via arbitrary variants because this project
+        // has no scrollbar plugin, and `scrollbar-width` covers Firefox.
+        className="flex-shrink-0 w-full bg-slate-900 text-slate-100 border-b border-slate-800 overflow-x-auto overscroll-x-contain [&::-webkit-scrollbar]:hidden [scrollbar-width:none]"
       >
+      <div className="h-11 px-3 flex items-center gap-2 min-w-max justify-between">
     {/* LEFT: the pane's own view + document selectors, injected by the host. */}
-    <div className="flex items-center gap-1.5 min-w-0 shrink-0">
+    <div className="flex items-center gap-1.5 flex-shrink-0 whitespace-nowrap">
       {leadingControls}
     </div>
 
     {/* CENTRE: page navigation. */}
-    <div className="flex items-center gap-1 shrink-0">
-    <button onClick={onPrevPage} disabled={page <= 1 || pageCount === 0} aria-label="Previous page" className={ctrl}>
+    <div className="flex items-center gap-1 flex-shrink-0 whitespace-nowrap">
+    <button onClick={onPrevPage} disabled={page <= 1 || pageCount === 0} aria-label="Previous page" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
       <ChevronLeft className="w-4 h-4" />
     </button>
-    <label className="flex items-center gap-1.5 text-xs text-slate-400">
+    <label className="flex items-center gap-1.5 text-xs text-slate-400 flex-shrink-0 whitespace-nowrap">
       <span className="sr-only">Page number</span>
       <input
         value={pageInput}
@@ -596,36 +685,36 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       />
       <span className="tabular-nums whitespace-nowrap text-slate-400">of {pageCount || '—'}</span>
     </label>
-    <button onClick={onNextPage} disabled={page >= pageCount || pageCount === 0} aria-label="Next page" className={ctrl}>
+    <button onClick={onNextPage} disabled={page >= pageCount || pageCount === 0} aria-label="Next page" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
       <ChevronRight className="w-4 h-4" />
     </button>
     </div>
 
     {/* RIGHT: zoom, fit, rotate, download, fullscreen, then the host's pane
         buttons. The row is already justify-between, so no ml-auto is needed. */}
-    <div className="flex items-center gap-1 shrink-0">
+    <div className="flex items-center gap-1 flex-shrink-0 whitespace-nowrap">
 
     <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
 
-    <button onClick={() => changeZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label="Zoom out" className={ctrl}>
+    <button onClick={() => changeZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label="Zoom out" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
       <Minus className="w-4 h-4" />
     </button>
     <span className="min-w-[2.75rem] text-center text-xs text-slate-300 tabular-nums">{zoomPct}%</span>
-    <button onClick={() => changeZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label="Zoom in" className={ctrl}>
+    <button onClick={() => changeZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label="Zoom in" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
       <Plus className="w-4 h-4" />
     </button>
     <button onClick={() => setZoom(1)} aria-label="Fit page to the window" className={`${ctrl} px-2`}>Fit</button>
 
     <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
 
-    <button onClick={() => setRotation((r) => (r + 90) % 360)} aria-label={`Rotate, currently ${rotation} degrees`} className={ctrl}>
+    <button onClick={() => setRotation((r) => (r + 90) % 360)} aria-label={`Rotate, currently ${rotation} degrees`} className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
       <RotateCw className="w-4 h-4" />
     </button>
 
     {onDownload && (
       <>
         <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
-        <button onClick={onDownload} aria-label="Download this file" title="Download" className={ctrl}>
+        <button onClick={onDownload} aria-label="Download this file" title="Download" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
           <Download className="w-4 h-4" />
         </button>
       </>
@@ -643,6 +732,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     </button>
 
       {trailingControls}
+    </div>
     </div>
     </div>
 

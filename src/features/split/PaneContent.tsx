@@ -51,7 +51,8 @@ export const PaneContent: React.FC<PaneContentProps> = ({
       return (
         <div className="flex h-full items-center justify-center p-4">
           <p className="max-w-[22rem] text-center text-xs text-content-tertiary border border-dashed border-border rounded-xl px-4 py-6">
-            Choose what to show in this pane: Dashboard, a PDF, Notes, or Assistant.
+            Use the bar above to pick a view, or choose a file straight from the
+            document dropdown.
           </p>
         </div>
       );

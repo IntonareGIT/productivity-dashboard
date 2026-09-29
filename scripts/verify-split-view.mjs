@@ -214,7 +214,7 @@ const CHAT = { kind: 'assistant' };
 
   check('10 the empty pane kind exists with the instructional note',
     /case 'empty'/.test(paneContent) &&
-    /Choose what to show in this pane: Dashboard, a PDF, Notes, or Assistant\./.test(paneContent));
+    /choose a file straight from the/.test(paneContent));
   check('10 the empty pane has a light (dashed) border',
     /border-dashed/.test(paneContent));
   check('10 the icon opens a default empty split',
@@ -235,8 +235,13 @@ const CHAT = { kind: 'assistant' };
   check('10 the picker offers all four kinds',
     /value="dashboard"/.test(splitView) && /value="pdf"/.test(splitView) &&
     /value="notes"/.test(splitView) && /value="assistant"/.test(splitView));
-  check('10 the picker has PDF and topic sub-pickers',
-    /Choose a file/.test(splitView) && /Choose a topic/.test(splitView));
+  // ONE document dropdown on every pane kind, grouping PDFs and notes, rather
+  // than two sub-pickers that only appeared for pdf/notes kinds.
+  check('10 the picker has one document dropdown covering PDFs and notes',
+    /Select file/.test(splitView) && /optgroup label="PDFs"/.test(splitView) &&
+    /optgroup label="Notes"/.test(splitView));
+  check('10 the document dropdown is always rendered, not kind-gated',
+    !/\{(slot\.kind === 'pdf' \|\| slot\.kind === 'notes') && \(\s*<select/.test(splitView));
   check('10 there is a swap control', /swapPanes\(s\)/.test(splitView));
   check('10 there is a close control collapsing to one pane', /closePane\(s, index\)/.test(splitView));
   check('10 a single pane can open the split', /addSecondPane\(s, \{ kind: 'assistant' \}\)/.test(splitView));

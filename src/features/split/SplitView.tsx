@@ -325,6 +325,13 @@ const PaneHeader: React.FC<PaneHeaderProps> = ({
     setState((s) => setPane(s, index, next));
   };
 
+  // The current document, encoded so one dropdown can carry both kinds.
+  const selectedDoc = slot.kind === 'pdf' && slot.resourceId
+    ? `pdf:${slot.resourceId}`
+    : slot.kind === 'notes' && slot.topicId
+      ? `note:${slot.topicId}`
+      : '';
+
   // The two dropdowns, as a value so they can be rendered in two different
   // places: inside the PDF viewer's own toolbar (a PDF pane) or in the pane's
   // own header (every other kind). This is what makes ONE header possible for
@@ -344,23 +351,39 @@ const PaneHeader: React.FC<PaneHeaderProps> = ({
         <option value="assistant">Assistant</option>
       </select>
 
-      {(slot.kind === 'pdf' || slot.kind === 'notes') && (
-        <select
-          aria-label={slot.kind === 'pdf' ? `Pane ${index + 1} PDF` : `Pane ${index + 1} topic`}
-          value={slot.kind === 'pdf' ? slot.resourceId ?? '' : slot.topicId ?? ''}
-          onChange={(e) => {
-            const v = e.target.value || undefined;
-            if (slot.kind === 'pdf') select({ kind: 'pdf', resourceId: v });
-            else select({ kind: 'notes', topicId: v });
-          }}
-          className={`${field} w-[8rem] sm:w-[11rem] shrink-0`}
-        >
-          <option value="">{slot.kind === 'pdf' ? 'Choose a file\u2026' : 'Choose a topic\u2026'}</option>
-          {slot.kind === 'pdf'
-            ? (pdfs as Resource[]).map((r) => <option key={r.id} value={r.id}>{r.title}</option>)
-            : (topics as Topic[]).map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
-        </select>
-      )}
+      {/* The document dropdown is ALWAYS rendered, on every pane kind. It used
+          to appear only for pdf/notes, which left an empty pane with just a
+          view selector: picking "PDF preview" gave a pane whose only way
+          forward was another round of navigation. Now the file can be chosen
+          straight from the header, and choosing one also switches the pane to
+          the matching kind, so no intermediate step is needed. */}
+      <select
+        aria-label={`Pane ${index + 1} document`}
+        value={selectedDoc}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v.startsWith('pdf:')) select({ kind: 'pdf', resourceId: v.slice(4) });
+          else if (v.startsWith('note:')) select({ kind: 'notes', topicId: v.slice(5) });
+          else select({ kind: slot.kind === 'pdf' ? 'pdf' : 'notes' });
+        }}
+        className={`${field} w-[8rem] sm:w-[11rem] shrink-0`}
+      >
+        <option value="">Select file\u2026</option>
+        {(pdfs as Resource[]).length > 0 && (
+          <optgroup label="PDFs">
+            {(pdfs as Resource[]).map((r) => (
+              <option key={r.id} value={`pdf:${r.id}`}>{r.title}</option>
+            ))}
+          </optgroup>
+        )}
+        {(topics as Topic[]).length > 0 && (
+          <optgroup label="Notes">
+            {(topics as Topic[]).map((t) => (
+              <option key={t.id} value={`note:${t.id}`}>{t.title}</option>
+            ))}
+          </optgroup>
+        )}
+      </select>
     </>
   );
 
