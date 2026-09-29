@@ -50,7 +50,19 @@ const PAGE_GAP = 10;
 /** An upper bound on auto-fit, so a tiny page can't be blown up to 8x. */
 const MAX_FIT = 3;
 
-const ctrl = 'inline-flex items-center justify-center gap-1 px-1.5 min-h-[26px] rounded-md border border-transparent text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent transition-colors text-xs font-semibold shrink-0';
+/**
+ * Toolbar control styling, built from the app's theme tokens.
+ *
+ * These controls are rendered in TWO places: the viewer's own bar (Library
+ * modal) and, via `onRegisterControls`, inline in the universal `PaneHeader`.
+ * In the second case they sit directly on the themed header bar, so any fixed
+ * `slate-*` colour here would be a light-on-light contrast break in the light
+ * theme. Tokens keep both hosts identical and theme-correct.
+ */
+const ctrl = 'inline-flex items-center justify-center gap-1 px-1.5 min-h-[26px] rounded-md border border-transparent text-content-secondary hover:text-content-primary hover:bg-bg-elevated disabled:opacity-40 disabled:hover:bg-transparent transition-colors text-xs font-semibold shrink-0';
+
+/** The hairline separators between control groups, token-driven for the same reason. */
+const sep = 'mx-0.5 h-5 w-px bg-border';
 
 const isCancel = (e: unknown) =>
   e instanceof Error && e.name === 'RenderingCancelledException';
@@ -643,7 +655,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       <button onClick={onPrevPage} disabled={page <= 1 || pageCount === 0} aria-label="Previous page" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
         <ChevronLeft className="w-4 h-4" />
       </button>
-      <label className="flex items-center gap-1.5 text-xs text-slate-400 flex-shrink-0 whitespace-nowrap">
+      <label className="flex items-center gap-1.5 text-xs text-content-secondary flex-shrink-0 whitespace-nowrap">
         <span className="sr-only">Page number</span>
         <input
           value={pageInput}
@@ -652,9 +664,9 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const n = Number(pageInput) || 1; scrollPageIntoView(n); goToPage(n); } }}
           inputMode="numeric"
           aria-label="Page number"
-          className="w-10 text-center bg-slate-800 border border-slate-600 rounded-md px-1 py-1 text-xs text-slate-100 tabular-nums outline-none focus:border-accent"
+          className="w-10 text-center bg-bg-elevated border border-border-strong rounded-md px-1 py-1 text-xs text-content-primary tabular-nums outline-none focus:border-accent"
         />
-        <span className="tabular-nums whitespace-nowrap text-slate-400">of {pageCount || '—'}</span>
+        <span className="tabular-nums whitespace-nowrap text-content-secondary">of {pageCount || '—'}</span>
       </label>
       <button onClick={onNextPage} disabled={page >= pageCount || pageCount === 0} aria-label="Next page" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
         <ChevronRight className="w-4 h-4" />
@@ -665,18 +677,18 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
           buttons. The row is already justify-between, so no ml-auto is needed. */}
       <div className="flex items-center gap-1 flex-shrink-0 whitespace-nowrap">
 
-      <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
+      <span className={sep} aria-hidden="true" />
 
       <button onClick={() => changeZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label="Zoom out" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
         <Minus className="w-4 h-4" />
       </button>
-      <span className="min-w-[2.75rem] text-center text-xs text-slate-300 tabular-nums">{zoomPct}%</span>
+      <span className="min-w-[2.75rem] text-center text-xs text-content-secondary tabular-nums">{zoomPct}%</span>
       <button onClick={() => changeZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label="Zoom in" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
         <Plus className="w-4 h-4" />
       </button>
       <button onClick={() => setZoom(1)} aria-label="Fit page to the window" className={`${ctrl} px-2`}>Fit</button>
 
-      <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
+      <span className={sep} aria-hidden="true" />
 
       <button onClick={() => setRotation((r) => (r + 90) % 360)} aria-label={`Rotate, currently ${rotation} degrees`} className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
         <RotateCw className="w-4 h-4" />
@@ -684,7 +696,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
       {onDownload && (
         <>
-          <span className="mx-0.5 h-5 w-px bg-slate-700" aria-hidden="true" />
+          <span className={sep} aria-hidden="true" />
           <button onClick={onDownload} aria-label="Download this file" title="Download" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
             <Download className="w-4 h-4" />
           </button>
@@ -744,7 +756,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
           exactly one row either way. */}
       {ownsHeader && (
         <div
-          className="flex-shrink-0 w-full bg-slate-900 text-slate-100 border-b border-slate-800 overflow-x-auto overscroll-x-contain [&::-webkit-scrollbar]:hidden [scrollbar-width:none]"
+          className="flex-shrink-0 w-full bg-bg-surface text-content-primary border-b border-border overflow-x-auto overscroll-x-contain [&::-webkit-scrollbar]:hidden [scrollbar-width:none]"
         >
           <div className="h-11 px-3 flex items-center gap-2 min-w-max justify-between">
             {toolbar}

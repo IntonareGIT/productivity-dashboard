@@ -8,12 +8,19 @@ import {
   type PaneSlot, type SplitState,
 } from './splitModel';
 
-export const ico = 'inline-flex items-center justify-center p-1.5 min-h-[30px] rounded-lg border border-transparent text-slate-300 hover:text-white hover:bg-slate-700/70 transition-colors shrink-0';
+/**
+ * Pane chrome is built ENTIRELY from the app's theme tokens, never from
+ * Tailwind's fixed `slate-*` palette. The header must follow whatever theme is
+ * active — including the four status themes and the light/dark override — so
+ * its background, text, borders and hover states all have to be token-driven.
+ */
+export const ico = 'inline-flex items-center justify-center p-1.5 min-h-[30px] rounded-lg border border-transparent text-content-secondary hover:text-content-primary hover:bg-bg-elevated transition-colors shrink-0';
 
-// The dropdowns sit on the opaque slate-900 header, so they use a solid dark
-// treatment. A light translucent field on the dark bar both clashed and
-// reintroduced the blur-glow the solid header exists to prevent.
-const field = 'min-w-0 bg-slate-800 text-slate-100 border border-slate-600 rounded-lg px-1.5 py-1 text-[11px] outline-none focus:border-accent';
+// The dropdowns sit on the header, so they use the elevated surface token rather
+// than a fixed dark field — a hardcoded dark select on a light theme is exactly
+// the contrast break this avoids. Opaque (not translucent) so it never lets the
+// scrolling content show through.
+const field = 'min-w-0 bg-bg-elevated text-content-primary border border-border-strong rounded-lg px-1.5 py-1 text-[11px] outline-none focus:border-accent';
 
 export 
 /* ---------------- Pane header ---------------- */
@@ -178,11 +185,22 @@ export const PaneHeader: React.FC<PaneHeaderProps> = ({
         {selectors}
       </div>
 
-      {/* PDF-only controls, contributed by the viewer when a document is
-          loaded. Empty for every other view, which is what makes this
-          conditional rather than duplicated. */}
+      {/* PDF-ONLY controls, contributed by the mounted viewer. The viewer owns
+          page/zoom/rotation state, so it renders these itself and publishes them
+          up here rather than drawing a second toolbar of its own. They appear
+          ONLY for a PDF view with a loaded document, which is what keeps this
+          conditional rather than duplicated — the base controls above are always
+          present whatever the pane is showing.
+
+          The `border-l border-border` divider separates the base pane controls
+          from the document controls and is token-driven, so it stays visible in
+          light mode instead of vanishing like a hardcoded dark border would. */}
       {pdfControls && (
-        <div className="flex items-center gap-1 flex-shrink-0 whitespace-nowrap">
+        <div
+          className="flex items-center gap-1 flex-shrink-0 whitespace-nowrap border-l border-border mx-2 pl-2"
+          role="group"
+          aria-label="PDF controls"
+        >
           {pdfControls}
         </div>
       )}
@@ -207,7 +225,17 @@ export const PaneContainer: React.FC<PaneHeaderProps & { children: React.ReactNo
   index, slot, split, maximized, setState, pdfControls, children,
 }) => (
   <div className="flex h-full min-h-0 flex-col overflow-hidden">
-    <div className="flex-shrink-0 w-full bg-slate-900 text-slate-100 border-b border-slate-800 overflow-x-auto overscroll-x-contain [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
+    {/* The header bar. Theme-token driven so it follows the active theme and the
+        light/dark override, and horizontally scrollable so a squeezed pane on a
+        phone (or a narrow split half) can swipe to reach controls that would
+        otherwise be clipped off-screen.
+
+        `overscroll-x-contain` stops a horizontal flick from chaining out to the
+        page behind the split, and the scrollbar is hidden in BOTH the WebKit
+        and the standard-property form so the bar stays 44px tall on every
+        browser. `min-w-max` on the inner row is what gives the scroller
+        something wider than the pane to scroll through. */}
+    <div className="flex-shrink-0 w-full bg-bg-surface text-content-primary border-b border-border overflow-x-auto overscroll-x-contain [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
       <div className="h-11 px-3 flex items-center gap-2 min-w-max justify-between">
         <PaneHeader
           index={index}

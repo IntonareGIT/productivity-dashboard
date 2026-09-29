@@ -236,7 +236,7 @@ const SplitBody: React.FC<SplitBodyProps> = ({
           <div
             role="toolbar"
             aria-label="Split view controls"
-            className={`absolute z-30 flex items-center gap-0.5 rounded-full bg-slate-900 border border-slate-600 shadow-lg p-0.5 ${
+            className={`absolute z-30 flex items-center gap-0.5 rounded-full bg-bg-surface border border-border-strong shadow-lg p-0.5 ${
               stacked
                 ? 'left-1/2 -translate-x-1/2 -translate-y-1/2 top-1/2 flex-row'
                 : 'top-1/2 -translate-y-1/2 -translate-x-1/2 left-1/2 flex-col'

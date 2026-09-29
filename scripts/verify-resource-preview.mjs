@@ -296,16 +296,19 @@ const res = (over = {}) => ({
     /{ownsHeader && \(/.test(pdf) &&
     /\{toolbar\}/.test(pdf));
   check('T there is exactly ONE in-place bar, and it is conditional',
-    (pdf.match(/bg-slate-900 text-slate-100 border-b border-slate-800/g) || []).length === 1);
+    (pdf.match(/bg-bg-surface text-content-primary border-b border-border/g) || []).length === 1);
   check('T the bar scrolls horizontally with a hidden scrollbar',
     /overflow-x-auto overscroll-x-contain/.test(pdf) &&
     /\[&::-webkit-scrollbar\]:hidden/.test(pdf) &&
     /\[scrollbar-width:none\]/.test(pdf));
   check('T the in-place bar row keeps its intrinsic width',
     /h-11 px-3 flex items-center gap-2 min-w-max justify-between/.test(pdf));
-  check('T the bar is an opaque dark fill, never a blur or gradient',
-    /bg-slate-900 text-slate-100 border-b border-slate-800/.test(pdf) &&
-    !/backdrop-blur/.test(pdf));
+  // Opaque fill, never a blur or gradient — but THEME-DRIVEN, not a fixed dark
+  // slate, so the bar stays correct in light mode and under every status theme.
+  check('T the bar is an opaque themed fill, never a blur or gradient',
+    /bg-bg-surface text-content-primary border-b border-border/.test(pdf) &&
+    !/backdrop-blur/.test(pdf) &&
+    !/\bbg-slate-|\btext-slate-|\bborder-slate-/.test(pdf));
   check('T the bar is never sticky or absolutely positioned',
     !/className="[^"]*(sticky|absolute)[^"]*"/.test(pdf.slice(pdf.indexOf('ownsHeader && ('),
                                                            pdf.indexOf('ref={shellRef}'))));

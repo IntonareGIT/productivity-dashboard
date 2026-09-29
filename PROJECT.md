@@ -896,6 +896,25 @@ button lives on the **divider**, between the panes, where it can never overlap
 pane content. The header's own X is "back to the dashboard" (`setPane` back to
 `initialSplitState`), a different action.
 
+**All pane chrome is theme-token driven — never Tailwind's fixed `slate-*`
+palette.** The header bar, its dropdowns, the icon buttons, the divider pill and
+the injected PDF toolbar all use `bg-bg-surface` / `bg-bg-elevated`,
+`border-border` / `border-border-strong` and `text-content-*`. A hardcoded
+`bg-slate-900` bar stayed dark in **Light Mode** and clashed with every status
+theme, so the tokens are what let the chrome follow `data-theme` (and the
+light/dark override) with no contrast breaks. Both hosts of the PDF controls
+share one token-driven `ctrl` class, so the pane header and the Library modal
+cannot drift.
+
+**The header scrolls sideways when a pane is narrow.** The bar is
+`overflow-x-auto` with `overscroll-x-contain` and a hidden scrollbar in both the
+WebKit (`[&::-webkit-scrollbar]:hidden`) and standard (`[scrollbar-width:none]`)
+forms; the inner row is `min-w-max` and every group is `flex-shrink-0
+whitespace-nowrap`, so a squeezed pane (a split half, or a phone) can be swiped
+to reach controls that would otherwise wrap or clip. This is what lets a PDF
+pane keep the whole control set — page nav, zoom, Fit, rotate, download and
+full screen — on one 44px row at any width.
+
 **Nothing is persisted.** The split, the ratio, which pane holds what and any
 maximized pane are React state only — `splitModel.ts` references no storage or
 Dexie at all — so a refresh always returns to a single full-width dashboard.

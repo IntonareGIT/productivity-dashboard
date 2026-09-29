@@ -550,10 +550,16 @@ const pdfViewer = readFileSync('src/features/library/components/PdfViewer.tsx', 
     check('FM the split controls are anchored to the divider, not a pane title',
       /role="toolbar"[\s\S]{0,400}top-1\/2 -translate-y-1\/2 -translate-x-1\/2 left-1\/2 flex-col/.test(sv)
       && /relative shrink-0 flex items-center justify-center bg-border/.test(sv));
+    // The floating divider toolbar is part of the same pane chrome, so it must
+    // be token-driven too — a fixed dark pill stayed dark in light mode and
+    // clashed with every status theme.
+    check('FM the divider toolbar is themed, not a hardcoded dark pill',
+      /rounded-full bg-bg-surface border border-border-strong/.test(sv) &&
+      !/\bbg-slate-|\btext-slate-|\bborder-slate-/.test(sv));
     // The header is no longer a floating overlay: it is the shrink-0 first
     // child of the wrapper, so content can never appear above it.
     check('FM the pane header is a flex sibling, not a floating overlay',
-      /flex-shrink-0 w-full bg-slate-900/.test(paneHeader) &&
+      /flex-shrink-0 w-full bg-bg-surface/.test(paneHeader) &&
       !/pointer-events-none/.test(paneHeader));
     check('FM the pane header no longer takes layout height',
       !/border-b border-border bg-bg-elevated\/40 shrink-0/.test(sv));
@@ -585,7 +591,7 @@ const pdfViewer = readFileSync('src/features/library/components/PdfViewer.tsx', 
     check('H the wrapper is a height-filling flex column',
       /flex h-full min-h-0 flex-col overflow-hidden/.test(paneHeader));
     check('H the header is shrink-0 and the content flex-1 min-h-0',
-      /flex-shrink-0 w-full bg-slate-900/.test(paneHeader) &&
+      /flex-shrink-0 w-full bg-bg-surface/.test(paneHeader) &&
       /flex-1 min-h-0 overflow-y-auto overflow-x-hidden/.test(paneHeader));
     check('H the view and document dropdowns are unconditional',
       /{selectors}/.test(paneHeader) && !/part ===/.test(paneHeader));
@@ -601,11 +607,36 @@ const pdfViewer = readFileSync('src/features/library/components/PdfViewer.tsx', 
       /const ownsHeader = !onRegisterControls/.test(pdfViewer));
     check('H the viewer clears its published controls on unmount',
       /return \(\) => onRegisterControls\(null\)/.test(pdfViewer));
-    check('H the pane chrome is dark like the viewer toolbar',
-      /border-b border-slate-800/.test(paneHeader) &&
-      /bg-slate-800 text-slate-100 border border-slate-600/.test(paneHeader));
+    // The pane chrome is themed, NOT a hardcoded dark bar. A fixed `slate-*`
+    // palette here stayed dark in light mode and clashed with every status
+    // theme, so the header and its dropdowns must be token-driven. The check is
+    // therefore INVERTED: no fixed palette colours may survive in the chrome.
+    check('H the pane chrome is themed, not a hardcoded dark bar',
+      /border-b border-border/.test(paneHeader) &&
+      /bg-bg-elevated text-content-primary border border-border-strong/.test(paneHeader) &&
+      !/\bbg-slate-|\btext-slate-|\bborder-slate-|\bhover:bg-slate-/.test(paneHeader));
+    // The PDF controls are injected into that same themed bar, so the viewer's
+    // toolbar must be token-driven too or it breaks light mode.
+    check('H the injected PDF controls are themed like the header',
+      !/\bbg-slate-|\btext-slate-|\bborder-slate-/.test(pdfViewer) &&
+      /text-content-secondary hover:text-content-primary hover:bg-bg-elevated/.test(pdfViewer));
     check('H the pane chrome no longer uses a blur bar',
       !/backdrop-blur/.test(paneHeader));
+    // A squeezed pane must be able to reach its controls by swiping rather than
+    // clipping them off-screen: the bar scrolls on X with the scrollbar hidden
+    // in both the WebKit and standard forms.
+    check('H the header scrolls sideways for narrow panes',
+      /flex-shrink-0 w-full bg-bg-surface[\s\S]{0,220}overflow-x-auto/.test(paneHeader) &&
+      /\[&::-webkit-scrollbar\]:hidden \[scrollbar-width:none\]/.test(paneHeader) &&
+      /h-11 px-3 flex items-center gap-2 min-w-max/.test(paneHeader));
+    // Every group inside the bar must refuse to shrink or wrap, otherwise the
+    // row grows taller than h-11 instead of scrolling.
+    check('H header control groups do not shrink or wrap',
+      (paneHeader.match(/flex-shrink-0 whitespace-nowrap/g) || []).length >= 3);
+    // Base pane controls and PDF controls are separated by a TOKEN border, so
+    // the divider is still visible in the light theme.
+    check('H PDF controls are split from the base controls by a themed divider',
+      /border-l border-border mx-2 pl-2/.test(paneHeader));
 
     // ---- the dashboard pane must scroll internally ----------------------
     const dash = readFileSync('src/features/dashboard/DashboardPage.tsx', 'utf8');
