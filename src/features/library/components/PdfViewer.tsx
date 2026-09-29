@@ -264,10 +264,14 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
   const zoomPct = Math.round(zoom * 100);
   // Full screen is a real overlay using the viewport, not a scaled-up inline
-  // canvas, so the page gets genuinely more room.
+  // canvas, so the page gets genuinely more room. `standalone` must FILL the
+  // height its host gives it, otherwise it collapses to its content and the
+  // host has to scroll to reach the viewer's own controls.
   const boxClass = fullScreen
-    ? 'fixed inset-0 z-[60] flex flex-col bg-bg-primary p-3 sm:p-5'
-    : 'flex flex-col gap-3';
+    ? 'fixed inset-0 z-[60] flex flex-col bg-bg-primary p-3 sm:p-5 overflow-hidden'
+    : variant === 'standalone'
+      ? 'flex flex-col gap-3 h-full min-h-0'
+      : 'flex flex-col gap-3';
   if (status === 'error') {
     return (
       <div className="flex items-start gap-2 p-4 rounded-xl border border-amber-500/40 bg-amber-500/10">
@@ -362,7 +366,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         // resolves against a definite parent, and this viewer is also used
         // inline in a modal, so an explicit max-height is required. In full
         // screen the root is `fixed inset-0`, so flex-1 is definite there.
-        style={fullScreen ? undefined : { maxHeight: 'min(72vh, 720px)' }}
+        style={fullScreen || variant === 'standalone' ? undefined : { maxHeight: 'min(72vh, 720px)' }}
       >
         {status === 'loading' ? (
           <div className="flex h-full min-h-[280px] items-center justify-center gap-2 text-xs text-content-tertiary">

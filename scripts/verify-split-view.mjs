@@ -307,8 +307,8 @@ const CHAT = { kind: 'assistant' };
   // are painted far below the visible area.
   check('12 the page surface is height-bounded so it can actually scroll',
     /maxHeight: 'min\(72vh, 720px\)'/.test(pdf));
-  check('12 the bound is lifted only in full screen (definite fixed parent)',
-    /style=\{fullScreen \? undefined : \{ maxHeight/.test(pdf));
+  check('12 the bound is lifted in full screen / standalone (definite parent)',
+    /style=\{fullScreen \|\| variant === 'standalone' \? undefined : \{ maxHeight/.test(pdf));
   check('12 the surface still declares overflow-auto', /overflow-auto/.test(pdf));
   check('12 the nav-sync effect can now take effect', /el\.scrollTop = target/.test(pdf));
   check('12 handleScroll is bound to the scrolling element',
@@ -358,6 +358,49 @@ const CHAT = { kind: 'assistant' };
     /onSelectTab=\{selectTab\}/.test(appSrc));
   check('14 the split is not closed when re-selecting the same tab',
     /if \(tab !== activeTab\)/.test(appSrc));
+
+  // ---- 15. Fix 1: real Fullscreen API --------------------------------
+  const fsp = readFileSync('src/features/split/FullScreenPreview.tsx', 'utf8');
+  check('15 it calls the real requestFullscreen on enter',
+    /el\.requestFullscreen \?\? el\.webkitRequestFullscreen/.test(fsp) && /request\.call\(el\)/.test(fsp));
+  check('15 it calls exitFullscreen on leaving',
+    /doc\.exitFullscreen \?\? doc\.webkitExitFullscreen/.test(fsp) && /exit\.call\(doc\)/.test(fsp));
+  check('15 it handles the fullscreenchange event',
+    /addEventListener\('fullscreenchange'/.test(fsp) && /removeEventListener\('fullscreenchange'/.test(fsp));
+  check('15 a browser-initiated exit closes the preview',
+    /onChange/.test(fsp) && /onClose\(\)/.test(fsp));
+  check('15 the close button also exits fullscreen (via unmount cleanup)',
+    /closingRef\.current = true; onClose\(\)/.test(fsp));
+  check('15 the root element is the fullscreen element',
+    /ref=\{rootRef\}/.test(fsp) && /const rootRef = useRef<HTMLDivElement \| null>\(null\)/.test(fsp));
+  check('15 a CSS-only fallback remains for browsers without the API',
+    /fixed inset-0/.test(fsp) && /typeof request !== 'function'/.test(fsp));
+  check('15 Escape is handled for the fallback path',
+    /e\.key !== 'Escape'/.test(fsp) && /enteredRef\.current\) return/.test(fsp));
+
+  // ---- 16. Fix 1: height constraints --------------------------------
+  check('16 the split overlay cannot grow the outer page',
+    /absolute inset-x-0 top-14 bottom-0 z-20 bg-bg overflow-hidden/.test(appSrc));
+  check('16 each pane content area scrolls internally, bounded',
+    /flex-1 min-h-0 overflow-auto/.test(
+      readFileSync('src/features/split/SplitView.tsx', 'utf8')));
+  check('16 the pane itself is bounded and does not push the page',
+    /min-w-0 min-h-0 flex flex-col/.test(readFileSync('src/features/split/SplitView.tsx', 'utf8')));
+  check('16 the assistant pane is a bounded flex column',
+    /h-full min-h-0 flex flex-col bg-bg-surface overflow-hidden/.test(
+      readFileSync('src/features/split/PaneContent.tsx', 'utf8')));
+  check('16 the assistant transcript scrolls inside the pane',
+    /className="flex-1 min-h-0"/.test(
+      readFileSync('src/features/split/PaneContent.tsx', 'utf8')));
+  check('16 the full preview body is bounded and clips overflow',
+    /flex-1 min-h-0 flex items-stretch justify-center overflow-hidden/.test(fsp));
+  check('16 standalone PDF fills its host height instead of collapsing',
+    /variant === 'standalone' \? 'flex flex-col gap-3 h-full min-h-0'/.test(pdf) ||
+    /'flex flex-col gap-3 h-full min-h-0'/.test(pdf));
+  check('16 the inline PDF cap is lifted for standalone/full screen',
+    /fullScreen \|\| variant === 'standalone' \? undefined : \{ maxHeight/.test(pdf));
+  check('16 the viewer full-screen overlay also clips overflow',
+    /z-\[60\] flex flex-col bg-bg-primary p-3 sm:p-5 overflow-hidden/.test(pdf));
 }
 
 console.log('');

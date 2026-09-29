@@ -57,9 +57,11 @@ export const PaneContent: React.FC<PaneContentProps> = ({
 
     case 'assistant':
       // The same AssistantChat the bubble and /assistant page use, so history
-      // and tools are shared; only the surrounding layout is narrower.
+      // and tools are shared; only the surrounding layout is narrower. The
+      // wrapper is a definite-height flex column and the transcript scrolls
+      // INSIDE it, so the composer never gets pushed out of the pane.
       return (
-        <div className="h-full min-h-0 flex flex-col bg-bg-surface">
+        <div className="h-full min-h-0 flex flex-col bg-bg-surface overflow-hidden">
           <AssistantChat
             onOpenSettings={onOpenAssistantSettings}
             className="flex-1 min-h-0"

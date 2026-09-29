@@ -226,7 +226,7 @@ export const App: React.FC = () => {
         /* App-level overlay: sits above whichever tab is active and never
            changes it, so closing returns to the same tab. */
         splitOpen ? (
-          <div className="absolute inset-x-0 top-14 bottom-0 z-20 bg-bg">
+          <div className="absolute inset-x-0 top-14 bottom-0 z-20 bg-bg overflow-hidden">
             <SplitView
               state={splitState}
               setState={setSplitState}

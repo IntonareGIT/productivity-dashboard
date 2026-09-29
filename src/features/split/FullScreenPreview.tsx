@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect } from 'react';
+import React, { Suspense, lazy, useEffect, useRef } from 'react';
 import { Loader2, X } from 'lucide-react';
 import type { Resource } from '../../types';
 import { previewKindFor } from '../library/previewKind';
@@ -14,20 +14,82 @@ interface FullScreenPreviewProps {
   onClose: () => void;
 }
 
+/** Vendor-prefixed access, since Safari still needs webkit*. */
+type FsElement = HTMLElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void;
+};
+type FsDocument = Document & {
+  webkitExitFullscreen?: () => Promise<void> | void;
+  webkitFullscreenElement?: Element | null;
+};
+
 /**
  * True full-screen preview of a single resource.
  *
- * Separate from the split view and from pane maximize: it covers the entire
- * screen, including the split and all other chrome. The layout underneath is
- * NOT unmounted, so exiting returns to exactly whatever was showing before.
- * Escape closes it.
+ * Enters the browser's REAL fullscreen via `requestFullscreen()`, so the
+ * browser chrome (tabs, address bar) genuinely disappears — a CSS
+ * `fixed inset-0` overlay only covers the page viewport and leaves the browser
+ * UI in place. The `fixed inset-0` classes remain as a fallback for browsers
+ * without the Fullscreen API (e.g. iOS Safari).
+ *
+ * `fullscreenchange` is handled so exiting with the browser's own Escape key or
+ * a browser control closes the preview, not just the in-app close button.
+ * Everything underneath is NOT unmounted, so closing returns to exactly the
+ * layout that was active.
  */
 export const FullScreenPreview: React.FC<FullScreenPreviewProps> = ({ resource, onClose }) => {
   const kind = previewKindFor(resource);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // True once we actually entered the browser's fullscreen.
+  const enteredRef = useRef(false);
+  // Set when WE are closing, so the fullscreenchange echo is not double-handled.
+  const closingRef = useRef(false);
 
+  // Enter real fullscreen on mount; exit it on unmount.
+  useEffect(() => {
+    const el = rootRef.current as FsElement | null;
+    if (!el) return;
+    const request = el.requestFullscreen ?? el.webkitRequestFullscreen;
+    if (typeof request !== 'function') return;
+    try {
+      enteredRef.current = true;
+      Promise.resolve(request.call(el)).catch(() => { enteredRef.current = false; });
+    } catch {
+      enteredRef.current = false;
+    }
+    return () => {
+      const doc = document as FsDocument;
+      const active = doc.fullscreenElement ?? doc.webkitFullscreenElement;
+      if (!enteredRef.current || active !== el) return;
+      const exit = doc.exitFullscreen ?? doc.webkitExitFullscreen;
+      if (typeof exit === 'function') {
+        try { void exit.call(doc); } catch { /* already exiting */ }
+      }
+    };
+  }, []);
+
+  // The user may leave fullscreen with the browser's Escape or a browser
+  // control, which fires fullscreenchange without going through our button.
+  useEffect(() => {
+    const onChange = () => {
+      if (closingRef.current || !enteredRef.current) return;
+      const doc = document as FsDocument;
+      if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
+        closingRef.current = true;
+        onClose();
+      }
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, [onClose]);
+
+  // Escape fallback for the CSS-only path (no Fullscreen API available).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); onClose(); }
+      if (e.key !== 'Escape') return;
+      if (enteredRef.current) return; // the browser handles this for real fullscreen
+      closingRef.current = true;
+      onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -35,17 +97,20 @@ export const FullScreenPreview: React.FC<FullScreenPreviewProps> = ({ resource, 
 
   return (
     <div
+      ref={rootRef}
       role="dialog"
       aria-modal="true"
       aria-label={`${resource.title} full screen preview`}
-      className="fixed inset-0 z-[70] flex flex-col bg-bg-primary p-3 sm:p-5"
+      // Fallback for browsers without the Fullscreen API. When the API exists
+      // this element IS the fullscreen element and fills the screen anyway.
+      className="fixed inset-0 z-[70] flex flex-col bg-bg-primary p-3 sm:p-5 overflow-hidden"
     >
       <div className="flex items-center gap-2 mb-3 shrink-0">
         <p className="flex-1 min-w-0 truncate text-sm font-semibold text-content-primary">
           {resource.title}
         </p>
         <button
-          onClick={onClose}
+          onClick={() => { closingRef.current = true; onClose(); }}
           aria-label="Close full screen preview"
           className="inline-flex items-center gap-1.5 px-3 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:bg-bg-elevated transition-colors"
         >
@@ -53,10 +118,10 @@ export const FullScreenPreview: React.FC<FullScreenPreviewProps> = ({ resource, 
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 flex items-stretch justify-center">
+      <div className="flex-1 min-h-0 flex items-stretch justify-center overflow-hidden">
         {kind === 'pdf' && resource.blob ? (
-          // `standalone` offers the viewer's own full-screen toggle, which is
-          // already on here; it is harmless and keeps one code path.
+          // `standalone` lets the viewer fill the available height instead of
+          // imposing its own inline cap.
           <Suspense fallback={<Centered label="Loading PDF viewer…" />}>
             <PdfViewer blob={resource.blob} title={resource.title} variant="standalone" />
           </Suspense>
