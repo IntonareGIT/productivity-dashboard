@@ -24,7 +24,6 @@ interface PaneHeaderProps {
   split: boolean;
   maximized: boolean;
   setState: React.Dispatch<React.SetStateAction<SplitState>>;
-  onCloseSplit?: () => void;
   /**
    * The PDF-specific controls, supplied by the mounted viewer. The viewer owns
    * page/zoom/rotation state, so it must render its own controls — but they are
@@ -43,7 +42,7 @@ interface PaneHeaderProps {
  * viewer itself through `pdfControls`.
  */
 export const PaneHeader: React.FC<PaneHeaderProps> = ({
-  index, slot, split, maximized, setState, onCloseSplit, pdfControls,
+  index, slot, split, maximized, setState, pdfControls,
 }) => {
   // Pickers are driven by the currently selected kind, so each pane chooses
   // "Dashboard / PDF / Notes / Assistant" and then its own resource or topic.
@@ -205,7 +204,7 @@ export const PaneHeader: React.FC<PaneHeaderProps> = ({
  * scrolling, and the bottom cards go out of reach.
  */
 export const PaneContainer: React.FC<PaneHeaderProps & { children: React.ReactNode }> = ({
-  index, slot, split, maximized, setState, onCloseSplit, pdfControls, children,
+  index, slot, split, maximized, setState, pdfControls, children,
 }) => (
   <div className="flex h-full min-h-0 flex-col overflow-hidden">
     <div className="flex-shrink-0 w-full bg-slate-900 text-slate-100 border-b border-slate-800 overflow-x-auto overscroll-x-contain [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
@@ -216,7 +215,6 @@ export const PaneContainer: React.FC<PaneHeaderProps & { children: React.ReactNo
           split={split}
           maximized={maximized}
           setState={setState}
-          onCloseSplit={onCloseSplit}
           pdfControls={pdfControls}
         />
       </div>

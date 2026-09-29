@@ -19,6 +19,15 @@ export interface PaneSlot {
   topicId?: string;
 }
 
+export interface SplitState {
+  /** One entry in single-pane mode, two in split mode. */
+  panes: PaneSlot[];
+  /** Fraction of the split width given to the FIRST pane, 0.2 - 0.8. */
+  ratio: number;
+  /** Index of the temporarily maximized pane, or null when both are shown. */
+  maximized: number | null;
+}
+
 /**
  * The state the top-bar icon opens with: two empty panes, each showing the
  * instructional note and its own picker.
@@ -28,15 +37,6 @@ export const emptySplitState: SplitState = {
   ratio: 0.5,
   maximized: null,
 };
-
-export interface SplitState {
-  /** One entry in single-pane mode, two in split mode. */
-  panes: PaneSlot[];
-  /** Fraction of the split width given to the FIRST pane, 0.2 - 0.8. */
-  ratio: number;
-  /** Index of the temporarily maximized pane, or null when both are shown. */
-  maximized: number | null;
-}
 
 /** The state on every load: one full-width dashboard, no split. */
 export const initialSplitState: SplitState = {

@@ -633,14 +633,12 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     : 'flex flex-col gap-0 h-full min-h-0 w-full overflow-hidden';
   // The control row. Published to a parent header when there is one, and
   // rendered in place otherwise, so the two paths can never drift.
-  // The control row. Published to a parent header when there is one, and
-  // rendered in place otherwise, so the two paths can never drift.
   const toolbar = (
     <>
       <div className="flex items-center gap-2 flex-shrink-0 whitespace-nowrap">
-      {/* LEFT: page navigation. In the modal this bar is the only header; in a
+      {/* CENTRE: page navigation. In the modal this bar is the only header; in a
           split pane the universal PaneHeader owns the row and the viewer
-          contributes these controls into it. */}      {/* CENTRE: page navigation. */}
+          contributes these controls into it. */}
       <div className="flex items-center gap-1 flex-shrink-0 whitespace-nowrap">
       <button onClick={onPrevPage} disabled={page <= 1 || pageCount === 0} aria-label="Previous page" className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
         <ChevronLeft className="w-4 h-4" />

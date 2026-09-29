@@ -875,10 +875,26 @@ the button is on, without navigating to the Dashboard.
 | File | Role |
 | --- | --- |
 | `splitModel.ts` | Pure reducer: pane slots, swap, close, maximize, ratio clamp |
-| `SplitView.tsx` | Container, draggable divider, per-pane headers |
+| `SplitView.tsx` | Container, draggable divider, owns the shared PDF-controls registry |
+| `PaneHeader.tsx` | The universal pane header + wrapper, rendered for every pane kind |
 | `PaneContent.tsx` | Dispatches a slot to its renderer |
 | `NotesPane.tsx` | The Library notes editor in a narrow layout |
-| `FullScreenPreview.tsx` | Full-screen overlay for one resource |
+| `useResourceFullScreen.tsx` | Shared hook + `ResourceFullScreen` for non-PDF full screen |
+| `FullScreenPreview.tsx` | Full-screen overlay for one non-PDF resource |
+
+**One header per pane, and one controls registry.** `usePdfControls()` is a
+hook, so it owns state and must be called **exactly once, at the top of
+`SplitView`**, which then passes `registerPdfControls` / `pdfControlsFor` down to
+the split body. The single-pane and split bodies are mutually exclusive but are
+separate components; calling the hook inside each would silently give them two
+independent registries. The mounted `PdfViewer` publishes its toolbar upward via
+`onRegisterControls`, and `PaneHeader` renders it — so a PDF pane has exactly one
+control row whether the header is the pane's own or the viewer's (Library modal).
+
+`onCloseSplit` deliberately does **not** reach `PaneHeader`: the close-split
+button lives on the **divider**, between the panes, where it can never overlap
+pane content. The header's own X is "back to the dashboard" (`setPane` back to
+`initialSplitState`), a different action.
 
 **Nothing is persisted.** The split, the ratio, which pane holds what and any
 maximized pane are React state only — `splitModel.ts` references no storage or
@@ -910,14 +926,18 @@ behind. Next/previous, the page-number input and the arrow keys all remain.
 
 **Three deliberately separate zoom levels.** Pane maximize hides the other pane
 with `display:none` but keeps it **mounted**, so it retains its page/zoom/
-rotation and restores instantly. Full-screen preview is separate: a
-`fixed inset-0` overlay that mounts a **fresh** `PdfViewer`, giving it its own
-independent zoom/rotation/page, and the split underneath is never unmounted, so
-exiting returns to exactly the layout that was active. Each pane mounts its own
-`PdfViewer`, so the same file can be open in both panes at once with completely
-independent state. The assistant pane mounts the shared `AssistantChat` (same
-history, same tools); the notes pane mounts the shared `MarkdownNotes` and
-writes through the same `updateTopicNotes()`.
+rotation and restores instantly. **A PDF's full screen reuses the very same
+mounted `PdfViewer`** — the viewer calls `requestFullscreen()` on its own wrapper
+element, so exactly one viewer instance is ever in the DOM and the same page, zoom
+and rotation carry into (and back out of) full screen. There is no second
+`PdfViewer` and nothing to unmount; the split underneath is never disturbed, so
+exiting returns to exactly the layout that was active. `FullScreenPreview` is for
+**non-PDF** resources only (images), reached through the shared
+`useResourceFullScreen()` hook that both the Library preview and the split view
+use. Each pane mounts its own `PdfViewer`, so the same file can be open in both
+panes at once with completely independent state. The assistant pane mounts the
+shared `AssistantChat` (same history, same tools); the notes pane mounts the
+shared `MarkdownNotes` and writes through the same `updateTopicNotes()`.
 
 ---
 
@@ -998,10 +1018,12 @@ writes through the same `updateTopicNotes()`.
 │   │   │       └── SessionLog.tsx  # collapsed Dexie session history
 │   │   ├── split/                # two-pane split view + full-screen preview
 │   │   │   ├── splitModel.ts     # pure pane reducer (swap/close/maximize/ratio)
-│   │   │   ├── SplitView.tsx     # container, draggable divider, pane headers
+│   │   │   ├── SplitView.tsx     # container, draggable divider, shared PDF-controls registry
+│   │   │   ├── PaneHeader.tsx    # universal pane header + wrapper (every pane kind)
 │   │   │   ├── PaneContent.tsx   # dispatches a pane to its renderer
 │   │   │   ├── NotesPane.tsx     # topic notes in a narrow layout
-│   │   │   └── FullScreenPreview.tsx # one resource, full screen, own viewer state
+│   │   │   ├── useResourceFullScreen.tsx # shared non-PDF full-screen hook + host
+│   │   │   └── FullScreenPreview.tsx # one non-PDF resource, full screen
 │   │   ├── ai/                  # global AI assistant (schema v6/v7)
 │   │   │   ├── aiProviderRepo.ts # provider CRUD + getDefaultProvider()
 │   │   │   ├── aiClient.ts      # OpenAI-compatible chat/completions + tool loop

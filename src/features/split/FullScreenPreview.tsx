@@ -26,7 +26,6 @@ type FsDocument = Document & {
  * duplicated page/zoom/rotation state, and nothing to unmount when leaving.
  * Mounting a second PdfViewer here was the source of the duplicate-viewer bug.
  *
- *
  * Enters the browser's REAL fullscreen via `requestFullscreen()`, so the
  * browser chrome (tabs, address bar) genuinely disappears — a CSS
  * `fixed inset-0` overlay only covers the page viewport and leaves the browser

@@ -1,17 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import {
-  ArrowLeftRight, Columns2, Maximize2, Minimize2, PanelLeftClose, X,
-} from 'lucide-react';
-import { db } from '../../db/db';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowLeftRight, Maximize2, Minimize2, X } from 'lucide-react';
 import type { NavTab } from '../../components/layout/Sidebar';
-import type { Resource, Topic } from '../../types';
 import { PaneContent } from './PaneContent';
 import { PaneContainer, ico } from './PaneHeader';
 import { ResourceFullScreen, useResourceFullScreen } from './useResourceFullScreen';
 import {
-  addSecondPane, clampRatio, closePane, initialSplitState, isSplit, setPane,
-  swapPanes, toggleMaximize, type PaneSlot, type SplitState,
+  clampRatio, isSplit, swapPanes, toggleMaximize, type PaneSlot, type SplitState,
 } from './splitModel';
 
 
@@ -30,13 +24,13 @@ export const SplitView: React.FC<SplitViewProps> = ({
   // Non-PDF full screen (images) goes through the shared hook. PDFs are handled
   // by the shared PdfViewer itself, so no second viewer is ever mounted.
   const { fullScreenResource, closeFullScreen } = useResourceFullScreen();
+  // ONE registry, created here and passed DOWN to whichever body renders. The
+  // single-pane and split bodies are mutually exclusive, but they are two
+  // separate components, so a `usePdfControls()` call inside each would give
+  // them two independent stores — exactly the drift the comment below warns
+  // about. Hoisting the hook here makes the state genuinely shared.
   const { registerPdfControls, pdfControlsFor } = usePdfControls();
   const split = isSplit(state);
-
-  const onDrag = useCallback((clientX: number, rect: DOMRect) => {
-    const next = clampRatio((clientX - rect.left) / rect.width);
-    setState((s) => ({ ...s, ratio: next }));
-  }, [setState]);
 
   return (
     <div className="h-full min-h-0 w-full flex flex-col">
@@ -47,6 +41,8 @@ export const SplitView: React.FC<SplitViewProps> = ({
           onNavigate={onNavigate}
           onOpenAssistantSettings={onOpenAssistantSettings}
           onCloseSplit={onCloseSplit}
+          registerPdfControls={registerPdfControls}
+          pdfControlsFor={pdfControlsFor}
         />
       )}
 
@@ -79,9 +75,10 @@ export const SplitView: React.FC<SplitViewProps> = ({
  * The PDF viewer owns page/zoom/rotation, so it must render its own controls —
  * but they have to APPEAR in the universal pane header, not in a second toolbar
  * of its own. The viewer publishes its controls here and the header renders
- * whatever is registered for its pane. This lives at module scope because both
- * the single-pane and split bodies need it, and a per-component copy would let
- * the two drift.
+ * whatever is registered for its pane. This is a hook, so it creates state: it
+ * MUST be called once, at the top of `SplitView`, and the resulting functions
+ * handed down. Calling it separately in the split and single-pane bodies would
+ * give each its own registry.
  */
 const usePdfControls = () => {
   const [pdfControls, setPdfControls] = useState<Record<number, React.ReactNode>>({});
@@ -106,16 +103,21 @@ const usePdfControls = () => {
   return { registerPdfControls, pdfControlsFor };
 };
 
+type PdfControls = ReturnType<typeof usePdfControls>;
+
 /* ---------------- The two-pane body ---------------- */
 
 interface SplitBodyProps extends Omit<SplitViewProps, 'state'> {
   state: SplitState;
+  /** The ONE shared control registry, owned by `SplitView`. */
+  registerPdfControls: PdfControls['registerPdfControls'];
+  pdfControlsFor: PdfControls['pdfControlsFor'];
 }
 
 const SplitBody: React.FC<SplitBodyProps> = ({
   state, setState, onNavigate, onOpenAssistantSettings, onCloseSplit,
+  registerPdfControls, pdfControlsFor,
 }) => {
-  const { registerPdfControls, pdfControlsFor } = usePdfControls();
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [stacked, setStacked] = useState(false);
   const draggingRef = useRef(false);
@@ -174,7 +176,6 @@ const SplitBody: React.FC<SplitBodyProps> = ({
             split={isSplit(state)}
             maximized={maximized === index}
             setState={setState}
-            onCloseSplit={onCloseSplit}
             pdfControls={pdfControlsFor(index, slot)}
           >
             <PaneContent
