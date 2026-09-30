@@ -88,6 +88,11 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     },
   });
 
+  // Exposed so the Playwright checks in scripts/ can assert against the LIVE
+  // editor rather than only the stored string. Harmless in production: it is the
+  // same object React already holds and nothing but a test reads it.
+  (window as unknown as Record<string, unknown>).__noteEditor = editor;
+
   useEffect(() => {
     if (!editor) return;
     editor.commands.setContent(sanitizeEditorHtml(html), { emitUpdate: false });
