@@ -3,6 +3,7 @@ import { ArrowLeft, Minimize2, PanelLeftClose, PanelLeftOpen } from 'lucide-reac
 import { useAssistantStore } from '../../../stores/useAssistantStore';
 import { AssistantChat } from './AssistantChat';
 import { AssistantSessionList } from './AssistantSessionList';
+import { Z } from '../../../components/ui/zIndex';
 
 interface AssistantPageProps {
   onOpenSettings: () => void;
@@ -85,7 +86,7 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
 
       {/* Mobile drawer */}
       {drawerOpen && (
-        <div className="md:hidden fixed inset-0 z-50 flex">
+        <div className={`md:hidden fixed inset-0 ${Z.modal} flex`}>
           <div className="absolute inset-0 bg-black/50" onClick={() => setDrawerOpen(false)} />
           <aside className="relative w-72 max-w-[80vw] flex flex-col bg-bg-surface border-r border-border shadow-2xl">
             <AssistantSessionList onNavigate={() => setDrawerOpen(false)} />

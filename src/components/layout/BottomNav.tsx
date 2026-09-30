@@ -1,5 +1,6 @@
 import React from 'react';
 import { navItems, type NavTab } from './Sidebar';
+import { Z } from '../ui/zIndex';
 
 interface BottomNavProps {
   activeTab: NavTab;
@@ -8,7 +9,7 @@ interface BottomNavProps {
 
 export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, onSelectTab }) => {
   return (
-    <nav className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-bg-surface/90 backdrop-blur-lg border-t border-border z-40 px-2 flex items-center justify-around">
+    <nav className={`md:hidden fixed bottom-0 left-0 right-0 h-16 bg-bg-surface/90 backdrop-blur-lg border-t border-border ${Z.nav} px-2 flex items-center justify-around`}>
       {/* `hideOnMobile` items are reachable from the desktop sidebar and from
           Settings, but stay out of the phone bar so six labels still fit. */}
       {navItems.filter((item) => !item.hideOnMobile).map((item) => {

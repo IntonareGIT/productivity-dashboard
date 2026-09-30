@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { Loader2, X } from 'lucide-react';
 import type { Resource } from '../../types';
 import { previewKindFor } from '../library/previewKind';
+import { Z } from '../../components/ui/zIndex';
 
 interface FullScreenPreviewProps {
   resource: Resource;
@@ -103,7 +104,7 @@ export const FullScreenPreview: React.FC<FullScreenPreviewProps> = ({ resource, 
       aria-label={`${resource.title} full screen preview`}
       // Fallback for browsers without the Fullscreen API. When the API exists
       // this element IS the fullscreen element and fills the screen anyway.
-      className="fixed inset-0 z-[70] flex flex-col bg-bg-primary p-3 sm:p-5 overflow-hidden"
+      className={`fixed inset-0 ${Z.fullscreen} flex flex-col bg-bg-primary p-3 sm:p-5 overflow-hidden`}
     >
       <div className="flex items-center gap-2 mb-3 shrink-0">
         <p className="flex-1 min-w-0 truncate text-sm font-semibold text-content-primary">

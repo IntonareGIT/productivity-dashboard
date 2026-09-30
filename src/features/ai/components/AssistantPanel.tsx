@@ -1,5 +1,6 @@
 import React from 'react';
 import { Expand, Trash2, X } from 'lucide-react';
+import { Z } from '../../../components/ui/zIndex';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
 import { AssistantChat } from './AssistantChat';
 
@@ -24,7 +25,7 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({ onOpenSettings, 
   if (!open) return null;
 
   return (
-    <div className="fixed z-50 inset-0 sm:inset-auto sm:bottom-24 sm:right-6 sm:w-[380px] sm:max-h-[65vh] flex flex-col bg-bg-surface sm:rounded-2xl sm:border sm:border-border sm:shadow-2xl overflow-hidden">
+    <div className={`fixed ${Z.modal} inset-0 sm:inset-auto sm:bottom-24 sm:right-6 sm:w-[380px] sm:max-h-[65vh] flex flex-col bg-bg-surface sm:rounded-2xl sm:border sm:border-border sm:shadow-2xl overflow-hidden`}>
       <AssistantChat
         onOpenSettings={onOpenSettings}
         headerExtra={

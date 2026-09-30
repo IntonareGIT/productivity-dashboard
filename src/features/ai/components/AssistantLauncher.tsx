@@ -1,6 +1,7 @@
 import React from 'react';
 import { Sparkles } from 'lucide-react';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
+import { Z } from '../../../components/ui/zIndex';
 
 interface AssistantLauncherProps {
   /** Jump to Settings when AI is not configured yet. */
@@ -40,7 +41,7 @@ export const AssistantLauncher: React.FC<AssistantLauncherProps> = ({
       }}
       title={configured ? 'Ask the assistant' : 'Configure an AI provider in Settings first'}
       aria-label={configured ? 'Open AI assistant' : 'Configure AI provider in Settings'}
-      className={`fixed bottom-20 right-4 sm:bottom-6 sm:right-6 z-40 w-14 h-14 rounded-2xl shadow-xl flex items-center justify-center transition-all hover:scale-105 ${
+      className={`fixed bottom-20 right-4 sm:bottom-6 sm:right-6 ${Z.nav} w-14 h-14 rounded-2xl shadow-xl flex items-center justify-center transition-all hover:scale-105 ${
         configured ? 'bg-accent hover:bg-accent-hover text-white' : 'bg-bg-elevated border border-dashed border-border-strong text-content-tertiary'
       }`}
     >

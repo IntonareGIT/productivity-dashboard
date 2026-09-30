@@ -5,6 +5,7 @@ import { useCloudAccount } from '../../features/settings/components/useCloudAcco
 import { SyncAccountPanel } from '../../features/settings/components/SyncAccountPanel';
 import type { NavTab } from '../layout/Sidebar';
 import type { ThemeMode, UserStatus } from '../../types';
+import { Z } from '../ui/zIndex';
 
 const THEMES: { value: ThemeMode; label: string; swatch: string }[] = [
   { value: 'studying', label: 'Indigo', swatch: 'bg-indigo-500' },
@@ -109,13 +110,16 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ onNavigate }) => {
 
       {open && (
         <>
-          {/* Click-away backdrop; transparent on desktop, dims the sheet on mobile. */}
-          <div className="fixed inset-0 z-40 md:bg-transparent" onClick={() => setOpen(false)} aria-hidden="true" />
+          {/* Click-away backdrop; transparent on desktop, dims the sheet on mobile.
+              Kept IN PLACE (not portalled): the menu below is `md:absolute`,
+              anchored to this button, so a portal would detach it. Both layers
+              still take their level from the shared scale. */}
+          <div className={`fixed inset-0 ${Z.nav} md:bg-transparent`} onClick={() => setOpen(false)} aria-hidden="true" />
 
           <div
             role="menu"
             aria-label="Account and appearance"
-            className="fixed inset-x-0 bottom-0 z-50 max-h-[85vh] overflow-y-auto rounded-t-2xl border-t border-border bg-bg-surface p-3 shadow-2xl md:absolute md:inset-auto md:right-0 md:top-full md:mt-2 md:w-80 md:rounded-2xl md:border md:max-h-[80vh]"
+            className={`fixed inset-x-0 bottom-0 ${Z.popover} max-h-[85vh] overflow-y-auto rounded-t-2xl border-t border-border bg-bg-surface p-3 shadow-2xl md:absolute md:inset-auto md:right-0 md:top-full md:mt-2 md:w-80 md:rounded-2xl md:border md:max-h-[80vh]`}
           >
             <div className="md:hidden pb-2">
               <div className="mx-auto h-1 w-10 rounded-full bg-border" />

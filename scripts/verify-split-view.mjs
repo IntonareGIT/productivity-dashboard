@@ -348,7 +348,11 @@ const touchHook = readFileSync('src/features/library/useZoomAnchor.ts', 'utf8');
     /updateTopicNotes/.test(notesPane));
   check('10 the PDF pane reuses the shared ResourceViewer', /<ResourceViewer/.test(paneContent));
 
-  check('10 full screen is a separate overlay, not a pane', /fixed inset-0 z-\[70\]/.test(fullScreen));
+  // The level now comes from the shared scale in src/components/ui/zIndex.ts, so
+  // assert the REFERENCE rather than a literal that any change would invalidate.
+  check('10 full screen is a separate overlay, not a pane',
+    /fixed inset-0 \$\{Z\.fullscreen\}/.test(fullScreen)
+    && /fullscreen: 'z-\[\d+\]'/.test(readFileSync('src/components/ui/zIndex.ts', 'utf8')));
   check('10 full screen closes on Escape', /'Escape'/.test(fullScreen));
   // The duplicate viewer WAS the bug: fullscreen is now the same element
   // promoted by the browser, so no second PdfViewer is ever mounted.

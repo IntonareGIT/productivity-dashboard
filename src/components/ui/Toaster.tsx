@@ -1,6 +1,7 @@
 import React from 'react';
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 import { useToastStore, type ToastKind } from '../../stores/useToastStore';
+import { Z } from './zIndex';
 
 const STYLES: Record<ToastKind, { wrap: string; icon: React.ComponentType<{ className?: string }> }> = {
   success: { wrap: 'border-emerald-500/40 bg-emerald-500/10', icon: CheckCircle2 },
@@ -16,7 +17,7 @@ export const Toaster: React.FC = () => {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed top-16 right-3 sm:right-4 z-[60] flex flex-col gap-2 w-[calc(100vw-1.5rem)] sm:w-80 pointer-events-none">
+    <div className={`fixed top-16 right-3 sm:right-4 ${Z.toast} flex flex-col gap-2 w-[calc(100vw-1.5rem)] sm:w-80 pointer-events-none`}>
       {toasts.map((t) => {
         const meta = STYLES[t.kind];
         const Icon = meta.icon;

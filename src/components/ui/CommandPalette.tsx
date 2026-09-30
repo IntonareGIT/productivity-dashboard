@@ -19,6 +19,8 @@ import { setOverrideForDate, clearOverrideForDate } from '../../features/shifts/
 import { usePomodoroStore } from '../../stores/usePomodoroStore';
 import { useAssistantStore } from '../../stores/useAssistantStore';
 import type { NavTab } from '../layout/Sidebar';
+import { createPortal } from 'react-dom';
+import { Z } from './zIndex';
 
 interface CommandPaletteProps {
   open: boolean;
@@ -198,8 +200,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   let lastGroup = '';
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center">
+  const content = (
+    <div className={`fixed inset-0 ${Z.modal} flex items-start sm:items-center justify-center`}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px]" onClick={onClose} />
       <div
         role="dialog"
@@ -277,4 +279,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       </div>
     </div>
   );
+
+  // Same reasoning as Modal: a portal escapes any ancestor that creates a
+  // containing block, so the palette is never trapped under the header.
+  if (typeof document === 'undefined') return content;
+  return createPortal(content, document.body);
 };

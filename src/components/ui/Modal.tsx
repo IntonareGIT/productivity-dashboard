@@ -1,5 +1,7 @@
 import React, { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { Z } from './zIndex';
 
 interface ModalProps {
   open: boolean;
@@ -40,8 +42,18 @@ export const Modal: React.FC<ModalProps> = ({ open, onClose, title, subtitle, si
 
   if (!open) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+  // Rendered through a PORTAL onto <body>. In place, a `fixed inset-0` dialog is
+  // still positioned relative to the nearest ancestor that creates a containing
+  // block (anything with `transform`, `filter`, `backdrop-filter`,
+  // `will-change` or `contain`), and it is clipped by any ancestor
+  // `overflow: hidden`. Those are everywhere in this app: subject cards use
+  // `hover:-translate-y-0.5`, the header uses `backdrop-blur`, and panes set
+  // `contain`. The dialog then renders underneath, or inside, its own opener,
+  // which is the reported "the edit window is not visible until I go back".
+  //
+  // A portal escapes all of that, so a dialog is always on top of everything.
+  const content = (
+    <div className={`fixed inset-0 ${Z.modal} flex items-end sm:items-center justify-center`}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px]" onClick={onClose} />
       <div
         role="dialog"
@@ -66,4 +78,7 @@ export const Modal: React.FC<ModalProps> = ({ open, onClose, title, subtitle, si
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') return content;
+  return createPortal(content, document.body);
 };
