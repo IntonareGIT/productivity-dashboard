@@ -511,6 +511,8 @@ export interface AssessmentInput {
   subjectId: string;
   name: string;
   type: AssessmentType;
+  /** Optional since Phase 5: '' means "no date chosen", and the assessment is
+   *  then omitted from the calendar. Existing rows keep their date. */
   date: string;
   weight?: number | null;
   status?: AssessmentStatus;
@@ -520,8 +522,11 @@ export async function saveAssessment(input: AssessmentInput): Promise<string> {
   const name = (input.name ?? '').trim();
   if (!name) throw new Error('Assessment name is required');
   if (!input.subjectId) throw new Error('subjectId is required');
+  // The date is OPTIONAL. It used to be required, which made it impossible to
+  // record "I know there is an exam but not when". An assessment with no date
+  // simply does not appear on the calendar; it is still listed in its subject
+  // with "No date". Nothing is deleted or rewritten to allow this.
   const date = (input.date ?? '').trim();
-  if (!date) throw new Error('Assessment date is required');
   const type: AssessmentType = input.type ?? 'exam';
   const status: AssessmentStatus = input.status ?? 'upcoming';
   const weight = input.weight ?? null;

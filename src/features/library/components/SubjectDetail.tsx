@@ -139,6 +139,29 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
   );
 }
 
+/**
+ * "in 3 days" / "today" / "2 days ago" for an assessment, or null when it
+ * makes no sense (no date, or already marked done).
+ *
+ * Calendar days, not 24-hour spans: an assessment on the 30th is "today" for
+ * the whole of the 30th, and a part-day difference would say "tomorrow" for
+ * something eight hours away.
+ */
+function daysLeftLabel(date: string, status: string): string | null {
+  if (!date || status === 'done') return null;
+  const [y, m, d] = date.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const target = Date.UTC(y, m - 1, d);
+  const days = Math.round((target - todayUtc) / 86_400_000);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Tomorrow';
+  if (days > 1) return `In ${days} days`;
+  if (days === -1) return 'Yesterday';
+  return `${Math.abs(days)} days ago`;
+}
+
 /** Subject detail: progress + topics grid + two-pane topic view + assessments + focus stats. */
 export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, onEditSubject, onDeleteSubject, onSplitWithNotes }) => {
   const topics = useLiveQuery(() => db.topics.where('subjectId').equals(subject.id).toArray(), [subject.id]) ?? [];
@@ -607,7 +630,19 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
                         <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold bg-accent-subtle text-accent-text uppercase">{a.type}</span>
                         {a.weight != null && <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold bg-bg-elevated text-content-secondary">{a.weight}%</span>}
                       </div>
-                      <p className="text-[11px] text-content-secondary mt-1 flex items-center gap-1"><CalendarClock className="w-3 h-3" /> {a.date}</p>
+                      {/* The countdown, not just the raw date: "in 3 days" is what
+                          the user needs at a glance. An assessment with no date
+                          still shows here, so no row renders a bare "in NaN". */}
+                      <p className="text-[11px] text-content-secondary mt-1 flex items-center gap-1.5 flex-wrap">
+                        <span className="inline-flex items-center gap-1">
+                          <CalendarClock className="w-3 h-3" /> {a.date || 'No date'}
+                        </span>
+                        {daysLeftLabel(a.date, a.status) && (
+                          <span className="px-1.5 py-0.5 rounded bg-bg-elevated text-content-secondary font-semibold">
+                            {daysLeftLabel(a.date, a.status)}
+                          </span>
+                        )}
+                      </p>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <button onClick={() => setEditingAssessment(a)} aria-label="Edit assessment" className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
