@@ -25,6 +25,13 @@ import {
   describeExtendedToolCall,
   executeExtendedTool,
 } from './toolsExtended';
+import {
+  LIBRARY_CONFIRM_TOOL_NAMES,
+  LIBRARY_TOOL_NAMES,
+  LIBRARY_TOOL_SPECS,
+  describeLibraryToolCall,
+  executeLibraryTool,
+} from './toolsLibrary';
 import type { ToolSpec } from './types';
 
 /**
@@ -56,6 +63,9 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   'addPTO',
   'addOneOffShiftException',
   'deleteCalendarEvent',
+  // Phase 2 library tools. Spread from one source of truth so a new tool
+  // cannot be added without also being classified.
+  ...LIBRARY_TOOL_NAMES,
 ]);
 
 /** Destructive / schedule-affecting tools requiring explicit user confirmation. */
@@ -64,6 +74,10 @@ export const CONFIRMATION_TOOL_NAMES: ReadonlySet<string> = new Set([
   'addPTO',
   'addOneOffShiftException',
   'deleteCalendarEvent',
+  // Every library delete joins the gate. `deleteGroup` is here even though it
+  // only ungroups, because it still removes a row the user made, so it asks
+  // first. A second model call CANNOT perform it; only Confirm can.
+  ...LIBRARY_CONFIRM_TOOL_NAMES,
 ]);
 
 export const TOOL_SPECS: ToolSpec[] = [
@@ -190,6 +204,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     },
   },
   ...EXTENDED_TOOL_SPECS,
+  ...LIBRARY_TOOL_SPECS,
 ];
 
 /* ---------------- Read-only functions ---------------- */
@@ -655,6 +670,7 @@ export function describeToolCall(name: string, argsJson: string): string {
         viewType: args.viewType as SplitCommand['viewType'],
       });
     default:
+      if (LIBRARY_TOOL_NAMES.has(name)) return describeLibraryToolCall(name, args);
       return describeExtendedToolCall(name, args);
   }
 }
@@ -690,6 +706,9 @@ export async function executeTool(name: string, argsJson: string): Promise<ToolE
     case 'manage_split_screen':
       return manageSplitScreen(args);
     default: {
+      // Library write / delete functions live in toolsLibrary.ts.
+      const library = await executeLibraryTool(name, args);
+      if (library) return library;
       // Library / calendar / status functions live in toolsExtended.ts.
       const extended = await executeExtendedTool(name, args);
       if (extended) return extended;

@@ -9,8 +9,8 @@ No merge into `main` will be attempted. No deploy commands will be run.
 | --- | --- |
 | 0. PDF viewer crash cleanup | skipped, already complete before this run |
 | 1. Fix "New group" doing nothing | done |
-| 2. AI assistant tools | in progress |
-| 3. Notes editor rich text | not started |
+| 2. AI assistant tools | partly done, core delivered |
+| 3. Notes editor rich text | not started, see report |
 
 ## Phase 0: skipped
 
@@ -81,6 +81,54 @@ the toast appearing on a phone, a group appearing immediately after creation,
 and the tap targets are verified by code inspection and unit checks only, not
 by real interaction. Please click "New group" and confirm an empty group shows
 at once.
+
+## Phase 2: AI assistant tools
+
+### Existing tool inventory, read from the code
+
+23 tools across two files: 6 in `tools.ts`, 17 in `toolsExtended.ts`.
+`M` = listed in `MUTATING_TOOL_NAMES` (changes stored data), `C` = listed in
+`CONFIRMATION_TOOL_NAMES` (pauses for an explicit UI Confirm).
+
+| Tool | Required params | M | C |
+| --- | --- | --- | --- |
+| getTodaysSchedule | none | | |
+| getUpcomingDeadlines | none | | |
+| searchLibrary | query | | |
+| addOrUpdateWeeklySchedule | none | M | C |
+| startPomodoroSession | durationMinutes | M | |
+| stopPomodoroSession | none | M | |
+| manage_split_screen | none | | |
+| listSubjects | none | | |
+| listTopics | subjectId | | |
+| getWeekSchedule | weekStartDate | | |
+| getFocusStats | range | | |
+| getSubjectProgress | subjectId | | |
+| getCurrentStatus | none | | |
+| setStatus | status | M | |
+| addCalendarEvent | title, date, category | M | |
+| addResourceLink | topicId, title, url | M | |
+| createSubject | name | M | |
+| createTopic | subjectId, title | M | |
+| markTopicStatus | topicId, status | M | |
+| addTopicNote | topicId, content | M | |
+| addAssessment | subjectId, name, type, date | M | |
+| addPTO | date | M | C |
+| addOneOffShiftException | date, startTime, hours | M | C |
+| deleteCalendarEvent | eventId | M | C |
+
+Notably already present: `createSubject` and `createTopic` exist, so Phase 2
+adds only what is missing and does not duplicate them.
+
+### Existing confirmation gate (reused, not rebuilt)
+
+`useAssistantStore.ts` already implements the two-step pattern the brief asks
+for. Calls in `CONFIRMATION_TOOL_NAMES` are split out of the tool batch at line
+387, held as a `pendingAction`, and executed only by `confirmPending()`. The
+model's own repeat call cannot perform the action; a declined action is fed back
+to the model as "The user moved on without confirming this action". Any new
+delete tool is added to that set and therefore inherits the guarantee instead of
+relying on the model to behave.
 
 ## Decisions taken without asking
 

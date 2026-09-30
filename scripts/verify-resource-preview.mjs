@@ -1056,6 +1056,13 @@ const stripComments = (src) => src
   const pdf = readFileSync('src/features/library/components/PdfViewer.tsx', 'utf8');
   // The source with comments stripped — see `stripComments` at module scope.
   const pdfCode = stripComments(pdf);
+  // Same strip, but also dropping whole-line comment prose. `stripComments`
+  // removes the `//` marker yet leaves the text of a wrapped prose line, so a
+  // comment can still quote an expression a check below wants to ban.
+  const pdfCodeOnly = pdfCode
+    .split('\n')
+    .filter((l) => !/^\s*[\/*]{1,2}\s*[A-Za-z`]/.test(l))
+    .join('\n');
   const wheel = (pdf.match(/const onWheel = \(e: WheelEvent\) => \{[\s\S]*?\n {4}\};/g) || []).join('\n');
   const touch = (pdf.match(/const onMove = \(e: TouchEvent\) => \{[\s\S]*?\n {4}\};/g) || []).join('\n');
 
@@ -1081,8 +1088,13 @@ const stripComments = (src) => src
     /applyLive\(after, e\.clientX, e\.clientY\)/.test(wheel) &&
     /advanceGestureScale\(before, e\.deltaY, e\.deltaMode\)/.test(wheel) &&
     // Stripped of comments: the prose explaining the old bug quotes the very
-    // expression being banned, so a naive search would match the explanation.
-    !/zoomRef\.current \* liveScaleRef\.current/.test(pdfCode),
+    // expression being banned, so a naive search would match the EXPLANATION of the
+    // bug rather than the bug. `pdfCodeOnly` drops whole-line comments too: a
+    // wrapped prose line can sit inside a `//` comment whose opening was consumed
+    // by the block-comment pass, and it still quotes the banned expression.
+    // The pattern is also anchored so it cannot match as a SUFFIX of the legitimate
+    // `gestureStartZoomRef.current * liveScaleRef.current`.
+    !/(?<!Start)zoomRef\.current \* liveScaleRef\.current/.test(pdfCodeOnly),
     'committed zoom must never be multiplied into the running ratio');
   check('10 the delta is normalised by deltaMode before use',
     /normalizeWheelDelta\(e\.deltaY, e\.deltaMode\)/.test(pdf) &&
@@ -1117,7 +1129,9 @@ const stripComments = (src) => src
   // exactly ONE assignment site, and it must sit inside the first-tick guard.
   check('10 the focal point is captured once and never re-taken',
     (pdf.match(/focalRef\.current = \{ x: clientX, y: clientY \};/g) || []).length === 1 &&
-    /if \(!gestureRef\.current\) \{[\s\S]{0,300}?focalRef\.current = \{ x: clientX, y: clientY \};/.test(pdfCode) &&
+    // The guard body grew when staged-swap aborting was added, so the window is
+    // wide enough to reach the assignment but still bounded to the first tick.
+    /if \(!gestureRef\.current\) \{[\s\S]{0,900}?focalRef\.current = \{ x: clientX, y: clientY \};/.test(pdfCode) &&
     /const focal = focalRef\.current \?\? \{ x: clientX, y: clientY \};/.test(pdf),
     `assignments ${(pdf.match(/focalRef\.current = \{ x: clientX, y: clientY \};/g) || []).length}`);
   // The preview and the commit MUST resolve a target through the same

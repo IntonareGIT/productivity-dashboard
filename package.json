@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "generate:icons": "node scripts/generate-icons.mjs",
-    "verify": "node scripts/verify-theme-persistence.mjs && node scripts/verify-app-invariants.mjs && node scripts/verify-about-help.mjs && node scripts/verify-resource-form.mjs && node scripts/verify-resource-groups.mjs && node scripts/verify-groups-ui.mjs && node scripts/verify-note-titles.mjs && node scripts/verify-note-formatting.mjs && node scripts/verify-resource-preview.mjs && node scripts/verify-split-view.mjs && node scripts/verify-extended-tools.mjs && node scripts/verify-chat-history.mjs && node scripts/verify-thought-signature.mjs && node scripts/verify-thinking.mjs"
+    "verify": "node scripts/verify-theme-persistence.mjs && node scripts/verify-app-invariants.mjs && node scripts/verify-about-help.mjs && node scripts/verify-resource-form.mjs && node scripts/verify-resource-groups.mjs && node scripts/verify-groups-ui.mjs && node scripts/verify-note-titles.mjs && node scripts/verify-note-formatting.mjs && node scripts/verify-resource-preview.mjs && node scripts/verify-split-view.mjs && node scripts/verify-extended-tools.mjs && node scripts/verify-ai-tools-library.mjs && node scripts/verify-chat-history.mjs && node scripts/verify-thought-signature.mjs && node scripts/verify-thinking.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
