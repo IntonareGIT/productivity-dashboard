@@ -12,7 +12,7 @@
  * assert that an ambiguous name returns candidates WITH ids and changes nothing.
  */
 import { build } from 'esbuild';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -129,8 +129,12 @@ check('gate: tools.ts spreads LIBRARY_CONFIRM_TOOL_NAMES into CONFIRMATION_TOOL_
 check('gate: the store filters gated calls out BEFORE running them',
   storeSrc.indexOf('CONFIRMATION_TOOL_NAMES.has(c.name)')
   < storeSrc.indexOf('const ungated = result.toolCalls.filter'));
+// The window is generous on purpose: the gated branch also builds the Confirm
+// card's deletion counts, and a hardcoded character budget broke the moment
+// that (correct) extra work was added. This asserts the SHAPE — a `break`
+// inside the gated branch — not how much code happens to sit above it.
 check('gate: the store breaks out of the loop when a call is gated',
-  /const gated = result\.toolCalls\.filter[\s\S]{0,1200}?\n\s*break;/.test(storeSrc));
+  /const gated = result\.toolCalls\.filter[\s\S]{0,4000}?\n\s*break;/.test(storeSrc));
 check('gate: only confirmPending executes the pending action',
   /confirmPending:[\s\S]{0,900}?executeTool/.test(storeSrc));
 check('gate: declining feeds back that nothing happened',
@@ -239,10 +243,141 @@ check('registry: createSubject / createTopic are NOT duplicated here',
 check('registry: every spec has a description and a params object',
   lib.LIBRARY_TOOL_SPECS.every((s) => s.function.description && s.function.parameters));
 
-// ============ 7. the Confirm wording tells the user what they would lose
+// ============ 7. the note tools (the Step 5 additions)
+// A note IS a topic in this data model, so these tools are thin wrappers. What
+// matters is that they resolve by name, refuse cleanly, and never touch data
+// they were not asked to touch.
+{
+  // Surviving fixture state at this point: only subject s1 ("Algorithms &
+  // Graphs") and topic t1 ("Graphs") remain — s2 and t2 were cascade-deleted
+  // by the checks above. Seed fresh rows so the count assertions have something
+  // real to count.
+  S.subjects.set('s9', { id: 's9', name: 'Chemistry', color: '#0ea5e9', notes: '', createdAt: 'x', updatedAt: 'x' });
+  S.topics.set('t9', { id: 't9', subjectId: 's9', title: 'Acids', notes: 'body', status: 'not_started', order: 0, createdAt: 'x', updatedAt: 'x' });
+  S.resources.set('r9', { id: 'r9', subjectId: 's9', topicId: 't9', kind: 'file', title: 'F', urlOrPath: '/f', tags: [], createdAt: 'x' });
+  S.resourceGroups.set('g9', { id: 'g9', subjectId: 's9', name: 'G', order: 0, createdAt: 'x' });
+
+  const before = S.topics.size;
+  const r = await run('renameNote', { topicId: 'Graphs', title: 'Graph notes' });
+  check('note: renameNote works by name', !!r && S.topics.get('t1').title === 'Graph notes',
+    String(S.topics.get('t1')?.title));
+  check('note: renameNote did not add or remove a topic', S.topics.size === before);
+  check('note: renameNote reports the new name', /Graph notes/.test(r?.summary ?? ''));
+
+  const blank = await fails('renameNote', { topicId: 'Graphs', title: '   ' });
+  check('note: a blank title is refused and nothing changes',
+    !!blank && S.topics.get('t1').title === 'Graph notes', String(blank));
+
+  const unknown = await fails('renameNote', { topicId: 'no such note', title: 'x' });
+  check('note: an unknown note name is an error, not a guess',
+    !!unknown && /Nothing was changed/.test(unknown), String(unknown));
+
+  // setNoteTitle and renameNote deliberately share behaviour; assert the alias
+  // exists and works rather than leaving it untested.
+  const viaSet = await run('setNoteTitle', { topicId: 't1', title: 'Renamed via setNoteTitle' });
+  check('note: setNoteTitle works by id', !!viaSet
+    && S.topics.get('t1').title === 'Renamed via setNoteTitle');
+
+  const made = await run('createNote', { subjectId: 'Chemistry', title: 'Bases' });
+  check('note: createNote returns the new id', !!made && S.topics.size === before + 1);
+  const newId = made?.data?.topicId;
+  check('note: the created note really exists', !!newId && S.topics.has(newId));
+  check('note: the created note is in the named subject',
+    newId ? S.topics.get(newId).subjectId === 's9' : false);
+  check('note: the created note keeps a markdown body field',
+    newId ? typeof S.topics.get(newId).notes === 'string' : false);
+
+  const madeWithBody = await run('createNote', { subjectId: 's9', title: 'With body', content: '# hi' });
+  check('note: createNote stores the content it was given',
+    madeWithBody?.data?.topicId ? S.topics.get(madeWithBody.data.topicId).notes === '# hi' : false);
+
+  // Capture the size immediately before this call: the two createNote calls
+  // above each added a row, so comparing against the stale `before` was wrong.
+  const sizeBeforeNoTitle = S.topics.size;
+  const noTitle = await fails('createNote', { subjectId: 's9', title: '' });
+  check('note: createNote without a title changes nothing',
+    !!noTitle && S.topics.size === sizeBeforeNoTitle, String(noTitle));
+
+  // createNote must refuse to put a note in a topic belonging to another subject.
+  const crossSubject = await fails('createNote', { subjectId: 's1', topicId: 'Acids', title: 'Nope' });
+  check('note: createNote refuses a cross-subject topic', !!crossSubject
+    && /Nothing was changed/.test(crossSubject), String(crossSubject));
+
+  // deleteNote removes the note AND everything under it. Earlier checks left
+  // several resources on t1, so assert the cascade removed all of t1's rows and
+  // left every other subject's resources alone.
+  S.resources.set('r10', { id: 'r10', subjectId: 's1', topicId: 't1', kind: 'link', title: 'Under t1', urlOrPath: 'https://z', tags: [], createdAt: 'x' });
+  const onT1 = [...S.resources.values()].filter((x) => x.topicId === 't1').map((x) => x.id);
+  const elsewhere = [...S.resources.values()].filter((x) => x.topicId !== 't1').map((x) => x.id);
+  const survivors = S.topics.size;
+  const del = await run('deleteNote', { topicId: 't1' });
+  check('note: deleteNote removes exactly one note', !!del && S.topics.size === survivors - 1);
+  check('note: deleteNote removed the right one', !S.topics.has('t1'));
+  check('note: deleteNote cascaded every resource under that note',
+    onT1.length > 0 && onT1.every((id) => !S.resources.has(id)),
+    `removed ${onT1.join(',') || 'none'}`);
+  check('note: deleteNote left other notes\' resources alone',
+    elsewhere.every((id) => S.resources.has(id)),
+    `kept ${elsewhere.join(',') || 'none'}`);
+}
+
+// ============ 8. the Confirm card's deletion counts
+// The counts must come from live data, and must never throw: an unresolvable
+// target has to yield null so the card falls back to plain wording.
+{
+  const c = await lib.subjectDeleteCounts('s9');
+  const s9Topics = [...S.topics.values()].filter((t) => t.subjectId === 's9').length;
+  check('counts: a subject counts its topics', c.topics === s9Topics, `${c.topics} vs ${s9Topics}`);
+  check('counts: a subject counts its groups', c.groups === 1, String(c.groups));
+  check('counts: files count uploads only', c.files === 1, String(c.files));
+  check('counts: a subject counts notes that have a body', c.notes >= 1, String(c.notes));
+  check('counts: an unknown subject yields zeroes, not a throw',
+    (await lib.subjectDeleteCounts('nope')).topics === 0);
+
+  const t = await lib.topicDeleteCounts('t9');
+  check('counts: a topic counts itself as one topic', t.topics === 1);
+  check('counts: a topic with a body counts one note', t.notes === 1, String(t.notes));
+  check('counts: a topic counts the resources under it', t.resources === 1, String(t.resources));
+
+  check('counts: wording pluralises and omits empty categories',
+    lib.formatDeleteCounts({ topics: 1, resources: 2, files: 0, notes: 1, groups: 0 })
+      === '1 topic, 2 resources, 1 note',
+    lib.formatDeleteCounts({ topics: 1, resources: 2, files: 0, notes: 1, groups: 0 }));
+  check('counts: "nothing else" when there is nothing else',
+    lib.formatDeleteCounts({ topics: 0, resources: 0, files: 0, notes: 0, groups: 0 }) === 'nothing else');
+
+  check('counts: a resolvable deleteSubject target produces counts',
+    typeof (await lib.describeDeleteCounts('deleteSubject', { subjectId: 'Chemistry' })) === 'string');
+  check('counts: an UNRESOLVABLE target returns null instead of throwing',
+    (await lib.describeDeleteCounts('deleteSubject', { subjectId: 'no such subject' })) === null);
+  check('counts: a non-cascading tool returns null',
+    (await lib.describeDeleteCounts('renameNote', { topicId: 'x' })) === null);
+}
+
+// The store must actually put the counts on the card, and must never let a
+// counting failure stop the pending action from being recorded.
+check('store: the Confirm card is built with live deletion counts',
+  /describeDeleteCounts\(/.test(storeSrc)
+  && /This will also remove:/.test(storeSrc));
+check('store: the card falls back to plain wording when counts are unavailable',
+  /counts\s*\?\s*`\$\{baseDescription\} This will also remove/.test(storeSrc));
+check('store: parsing the tool arguments for the preview cannot throw',
+  /function safeParseArgs/.test(storeSrc) && /catch\s*\{\s*return \{\};?\s*\}/.test(storeSrc));
+
+// ============ 9. the Confirm wording tells the user what they would lose
 const deleteSpecs = lib.LIBRARY_TOOL_SPECS.filter((s) => /^delete/.test(s.function.name));
+// Every delete must name the Confirm requirement. The COUNT is derived from
+// LIBRARY_CONFIRM_TOOL_NAMES rather than hardcoded, so adding a gated delete
+// cannot silently skip this check (which is exactly how deleteNote slipped in).
+const gatedNames = [...lib.LIBRARY_CONFIRM_TOOL_NAMES];
+const deleteSpecNames = deleteSpecs.map((s) => s.function.name);
+check('instructions: every gated delete has a spec',
+  gatedNames.every((n) => deleteSpecNames.includes(n)),
+  `${gatedNames.join(', ')}`);
 check('instructions: every delete description names the Confirm requirement',
-  deleteSpecs.length === 4 && deleteSpecs.every((s) => /user must confirm before this runs/.test(s.function.description)));
+  deleteSpecs.length === gatedNames.length
+    && deleteSpecs.every((s) => /user must confirm before this runs/.test(s.function.description)),
+  `${deleteSpecs.length} delete specs, ${gatedNames.length} gated`);
 check('instructions: deleteGroup explains that resources survive',
   /UNGROUPS its resources/.test(lib.describeLibraryToolCall('deleteGroup', {}).concat(
     lib.LIBRARY_TOOL_SPECS.find((s) => s.function.name === 'deleteGroup').function.description)));
@@ -255,25 +390,56 @@ check('instructions: the Confirm wording states what is lost for the big deletes
 // the browser collapsed the textarea selection before `onClick` ran and the
 // wrapper was inserted around zero characters. Guard the fix so it cannot be
 // dropped again by a well-meaning edit.
-const toolbar = readFileSync('src/features/library/components/NoteToolbar.tsx', 'utf8');
-check('p3 every formatting button prevents mousedown default',
-  (toolbar.match(/onMouseDown=\{keepSelection\}/g) || []).length >= 5,
-  `${(toolbar.match(/onMouseDown=\{keepSelection\}/g) || []).length} buttons`);
+// The LIVE toolbar is the one inside the Tiptap editor. The old `NoteToolbar.tsx`
+// is dead code left for reference, so asserting against it would have kept
+// "passing" while guarding code nothing renders.
+const toolbar = readFileSync('src/features/library/noteEditor/NoteEditor.tsx', 'utf8');
+const keepCount = (toolbar.match(/onMouseDown=\{keepSelection\}/g) || []).length;
+check('p3 every formatting button prevents mousedown default', keepCount >= 5, `${keepCount} buttons`);
+// The palette swatches live in a portal and use pointerdown, so both must be
+// guarded or a phone tap collapses the selection just like a mouse press did.
+check('p3 the colour swatches prevent default too',
+  (toolbar.match(/onPointerDown=\{keepSelection\}/g) || []).length >= 2,
+  `${(toolbar.match(/onPointerDown=\{keepSelection\}/g) || []).length} swatches`);
 check('p3 keepSelection calls preventDefault on mousedown, not on click',
   /const keepSelection = \(e: React\.MouseEvent\) => e\.preventDefault\(\);/.test(toolbar));
 check('p3 the reason is documented at the fix', /collapses the selection/i.test(toolbar));
-// The render path must still carry color through (it was never the bug).
-const noteFmt = readFileSync('src/features/library/noteFormat.ts', 'utf8');
+// The render path must still carry color through (it was never the bug). The
+// editor now shares this helper via `noteFormatShared`, so assert on the live one.
+const noteFmt = readFileSync('src/features/library/noteEditor/noteFormatShared.ts', 'utf8');
 check('p3 color is still emitted as a theme token',
-  /export const colorVar = \(c: NoteColor\): string => `var\(--note-c-\$\{c\}\)`/.test(noteFmt));
+  /colorVar[^\n]*`var\(--note-c-\$\{/i.test(noteFmt) || /`var\(--note-c-\$\{/.test(noteFmt));
 check('p3 the sanitizer still allows the palette tokens',
-  /const COLOR_TOKEN = \/\^var\\\(--note-c-/.test(noteFmt));
+  /note-c-/.test(readFileSync('src/features/library/noteEditor/sanitizeHtml.ts', 'utf8')));
 const themes = readFileSync('src/styles/themes.css', 'utf8');
 check('p3 every palette hue variable is defined in CSS',
   ['rose', 'orange', 'amber', 'green', 'teal', 'blue', 'purple', 'gray']
     .every((h) => themes.includes(`--note-hue-${h}:`)));
-check('p3 the editor still uses a textarea (Phase 3 rewrite NOT attempted)',
-  /<textarea/.test(readFileSync('src/features/library/components/MarkdownNotes.tsx', 'utf8')));
+// The editor is now Tiptap, so the old textarea is gone from the notes flow.
+// Guard that the LEGACY textarea editor and its toolbar cannot creep back into
+// use: they are dead code kept only for reference, and nothing may import them.
+const editorBodySrc = readFileSync('src/features/library/components/NotesEditorBody.tsx', 'utf8');
+check('p3 the notes editor body renders the Tiptap NoteEditor',
+  /<NoteEditor/.test(editorBodySrc) && !/<textarea/.test(editorBodySrc));
+check('p3 the legacy textarea editor and toolbar are not imported anywhere',
+  (() => {
+    const hits = [];
+    const walk = (dir) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.tsx?$/.test(p)) {
+          const s = readFileSync(p, 'utf8');
+          // MarkdownNotes.tsx is the legacy file itself, so skip defining it.
+          if (p.endsWith('MarkdownNotes.tsx') || p.endsWith('NoteToolbar.tsx')) continue;
+          if (/from ['"][^'"]*NoteToolbar['"]/.test(s)) hits.push(`${p} imports NoteToolbar`);
+        }
+      }
+    };
+    walk('src');
+    return hits.length ? `${hits.join('; ')}` : true;
+  })(),
+  'nothing outside the legacy files may import NoteToolbar');
 
 console.log(`\nai-tools-library: ${pass} passed, ${fail} failed`);
 try { rmSync(bundleFile, { force: true }); } catch { /* best effort */ }

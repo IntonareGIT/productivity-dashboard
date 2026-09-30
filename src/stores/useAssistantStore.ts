@@ -22,6 +22,7 @@ import {
   executeTool,
 } from '../features/ai/tools';
 import type { AssistantViewMessage } from '../features/ai/chatRepo';
+import { describeDeleteCounts } from '../features/ai/toolsLibrary';
 import type { ChatMessage } from '../features/ai/types';
 import type { AiProvider, ChatSession } from '../types';
 import { newId } from '../utils/id';
@@ -31,6 +32,16 @@ const MAX_TOOL_ROUNDS = 4;
 
 /** How many stored messages are replayed to the model on a new turn. */
 const CONTEXT_WINDOW = 20;
+
+/** Parse a tool's arguments without throwing; a preview must never be the failure. */
+function safeParseArgs(argsJson: string): Record<string, unknown> {
+  try {
+    const v: unknown = JSON.parse(argsJson || '{}');
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
 
 function systemPrompt(now: Date): string {
   return [
@@ -76,6 +87,7 @@ function systemPrompt(now: Date): string {
     '- addOneOffShiftException(date, startTime, hours).',
     '- deleteCalendarEvent(eventId).',
     '- deleteResource(resourceId).',
+    '- deleteNote(topicId).',
     '- deleteTopic(topicId): removes the topic AND its resources and uploaded files.',
     '- deleteSubject(subjectId): removes the subject AND its topics, resources, uploaded files, notes and groups.',
     '- deleteGroup(groupId): removes ONLY the group. Its resources are kept and become ungrouped, so say so rather than implying files were lost.',
@@ -399,15 +411,27 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
           const gated = result.toolCalls.filter((c) => CONFIRMATION_TOOL_NAMES.has(c.name));
           if (gated.length > 0) {
             const first = gated[0];
+            // The Confirm card says WHAT will be lost, not just that something
+            // will be. `describeDeleteCounts` reads live counts off the database
+            // and never throws: an unresolvable target simply yields no counts and
+            // the card falls back to the plain description.
+            const baseDescription = describeToolCall(first.name, first.arguments);
+            const counts = await describeDeleteCounts(
+              first.name,
+              safeParseArgs(first.arguments),
+            );
+            const description = counts
+              ? `${baseDescription} This will also remove: ${counts}.`
+              : baseDescription;
             set({
               pending: {
                 name: first.name,
                 argsText: first.arguments,
-                description: describeToolCall(first.name, first.arguments),
+                description,
                 callId: first.id,
               },
             });
-            pushView({ role: 'tool', toolName: first.name, text: describeToolCall(first.name, first.arguments) });
+            pushView({ role: 'tool', toolName: first.name, text: description });
             // The UNGATED calls in the same turn still have to be answered. A
             // tool_calls turn followed immediately by a plain user message is
             // rejected by Gemini with HTTP 400, so they are executed now and the

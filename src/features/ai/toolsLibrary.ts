@@ -18,8 +18,8 @@ import { db } from '../../db/db';
 import type { Resource, Subject, Topic } from '../../types';
 import {
   deleteResource, deleteResourceGroup, deleteSubjectCascade, deleteTopicCascade,
-  listResourceGroups, moveResourceToGroup, renameResourceGroup, saveResource,
-  saveResourceGroup, saveSubject, saveTopic, setTopicTitle,
+  ensureDefaultTopic, listResourceGroups, moveResourceToGroup, renameResourceGroup,
+  saveResource, saveResourceGroup, saveSubject, saveTopic, setTopicTitle,
 } from '../library/libraryRepo';
 import { ToolError } from './toolRuntime';
 import { resolveByIdOrName, resolutionMessage } from './toolResolve';
@@ -40,6 +40,71 @@ const resourceRows = () => db.resources.toArray();
 const groupRows = () => db.resourceGroups.toArray();
 
 export const LIBRARY_TOOL_SPECS: ToolSpec[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'setNoteTitle',
+      description: "Set a note's title. Useful when the auto-derived title does not say what the note is about.",
+      parameters: {
+        type: 'object',
+        properties: {
+          topicId: { type: 'string', description: 'Topic id or exact title.' },
+          title: { type: 'string', description: 'New note title. A blank title falls back to the default.' },
+        },
+        required: ['topicId', 'title'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'createNote',
+      description:
+        'Create a new note in a subject (optionally inside a topic) and write markdown text into it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          subjectId: { type: 'string', description: 'Subject id or exact name.' },
+          topicId: { type: 'string', description: 'Optional topic id to put the note in.' },
+          title: { type: 'string', description: 'Note title.' },
+          content: { type: 'string', description: 'Markdown text for the note body.' },
+        },
+        required: ['subjectId', 'title'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'renameNote',
+      description: "Rename an existing note.",
+      parameters: {
+        type: 'object',
+        properties: {
+          topicId: { type: 'string', description: 'Topic id or exact title.' },
+          title: { type: 'string', description: 'New note title.' },
+        },
+        required: ['topicId', 'title'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'deleteNote',
+      description:
+        'Permanently delete one note. The user must confirm before this runs, and the Confirm card names the note first.',
+      parameters: {
+        type: 'object',
+        properties: { topicId: { type: 'string', description: 'Topic id or exact title.' } },
+        required: ['topicId'],
+        additionalProperties: false,
+      },
+    },
+  },
   {
     type: 'function',
     function: {
@@ -231,7 +296,111 @@ export const LIBRARY_TOOL_SPECS: ToolSpec[] = [
 
 type Args = Record<string, unknown>;
 
+/**
+ * Counts of everything a cascade delete would remove, for the Confirm card.
+ *
+ * The brief requires the card to show WHAT will be lost, not just that
+ * something will be. Counts are read live from the database at the moment the
+ * card is built, so they cannot drift from the data the delete will act on.
+ */
+export interface DeleteCounts {
+  topics: number;
+  resources: number;
+  files: number;
+  notes: number;
+  groups: number;
+}
+
+export async function subjectDeleteCounts(subjectId: string): Promise<DeleteCounts> {
+  const topics = await db.topics.where('subjectId').equals(subjectId).toArray();
+  const resources = await db.resources.where('subjectId').equals(subjectId).toArray();
+  const groups = await db.resourceGroups.where('subjectId').equals(subjectId).toArray();
+  return {
+    topics: topics.length,
+    resources: resources.length,
+    // "files" counts uploads only, which are the things with bytes behind them.
+    files: resources.filter((r) => r.kind === 'file').length,
+    // A topic's note IS its body, so one note per topic with content.
+    notes: topics.filter((t) => (t.notes ?? '').trim() || t.contentHtml).length,
+    groups: groups.length,
+  };
+}
+
+export async function topicDeleteCounts(topicId: string): Promise<DeleteCounts> {
+  const resources = await db.resources.where('topicId').equals(topicId).toArray();
+  const topic = await db.topics.get(topicId);
+  return {
+    topics: 1,
+    resources: resources.length,
+    files: resources.filter((r) => r.kind === 'file').length,
+    notes: topic && ((topic.notes ?? '').trim() || topic.contentHtml) ? 1 : 0,
+    groups: 0,
+  };
+}
+
+/** Render counts as a short human sentence, omitting empty categories. */
+export function formatDeleteCounts(c: DeleteCounts): string {
+  const bits: string[] = [];
+  if (c.topics) bits.push(`${c.topics} topic${c.topics === 1 ? '' : 's'}`);
+  if (c.resources) bits.push(`${c.resources} resource${c.resources === 1 ? '' : 's'}`);
+  if (c.files) bits.push(`${c.files} uploaded file${c.files === 1 ? '' : 's'}`);
+  if (c.notes) bits.push(`${c.notes} note${c.notes === 1 ? '' : 's'}`);
+  if (c.groups) bits.push(`${c.groups} group${c.groups === 1 ? '' : 's'}`);
+  return bits.length ? bits.join(', ') : 'nothing else';
+}
+
 const HANDLERS: Record<string, (a: Args) => Promise<ReturnType<typeof ok>>> = {
+  async setNoteTitle(a) {
+    const title = String(a.title ?? '').trim();
+    if (!title) throw new ToolError('A note needs a title. Nothing was changed.');
+    const topic = need(await topicRows(), a.topicId, (t: Topic) => t.title, 'note');
+    await setTopicTitle(topic.id, title);
+    return ok(`Renamed the note "${topic.title}" to "${title}".`, { topicId: topic.id, title });
+  },
+
+  async createNote(a) {
+    const title = String(a.title ?? '').trim();
+    if (!title) throw new ToolError('A note needs a title. Nothing was changed.');
+    const subject = need(await subjectRows(), a.subjectId, (s: Subject) => s.name, 'subject');
+    let subjectId = subject.id;
+    if (a.topicId) {
+      // A note inside a named topic means writing into that topic's own note,
+      // which is what `topicId` identifies in this app (notes ARE topics).
+      const topic = need(await topicRows(), a.topicId, (t: Topic) => t.title, 'note');
+      if (topic.subjectId !== subject.id) {
+        throw new ToolError(`"${topic.title}" belongs to a different subject than "${subject.name}". Nothing was changed.`);
+      }
+      subjectId = topic.subjectId;
+    } else {
+      // No topic named, so put it in the subject's default topic rather than
+      // inventing a topic the user did not ask for.
+      await ensureDefaultTopic(subject.id);
+    }
+    const content = String(a.content ?? '');
+    // `saveTopic` returns the new row's id.
+    const id = await saveTopic({
+      subjectId,
+      title,
+      notes: content,
+      status: 'not_started',
+    });
+    return ok(`Created note "${title}" in "${subject.name}".`, { topicId: id, subjectId, title });
+  },
+
+  async renameNote(a) {
+    const title = String(a.title ?? '').trim();
+    if (!title) throw new ToolError('A note needs a title. Nothing was changed.');
+    const topic = need(await topicRows(), a.topicId, (t: Topic) => t.title, 'note');
+    await setTopicTitle(topic.id, title);
+    return ok(`Renamed the note "${topic.title}" to "${title}".`, { topicId: topic.id, title });
+  },
+
+  async deleteNote(a) {
+    const topic = need(await topicRows(), a.topicId, (t: Topic) => t.title, 'note');
+    await deleteTopicCascade(topic.id);
+    return ok(`Deleted the note "${topic.title}".`, { topicId: topic.id, title: topic.title });
+  },
+
   async listGroups(a) {
     const subject = need(await subjectRows(), a.subjectId, (s: Subject) => s.name, 'subject');
     const groups = await listResourceGroups(subject.id);
@@ -372,7 +541,45 @@ export const LIBRARY_CONFIRM_TOOL_NAMES: ReadonlySet<string> = new Set([
   'deleteTopic',
   'deleteResource',
   'deleteGroup',
+  'deleteNote',
 ]);
+
+/**
+ * Counts for a gated delete, or null when the tool has nothing to cascade.
+ *
+ * The store calls this while BUILDING the Confirm card so the user sees what they
+ * are about to lose, not merely that something will be deleted. It is read-only:
+ * the counts describe the current data and the delete itself only runs later,
+ * after Confirm.
+ */
+export async function describeDeleteCounts(name: string, args: Args): Promise<string | null> {
+  // Resolve the target without importing the handlers' own guard, so a preview
+  // can never throw: an unresolvable id simply yields no counts and the card
+  // falls back to its plain description.
+  const idOf = async (arg: unknown, subjects: Subject[] | Topic[] | null, label: string) => {
+    if (!subjects) return null;
+    const nameOf = (row: Subject | Topic): string => ('name' in row ? row.name : row.title);
+    const r = resolveByIdOrName(
+      subjects as (Subject | Topic)[],
+      arg,
+      nameOf,
+      label,
+    );
+    return 'row' in r ? r.row.id : null;
+  };
+
+  if (name === 'deleteSubject') {
+    const id = await idOf(args.subjectId, await subjectRows(), 'subject');
+    if (!id) return null;
+    return formatDeleteCounts(await subjectDeleteCounts(id));
+  }
+  if (name === 'deleteTopic' || name === 'deleteNote') {
+    const id = await idOf(args.topicId, await topicRows(), 'note');
+    if (!id) return null;
+    return formatDeleteCounts(await topicDeleteCounts(id));
+  }
+  return null;
+}
 
 export async function executeLibraryTool(
   name: string,
@@ -389,6 +596,12 @@ export function describeLibraryToolCall(name: string, args: Args): string {
     case 'listGroups': return `List the resource groups of ${s('subjectId')}.`;
     case 'createGroup': return `Create a group “${s('name')}” in ${s('subjectId')}.`;
     case 'renameGroup': return `Rename group ${s('groupId')} to “${s('name')}”.`;
+    case 'renameNote': return `Rename the note ${s('topicId')} to “${s('title')}”.`;
+    case 'setNoteTitle': return `Set the title of note ${s('topicId')} to “${s('title')}”.`;
+    case 'createNote':
+      return `Create a note “${s('title')}” in ${s('subjectId')}`
+        + `${args.topicId ? ` using topic ${s('topicId')}` : ' in its default topic'}.`;
+    case 'deleteNote': return `PERMANENTLY DELETE the note ${s('topicId')}.`;
     case 'deleteGroup':
       return `Delete group ${s('groupId')}. Its resources are KEPT and become ungrouped.`;
     case 'moveResourceToGroup':

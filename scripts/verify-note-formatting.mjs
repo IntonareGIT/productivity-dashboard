@@ -243,7 +243,10 @@ check('unwrap: a lone closing tag is removed', unwrapFormatting('x</span>') === 
 /* ============================== 5. THEME TOKENS + WIRING (source assertions) */
 {
   const themes = readFileSync('src/styles/themes.css', 'utf8');
-  const toolbar = readFileSync('src/features/library/components/NoteToolbar.tsx', 'utf8');
+  // The LIVE toolbar is inside the Tiptap editor. `components/NoteToolbar.tsx` is
+  // the old textarea toolbar, kept only for reference: asserting against it
+  // would pass while guarding a component nothing renders any more.
+  const toolbar = readFileSync('src/features/library/noteEditor/NoteEditor.tsx', 'utf8');
   const md = readFileSync('src/features/library/components/MarkdownNotes.tsx', 'utf8');
 
   check('themes: all 8 palette colors are defined', NOTE_COLORS.every((c) => new RegExp(`--note-c-${c}:`).test(themes)));
@@ -259,17 +262,25 @@ check('unwrap: a lone closing tag is removed', unwrapFormatting('x</span>') === 
   check('toolbar: 40px touch targets throughout', (toolbar.match(/min-h-\[40px\]/g) ?? []).length >= 3);
   check('toolbar: has a clear-formatting control', /Clear formatting/.test(toolbar));
   check('toolbar: offers all three alignments', /AlignLeft[\s\S]*AlignCenter[\s\S]*AlignRight/.test(toolbar));
-  check('toolbar: renders the size presets from the shared list', /SIZE_PRESETS\.map/.test(toolbar) && /aria-label=\{`Font size/.test(toolbar));
+  // The live editor drives sizes from its own FONT_SIZES list (the custom
+  // FontSize extension), not the legacy markdown SIZE_PRESETS.
+  check('toolbar: renders the size presets from the shared list', /FONT_SIZES\.map/.test(toolbar) && /aria-label=\{`Font size/.test(toolbar));
   check('toolbar: swatches use the theme tokens', /colorVar\(/.test(toolbar));
   check('toolbar: iterates the whole palette', /NOTE_COLORS\.map/.test(toolbar));
   check('toolbar: has a Default (clear color) action', /Default \(clear color\)/.test(toolbar));
   check('toolbar: controls are labelled for screen readers', (toolbar.match(/aria-label=/g) ?? []).length >= 5);
 
-  // The same controls in BOTH note views, via the shared editor body.
+  // Both note views go through the shared body, which renders the Tiptap editor.
   check('UI: split pane uses the shared editor body', /<NotesEditorBody/.test(readFileSync('src/features/split/NotesPane.tsx', 'utf8')));
   check('UI: standalone Library uses the shared editor body', /<NotesEditorBody/.test(readFileSync('src/features/library/components/SubjectDetail.tsx', 'utf8')));
-  check('UI: the shared editor body renders the toolbar', /<NoteToolbar api=\{api\}/.test(md));
-  check('UI: the toolbar reads the LIVE textarea, not a stale prop', /el \? el\.value : value/.test(md));
+  const body = readFileSync('src/features/library/components/NotesEditorBody.tsx', 'utf8');
+  check('UI: the shared editor body renders the Tiptap editor',
+    /<NoteEditor/.test(body) && !/<textarea/.test(body));
+  // The editor must not be re-seeded from its own onUpdate, which would reset
+  // the selection on every keystroke.
+  check('UI: content is re-seeded only when the note changes',
+    /setContent\([\s\S]*?emitUpdate: false[\s\S]*?\)/.test(toolbar)
+    && /\}, \[editor, noteKey\]\)/.test(toolbar));
 
   // Math stays a single replaceable seam, and the ordering is right.
   check('math: renderLatex is one self-contained function', (md.match(/function renderLatex/g) ?? []).length === 1);
