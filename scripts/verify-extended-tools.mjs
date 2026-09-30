@@ -404,6 +404,47 @@ check('12 unknown function rejected', !!threw && /Unknown function/.test(threw),
     /"id" field/.test(splitSpec.function.description) && /never the file name/.test(splitSpec.function.description));
 }
 
+// ---- 15. searchLibrary must see BOTH note formats -------------------------
+// A note edited in the rich-text editor has its real text in `contentHtml`,
+// while `notes` still holds the original markdown. Searching `notes` alone made
+// everything the user typed in the new editor invisible to the assistant.
+{
+  const sub = { id: 's-rich', name: 'RichText', color: '#000', description: '', createdAt: '', updatedAt: '' };
+  S.subjects.set(sub.id, sub);
+  // Converted note: markdown backup says "old", editor body says the real thing.
+  const rich = {
+    id: 't-rich', subjectId: 's-rich', title: 'Converted', status: 'studying',
+    notes: 'old markdown body', contentHtml: '<p>quokka telemetry</p>', contentFormat: 'html',
+    createdAt: '', updatedAt: '',
+  };
+  // Legacy note: markdown only, never opened in the editor.
+  const legacy = {
+    id: 't-legacy', subjectId: 's-rich', title: 'Legacy', status: 'studying',
+    notes: 'aardvark sighting', createdAt: '', updatedAt: '',
+  };
+  S.topics.set(rich.id, rich);
+  S.topics.set(legacy.id, legacy);
+
+  const idsFor = async (q) => {
+    const r = await call('searchLibrary', { query: q });
+    return JSON.stringify(r.data);
+  };
+  const inHtml = await idsFor('quokka');
+  check('15 search finds text that exists ONLY in the rich-text field',
+    inHtml.includes('t-rich') && !inHtml.includes('t-legacy'), inHtml.slice(0, 200));
+  const inMarkdown = await idsFor('aardvark');
+  check('15 search still finds text in the untouched markdown field',
+    inMarkdown.includes('t-legacy') && !inMarkdown.includes('t-rich'), inMarkdown.slice(0, 200));
+  // The markdown backup must not become searchable noise for converted notes:
+  // "old markdown body" exists only in `notes`, which is no longer authoritative.
+  const backup = await idsFor('markdown');
+  check('15 the stale markdown backup is not searched once a note is converted',
+    !backup.includes('t-rich'), backup.slice(0, 200));
+  S.topics.delete(rich.id);
+  S.topics.delete(legacy.id);
+  S.subjects.delete(sub.id);
+}
+
 
 rmSync(outDir, { recursive: true, force: true });
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);

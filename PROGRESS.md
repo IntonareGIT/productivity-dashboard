@@ -1,19 +1,80 @@
 # Overnight work: report
 
 **Branch:** `overnight-features` (pushed). **`main` was NOT touched, merged, or
-force-pushed.** Last commit is the final "Phase 3 step 1" commit plus the docs
-commit below; `git log overnight-features -1` for the exact hash.
+force-pushed.**
 
-**Final state:** `npx tsc -b` clean, `npm run verify` **exits 0** (every script
-green, including the two that were failing before this run), `npm run build`
+**Final state:** `npx tsc -b` clean, `npm run verify` **exits 0**,
+`npm run verify:editor` **exits 0** (63/63 in real Chromium), `npm run build`
 succeeds. Nothing was deployed and no deployment settings were changed.
+
+## Summary
+
+| Step | What it asked for | Status | Evidence |
+| --- | --- | --- | --- |
+| 0 | Get a real browser | **done** | Playwright Chromium installed; `npm run verify:editor` drives a real page. |
+| 1 | Tiptap WYSIWYG editor in both places | **done** | Editor renders in Library and split pane; title, autosave and indicator kept. |
+| 2 | Sizes, colour popover, alignment, clear | **done** | Portal popover, swipeable toolbar, active states; verified at phone width. |
+| 3 | Storage (`contentHtml` + `contentFormat`) | **done** | Dexie **v11**, additive, no row rewritten; markdown backup never touched. |
+| 4 | Typing shortcuts + hint line | **done** | `# `, `**`, `- `, backticks and `$math$` all verified in the browser. |
+| 5 | Note AI tools + Confirm counts | **done** | 4 note tools added; `deleteNote` gated; every Confirm card names the counts. |
+
+**Two bugs found and fixed while testing, that the checks alone would have missed:**
+
+1. **`searchLibrary` could not see anything typed in the new editor.** It
+   matched on the markdown `notes` field, but a converted note's real text lives
+   in `contentHtml`. The assistant would have reported "no results" for text the
+   user could see on screen. Both search paths now read `topicPlainText`, which
+   picks the right format, and a test pins both directions.
+2. **Three verify scripts were passing against dead code.** They asserted on the
+   old textarea toolbar and the old textarea `NotesEditorBody`, neither of which
+   is imported by anything any more. Those checks had been green while guarding a
+   component that never renders. They now point at the live editor, and a new
+   check fails if anything imports the legacy toolbar again.
+
+**What I could NOT test — genuinely untested, not smoke-tested:**
+
+- **Real touch input.** Chromium emulates taps; it does not reproduce a real
+  finger. The palette's open/close and the toolbar swipe need your thumb.
+- **Your actual notes.** Every conversion test ran against synthetic notes. Your
+  real notes have formatting, maths and length that no fixture reproduces.
+- **Multi-device Dexie Cloud sync** of the two new fields.
+- **Your fonts at your sizes** — four presets look different per device.
+
+**What you must test:**
+
+1. Open an **old** note you wrote before this change. It should look identical
+   to before. Edit it, save, and confirm your words are all still there.
+2. On a new note: select words and press Bold, Italic, Underline, each size,
+   each colour, and each alignment. No tag code should ever appear.
+3. Tap the colour button on a **phone**; confirm the palette is not clipped and
+   closes when you tap elsewhere.
+4. Type `# `, `**bold**`, `- `, `` `code` `` and `$x$`; confirm each behaves as
+   the hint under the toolbar claims.
+5. Ask the assistant to delete a topic and a note. The Confirm card must show
+   the counts, and nothing may change until you press Confirm.
+
+### Dexie Cloud: no manual action needed
+
+The schema change is **additive only** (two new fields, no index, no row
+rewritten). Dexie Cloud replicates rows as they are, so new fields sync with no
+server-side change, no new database version in the cloud console, and no
+migration to run. **Nothing is required from you.**
+
+The one thing to confirm is ordinary: that sync still works after this release.
+Because conversion is lazy, a note only leaves the old format once you *edit*
+it, so two devices can legitimately show a note differently until then — the
+markdown is still there on both, and the editor body wins once written.
+
+---
+
+## Earlier phases (unchanged)
 
 | Phase | Status | One-line outcome |
 | --- | --- | --- |
 | 0. PDF viewer crash cleanup | **skipped** | Already complete in `3d09007`; verified zero debug remnants. |
 | 1. "New group" does nothing | **done** | Root cause was a render guard hiding empty groups, not a failed write. |
-| 2. AI assistant tools | **partly done** | 12 library tools + id/name resolver + all deletes behind Confirm. Notes tools and Confirm counts NOT done. |
-| 3. Notes editor rich text | **partly done, deliberately** | Colour/size bug fixed at root. Tiptap rewrite NOT attempted. |
+| 2. AI assistant tools | **done** | 12 library tools + id/name resolver + all deletes behind Confirm. |
+| 3. Notes editor rich text | **done** | Colour/size bug fixed at root, then replaced by the Tiptap editor. |
 
 ### The three findings worth your attention
 
@@ -38,53 +99,49 @@ succeeds. Nothing was deployed and no deployment settings were changed.
 
 ### What I deliberately did not do
 
-- **Tiptap WYSIWYG rewrite (Phase 3 step 2) and the note content migration
-  (step 3).** These are the highest-risk changes in the brief ("notes must never
-  be lost or corrupted") and they are impossible for me to verify visually: no
-  browser is available in this environment. A half-finished migration would
-  leave notes in a mixed-format state with no way to confirm recovery, which is
-  worse than the working editor you have now. The underlying bug is fixed and
-  guarded by regression tests instead. `PROGRESS.md` records the exact packages
-  and the plan if you want it done with eyes on the screen.
-- **Note AI tools** (`setNoteTitle`, `createNote`, `renameNote`, `deleteNote`),
-  deferred because note content handling is entangled with the editor format
-  change above.
-- **Confirm cards do not yet show deletion counts**, only descriptive text.
 - **A split pane showing a tool-deleted resource is not auto-closed.**
+- **Real KaTeX.** `$math$` still renders as highlighted text, not typeset maths.
+  It is deliberately isolated in one place (`noteEditor/mathNode.ts` +
+  `mathRender.ts`) so real KaTeX can be dropped in later as an editor extension
+  without touching storage or the toolbar.
+- **The legacy textarea editor was deleted from use but left on disk.**
+  `components/NoteToolbar.tsx` and the old textarea `NotesEditorBody` inside
+  `MarkdownNotes.tsx` are no longer imported by anything. They are kept only so
+  the old behaviour can be read for reference. A verify check now fails if
+  anything imports them again.
 
-### What you must test on your phone and laptop
+### Carried over from the earlier run, still worth repeating
 
 1. **New group**: create one in a topic that already has resources, and one in a
    topic with none. The empty group must appear immediately.
-2. **Note formatting**: select a few words, then press Size, Colour and Align.
-   The text should change immediately and NO bare tag should appear.
-3. **Assistant deletes**: ask it to delete a group / topic / resource / subject.
+2. **Assistant deletes**: ask it to delete a group / topic / resource / subject.
    It must show a Confirm card and change nothing until you press Confirm. Then
    test Cancel and confirm the data is still there.
-4. **Group delete specifically**: delete a group and confirm its resources are
+3. **Group delete specifically**: delete a group and confirm its resources are
    still present, just ungrouped.
-5. **Ambiguous names**: if you have two resources with the same name, ask the
+4. **Ambiguous names**: if you have two resources with the same name, ask the
    assistant to delete "that one" and confirm it asks which rather than guessing.
-6. The PDF and image viewers are untouched, but the usual zoom, pinch,
+5. The PDF and image viewers are untouched, but the usual zoom, pinch,
    fullscreen and split-view checks are still worth repeating.
 
 ### Needs your manual action (I could not and did not do these)
 
-- **Dexie Cloud**: confirm auth and sync still work. `dexie-cloud.json` is
-  gitignored and absent from the deployed repo, and I did not touch the cloud
-  database or any credentials.
+- **Dexie Cloud**: no schema action needed (see above) — just confirm auth and
+  sync still work after this release. `dexie-cloud.json` is gitignored and absent
+  from the deployed repo, and I did not touch the cloud database or any
+  credentials.
 - **Vercel**: I did not deploy and did not change settings. `main` is still
   older than this branch, so **if Vercel is configured to deploy from `main`,
   merging this branch first is required** or production will not get these fixes.
 - **Merge**: this branch is not merged. Review and merge when ready.
 
-### Not tested at all (no browser or phone in this environment)
+### Not tested at all
 
 Everything is verified by TypeScript, by unit-level scripts that drive the real
-repository functions against an in-memory Dexie, and by reading the code. No
-real touch interaction, no real IndexedDB migration v8 to v9 to v10, no visual
-rendering, and no Dexie Cloud sync was exercised. Treat the "must test" list
-above as genuinely untested, not as smoke-tested.
+repository functions against an in-memory Dexie, and by 63 checks in real
+Chromium. What remains untested is listed under "What I could NOT test" at the
+top: real touch input, your real notes, multi-device cloud sync, and your fonts.
+Treat that list as genuinely untested, not as smoke-tested.
 
 ## Phase status
 

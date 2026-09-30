@@ -89,24 +89,30 @@ db.version(10).stores({
   resourceGroups:   'id, subjectId, order, createdAt',          // new table
   resources:        'id, subjectId, topicId, title, dueDate, createdAt, groupId',
 });
+
+// v11 is ADDITIVE and its upgrade touches NO row: `contentHtml` and
+// `contentFormat` are plain (unindexed) fields, absent on every existing row.
+// Nothing is converted here — conversion happens lazily on first edit.
+db.version(11).stores({
+  topics:           'id, subjectId, status, createdAt, title',
+});
 ```
 
-Notes carry their formatting as a tiny inline-HTML subset **inside** the
-markdown source, so the storage format is still markdown and an existing note
-is byte-for-byte unchanged.
+Notes carry a rich-text body in `contentHtml`, alongside the original markdown,
+which is **never** overwritten or deleted.
 
 ### 1.3.2 Note formatting — size, alignment, color
 
-Notes support basic rich text without changing the storage format or the
-editor. The toolbar wraps the selected text (or inserts at the cursor) with a
-small allowlisted subset of inline HTML:
+Notes are edited in a **Tiptap (ProseMirror) WYSIWYG editor**, not a textarea.
+Select text, press a button, see the result immediately; tag code is never
+visible because there is no textarea to show it in.
 
 | Control | Stored as |
 | --- | --- |
-| Size (Small / Normal / Large / Huge) | `<span style="font-size:0.85em…1.6em">` |
-| Alignment (left / center / right) | `<div style="text-align:center">` block wrapper |
-| Color (8 swatches + Default) | `<span style="color:var(--note-c-rose)">` |
-| Clear formatting | removes every `span`/`div`, keeping the text |
+| Size (Small / Normal / Large / Huge) | a `font-size` text-style mark |
+| Alignment (left / center / right) | `text-align` on the paragraph/heading |
+| Color (8 swatches + Default) | a `color` text-style mark |
+| Clear formatting | `unsetAllMarks` + `clearNodes` |
 
 **The palette uses CSS variables, not fixed hex values.** A note stores
 `var(--note-c-rose)` and `themes.css` resolves it per theme *and* per mode,
@@ -116,33 +122,35 @@ it follows the same pattern as `--pane-ring`. A literal hex, `rgb()`, or a named
 color is **rejected by the sanitizer** precisely so this guarantee cannot be
 bypassed.
 
-**Rendering order — sanitize first, then markdown, then math.** `renderNoteHtml`
-in `MarkdownNotes.tsx`:
+**Storage is additive and lazy, which is the whole safety argument.** A topic
+gained two fields: `contentHtml` (the editor's HTML) and `contentFormat` (an
+`'html'` marker). Dexie **v11** is additive with an empty upgrade: existing rows
+are untouched, so a note nobody opens is byte-identical to before.
 
-1. `extractFormatting(raw)` pulls the allowlisted tags out and leaves private-use
-   placeholders; everything else becomes plain text.
-2. The existing `escapeHtml` + markdown + `renderLatex` pass runs on that
-   markup-free text, so neither the markdown rules nor the math pass can
-   manufacture a tag, and a formatting tag cannot break a `$..$` span.
-3. `restoreFormatting` puts the sanitized tags back where the placeholders were.
+- Opening a note converts the markdown **in memory only**. Nothing is written.
+- The conversion is persisted on the **first real edit**, via
+  `updateTopicContentHtml`, which writes *only* `contentHtml`/`contentFormat`.
+- `notes` is therefore the permanent original forever. Clearing `contentHtml`
+  and `contentFormat` reverts a note to markdown at any time.
 
-The sanitizer allowlist is deliberately narrow: **only `span` and `div`, and
-only `color`, `font-size`, `text-align`** against fixed value lists. There is no
-`on*` handler, `href`, `src`, `class`, or `url()`. A rejected tag is dropped but
-its **text survives**, so an imported note degrades to plain text rather than
-losing content. This is the module that feeds `dangerouslySetInnerHTML`, so it
-is the security boundary; `scripts/verify-note-formatting.mjs` asserts the
-rejection cases directly.
+`contentFormat` is the single authority on which body to render. Renderers must
+read it and must not infer from the mere presence of a string.
 
-**Math is a separate seam.** `renderLatex()` is one self-contained function
-taking escaped text and returning HTML, so swapping in real KaTeX later is a
-change to that function alone — the toolbar, the sanitizer and the markdown
-pipeline do not move. It currently styles `$..$` / `$$..$$` rather than
-typesetting them, and the verification script pins every case the fake renderer
-must keep working: math inside a colored span, inside a sized span, inside an
-aligned block, and with a formatting tag wrapping only part of a formula.
+**Sanitizing happens on the way IN as well as out.** `sanitizeEditorHtml` runs on
+stored HTML when the editor loads and again on every save, so pasted content
+cannot inject scripts at any point. The allowlist permits only the formatting
+tags Tiptap emits, with no `on*` handler, `href`, `src`, `class`, or `url()`.
+`scripts/verify-note-editor-browser.mjs` pastes a script tag, an `onerror`, an
+`onclick`, an `<img>` and a literal red hex, and asserts each is stripped while
+the safe text survives.
 
-The toolbar renders from the shared `NotesEditorBody`, used by **both** the
+**Math is a separate seam.** `mathNode.ts` + `mathRender.ts` hold it, so swapping
+in real KaTeX later is a change to that module alone — the toolbar, the
+sanitizer and storage do not move. It currently styles `$..$` / `$$..$$` rather
+than typesetting them, and the verification script pins every case the fake
+renderer must keep working.
+
+**The toolbar renders from the shared `NotesEditorBody`**, used by **both** the
 standalone Library editor and the split-pane notes view, so the controls cannot
 drift apart. On mobile it is one horizontally scrolling row with 40px targets
 and `overscroll-x-contain`.
@@ -150,17 +158,25 @@ and `overscroll-x-contain`.
 **Every formatting button must `preventDefault` on `mousedown`.** This is not
 optional and it is easy to lose in a refactor, because the bug it prevents looks
 like a color bug or a sanitizer bug and is neither. Pressing a button fires
-`mousedown` **first**, which moves focus off the textarea and **collapses the
-selection to a caret**. By the time `onClick` runs, the editor handle reports
-`start === end`, so `wrapSelection` wraps **zero characters**. The user then sees
-a bare `<span>` dumped into the text with nothing inside it (which reads as
-"size pastes tag code into the textarea") and, for color, an empty span that
-renders nothing at all (which reads as "text color does not work at all").
+`mousedown` **first**, which moves focus off the editor and **collapses the
+selection to a caret**. By the time `onClick` runs, the command applies to
+**zero characters**: the user then sees a bare `<span>` with nothing inside it
+(which reads as "size pastes tag code into the textarea") and, for color, an
+empty span that renders nothing at all (which reads as "text color does not
+work at all").
 
-`keepSelection` in `NoteToolbar.tsx` is the single shared handler, and it must be
-on `mousedown`: preventing the default of `click` is already too late. Regression
-checks in `verify-ai-tools-library.mjs` assert it is present on all five
-formatting controls, so it cannot be dropped again unnoticed.
+Tiptap does not save you from this — `onMouseDown` firing before `onClick` is
+browser behaviour, not a framework detail. `keepSelection` in `NoteEditor.tsx` is
+the single shared handler, and it must be on `mousedown`: preventing the default
+of `click` is already too late. The palette swatches are in a portal and use
+`onPointerDown`, which needs the same guard or a phone tap collapses the
+selection exactly like a mouse press did. Regression checks in
+`verify-ai-tools-library.mjs` assert both.
+
+**`setContent` must never be driven by the editor's own `onUpdate`.** Doing that
+resets the selection on every keystroke. Content is re-seeded only when `noteKey`
+changes, i.e. when a different note is opened, and always with
+`{ emitUpdate: false }`.
 
 **Out of scope, deliberately:** the AI reply renderer. `AssistantChat.tsx` still
 renders message text as plain `whitespace-pre-wrap` and does not use this
@@ -194,7 +210,9 @@ export interface Topic {
   id: string;              // UUID primary key
   subjectId: string;       // Foreign key -> subjects.id
   title: string;           // Topic title
-  notes: string;           // Markdown / LaTeX / code-supported notes
+  notes: string;           // Markdown original — NEVER overwritten or deleted
+  contentHtml?: string;    // Rich-text editor HTML. Absent until the note is edited.
+  contentFormat?: 'html';  // Which body is authoritative. Absent => `notes`.
   status: TopicStatus;     // Not started / Studying / Confident
   order: number;           // Manual ordering within a subject
   createdAt: string;       // ISO 8601
@@ -639,6 +657,8 @@ and shared argument resolution in `toolResolve.ts`.
 | `renameTopic` | `topicId`, `title` | `setTopicTitle` |
 | `renameResource` | `resourceId`, `title` | `saveResource` |
 | `moveResource` | `resourceId`, `topicId` | `saveResource`; clears `groupId` |
+| `createNote` | `subjectId`, `title`, `content?`, `topicId?` | `saveTopic`; refuses a cross-subject topic, no title means no write |
+| `renameNote` / `setNoteTitle` | `topicId`, `title` | `setTopicTitle`; blank title is refused |
 
 **Writes — require an explicit Confirm button before running**
 
@@ -649,14 +669,26 @@ and shared argument resolution in `toolResolve.ts`.
 | `addOneOffShiftException` | `date`, `startTime`, `hours` | New start/end and that it replaces the shift |
 | `deleteCalendarEvent` | `eventId` | That it is permanent and cannot be undone |
 | `deleteResource` | `resourceId` | PERMANENTLY DELETE, and that the file goes with it |
+| `deleteNote` | `topicId` | PERMANENTLY DELETE the note and its resources |
 | `deleteTopic` | `topicId` | PERMANENTLY DELETE, plus resources and uploaded files |
 | `deleteSubject` | `subjectId` | PERMANENTLY DELETE, plus everything under it |
 | `deleteGroup` | `groupId` | That resources are KEPT and become ungrouped |
 
-The four library deletes are listed in `LIBRARY_CONFIRM_TOOL_NAMES`
+The five library deletes are listed in `LIBRARY_CONFIRM_TOOL_NAMES`
 (`toolsLibrary.ts`) and spread into `CONFIRMATION_TOOL_NAMES`, so the
 classification lives beside the handlers and a new delete cannot be added
-without also being gated.
+without also being gated. `verify-ai-tools-library.mjs` derives its expected
+delete count from that set rather than hardcoding a number, which is what stops
+a new gated delete from slipping past the "every delete names the Confirm
+requirement" check.
+
+**Every Confirm card states WHAT will be lost, not merely that something will
+be.** `describeDeleteCounts` reads live counts off the database (topics,
+resources, uploaded files, notes, groups) while the card is being built, so they
+cannot drift from the data the delete will act on, and the card appends
+"This will also remove: …". The count helper never throws: an unresolvable
+target yields `null` and the card falls back to its plain description, because a
+preview must never be the thing that fails.
 
 **How the Confirm guarantee actually holds.** It is structural, not a prompt
 instruction. `useAssistantStore` splits the model's tool batch into gated and
@@ -762,6 +794,18 @@ matters. `searchLibrary` returns a flat, id-carrying list
 subject }]`) alongside the grouped view, and its summary says so explicitly.
 Without that, the model had only the file name to hand back, passed it as
 `resource_id`, and the tool failed — repeatedly, with no way to recover.
+
+**`searchLibrary` searches the note's PLAIN TEXT, not its raw field.** It reads
+`topicPlainText(topic)`, which returns the text of `contentHtml` for a converted
+note and the markdown for a legacy one. Reading `notes` directly would be a
+silent data-loss bug for the assistant: a converted note keeps its markdown
+backup, but the user's real text lives in `contentHtml`, so every word typed in
+the rich-text editor would be invisible to the assistant — the model would
+report "no results" for text the user can see on screen. Both search paths (the
+grouped view and the flat `topics` list) must use the same helper, and
+`verify-extended-tools.mjs` pins all three cases: text only in the rich-text
+field, text only in untouched markdown, and the stale backup of a converted note
+not being searched.
 
 `manage_split_screen` is deliberately forgiving, in this order:
 
@@ -1541,7 +1585,17 @@ shared `MarkdownNotes` and writes through the same `updateTopicNotes()`.
 │   │   │       ├── previewKind.ts     # pure preview-type + Drive URL detection
 │   │   │       ├── TopicModal.tsx
 │   │   │       ├── AssessmentModal.tsx
-│   │   │       ├── MarkdownNotes.tsx   # markdown/LaTeX/code renderer
+│   │   │       ├── MarkdownNotes.tsx   # read-only renderer + note title field
+│   │   │       ├── NotesEditorBody.tsx # shared autosave wrapper (both note views)
+│   │   │       ├── NoteToolbar.tsx     # LEGACY textarea toolbar — unused, kept for reference
+│   │   │       ├── noteEditor/         # the live Tiptap editor
+│   │   │       │   ├── NoteEditor.tsx        # editor + toolbar + shortcuts hint
+│   │   │       │   ├── FontSize.ts          # custom size-preset extension
+│   │   │       │   ├── mathNode.ts          # $math$ node (the KaTeX seam)
+│   │   │       │   ├── mathRender.ts        # math -> HTML, isolated
+│   │   │       │   ├── markdownToHtml.ts    # legacy markdown -> editor HTML
+│   │   │       │   ├── sanitizeHtml.ts      # strict allowlist (in AND out)
+│   │   │       │   └── noteFormatShared.ts  # palette shared with the legacy path
 │   │   │       └── SubjectDetail.tsx   # progress + topics + two-pane detail
 │   │   ├── calendar/            # Phase 3: month/week views & events
 │   │   │   ├── CalendarPage.tsx

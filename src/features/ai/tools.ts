@@ -32,6 +32,7 @@ import {
   describeLibraryToolCall,
   executeLibraryTool,
 } from './toolsLibrary';
+import { topicPlainText } from '../library/libraryRepo';
 import type { ToolSpec } from './types';
 
 /**
@@ -359,11 +360,16 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
     }
   }
   for (const t of topics) {
-    if (t.title.toLowerCase().includes(q) || (t.notes ?? '').toLowerCase().includes(q)) {
+    // Search the plain text of WHICHEVER format the note is stored in. Reading
+    // `notes` directly would miss everything typed in the rich-text editor,
+    // because a converted note keeps its markdown backup but the user's real
+    // text now lives in `contentHtml`.
+    const body = topicPlainText(t);
+    if (t.title.toLowerCase().includes(q) || body.toLowerCase().includes(q)) {
       const subject = subjects.find((s) => s.id === t.subjectId);
       // The id travels with the topic: without it the model can name a topic
       // but can never pass one to a tool.
-      if (subject) bucketFor(subject).topics.push({ id: t.id, title: t.title, status: t.status, excerpt: excerpt(t.notes, q) });
+      if (subject) bucketFor(subject).topics.push({ id: t.id, title: t.title, status: t.status, excerpt: excerpt(body, q) });
     }
   }
   // Defensive: a row restored from an older backup can be missing `tags` or
@@ -433,7 +439,7 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
     });
 
   const topicList = topics
-    .filter((t) => t.title.toLowerCase().includes(q) || (t.notes ?? '').toLowerCase().includes(q))
+    .filter((t) => t.title.toLowerCase().includes(q) || topicPlainText(t).toLowerCase().includes(q))
     .slice(0, 25)
     .map((t) => ({
       id: t.id,

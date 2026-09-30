@@ -96,26 +96,43 @@ export const HELP_SECTIONS: HelpSection[] = [
   {
     id: 'notes',
     title: 'Notes',
-    summary: 'Markdown notes attached to a topic, editable in two places.',
+    summary: 'Rich-text notes attached to a topic, editable in two places.',
     groups: [
       {
         heading: 'Writing',
         bullets: [
           { lead: 'One note per topic', text: "A note is the notes field of a topic, so it is always in the context of what it belongs to." },
-          { lead: 'Markdown', text: 'Headings, bold, italic, inline and fenced code, bullet lists and links.' },
-          { lead: 'Math', text: 'Inline $x$ and block $$…$$ notation is styled for you. It is rendered as highlighted text, not fully typeset — treat it as a readable notation, not a typesetting engine.' },
-          { lead: 'Editing', text: 'The same editor appears in the Library and in the split view, and edits save as you type. If nothing has changed, there is a "Save notes" button and a cancel option instead.' },
+          { lead: 'Rich text, not markup', text: 'Select some words and press a button — bold, italic, underline, a heading, a list, a colour, a size or an alignment — and see the result straight away. You never type or see HTML tags.' },
+          { lead: 'Editing', text: 'The same editor appears in the Library and in the split view, and edits save as you type, with a "Saved" indicator. The note title is a normal field above the text and saves on its own.' },
         ],
       },
       {
         heading: 'Formatting',
         bullets: [
-          { lead: 'Font size', text: 'Four presets, applied to the selected text.' },
+          { lead: 'Font size', text: 'Four presets — Small, Normal, Large, Huge — applied to the selected text.' },
           { lead: 'Alignment', text: 'Left, centre or right, applied to the selected lines.' },
-          { lead: 'Colour', text: 'Eight colours plus a default, chosen to stay readable in both the light and dark themes.' },
+          { lead: 'Colour', text: 'Eight colours plus a default, chosen to stay readable in both the light and dark themes. Tap the colour button to open the palette; tap anywhere outside it to close.' },
           { lead: 'Select first', text: 'Highlight the words you want to change before pressing a button. If nothing is selected the change applies to the words the caret sits in, or to the current line for alignment.' },
           { lead: 'Clear formatting', text: 'Removes the formatting and keeps the words.' },
-          { lead: 'Stored as markdown', text: 'Formatting is saved inside the markdown as a small amount of inline HTML, and only a fixed set of tags is allowed through when a note is displayed. A note with no formatting looks exactly as it always did.' },
+          { lead: 'On phones', text: 'The toolbar is one row you can swipe sideways, so buttons never wrap into a tall stack or disappear off the edge.' },
+        ],
+      },
+      {
+        heading: 'Typing shortcuts',
+        bullets: [
+          { lead: 'Headings', text: 'Type # followed by a space at the start of a line.' },
+          { lead: 'Bold', text: 'Type ** around the words: **bold**.' },
+          { lead: 'Bullet list', text: 'Type - followed by a space at the start of a line.' },
+          { lead: 'Code', text: 'Type ` around the words: `code`. It appears as inline code with a shaded background — the backticks themselves are not shown.' },
+          { lead: 'Math', text: 'Type $x$ for inline or $$…$$ on its own line for a block. It appears as highlighted text, not fully typeset — treat it as a readable notation, not a typesetting engine.' },
+        ],
+      },
+      {
+        heading: 'How notes are stored',
+        bullets: [
+          { lead: 'Your original text is kept', text: 'The first time you edit a note, the app converts it and saves the new format. Your original text is never overwritten or deleted, so nothing you have written can be lost.' },
+          { lead: 'Opening a note changes nothing', text: 'A note you only read is left exactly as it was. The conversion is saved the first time you actually edit it.' },
+          { lead: 'Pasted content is cleaned', text: 'Only a fixed set of formatting is allowed through when a note is loaded or displayed, so pasted web content cannot carry scripts or tracking into your notes.' },
         ],
       },
     ],
