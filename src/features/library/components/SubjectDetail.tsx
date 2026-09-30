@@ -5,7 +5,8 @@ import { ArrowLeft, BookOpenCheck, CalendarClock, Check, ChevronRight, Columns2,
 import { db } from '../../../db/db';
 import { Card } from '../../../components/ui/Card';
 import { toast } from '../../../stores/useToastStore';
-import { MarkdownNotes, NoteTitleInput, NotesEditorBody } from './MarkdownNotes';
+import { MarkdownNotes, NoteTitleInput } from './MarkdownNotes';
+import { NotesEditorBody } from './NotesEditorBody';
 import { TopicModal } from './TopicModal';
 import { ResourceModal } from './ResourceModal';
 import { ResourceViewer } from './ResourceViewer';
@@ -13,7 +14,7 @@ import { ResourceFullScreen, useResourceFullScreen } from '../../split/useResour
 import { AssessmentModal } from './AssessmentModal';
 import { MoveToGroupMenu } from './MoveToGroupMenu';
 import { GroupNameEditor, NewGroupButton } from './ResourceGroups';
-import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes } from '../libraryRepo';
+import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes } from '../libraryRepo';
 import type { Assessment, Resource, ResourceGroup, Subject, Topic, TopicStatus } from '../../../types';
 
 interface SubjectDetailProps {
@@ -151,7 +152,6 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
 
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [editingNotes, setEditingNotes] = useState(false);
-  const [notesDraft, setNotesDraft] = useState('');
   const [notesSaved, setNotesSaved] = useState(false);
   const [filter, setFilter] = useState('');
   const [addingTopic, setAddingTopic] = useState(false);
@@ -239,12 +239,12 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   }, [sortedTopics, selectedTopicId]);
 
   useEffect(() => {
-    setSelectedTopicId(null); setEditingNotes(false); setNotesDraft(''); setFilter('');
+    setSelectedTopicId(null); setEditingNotes(false); setFilter('');
     setDeleteResourceId(null); setDeleteTopicId(null); setConfirmDeleteSubject(false);
   }, [subject.id]);
 
   useEffect(() => {
-    setNotesDraft(selectedTopic?.notes ?? ''); setEditingNotes(false); setNotesSaved(false);
+    setEditingNotes(false); setNotesSaved(false);
   }, [selectedTopic?.id, selectedTopic?.notes]);
 
   const confidentCount = topics.filter((t) => t.status === 'confident').length;
@@ -286,14 +286,6 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
     return { weekMin, monthMin, sessions: focus.length };
   }, [sessions]);
 
-  const saveNotes = async () => {
-    if (!selectedTopic) return;
-    await updateTopicNotes(selectedTopic.id, notesDraft);
-    setEditingNotes(false);
-    setNotesSaved(true);
-    window.setTimeout(() => setNotesSaved(false), 1500);
-  };
-
   const copyPath = async (resource: Resource) => {
     // A file row has no path; there is nothing to copy.
     if (!resource.urlOrPath) return;
@@ -315,8 +307,6 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   };
-
-  const notesDirty = notesDraft !== (selectedTopic?.notes ?? '');
 
   return (
     <div className="space-y-4">
@@ -427,14 +417,16 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
                 className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 mb-1"
               />
               <NotesEditorBody
-                value={notesDraft}
-                onChange={setNotesDraft}
+                topic={selectedTopic}
                 minHeight="min-h-[280px]"
-                textareaClassName="resize-y"
+                onSaved={() => {
+                  setNotesSaved(true);
+                  window.setTimeout(() => setNotesSaved(false), 1500);
+                }}
               />
               <div className="flex items-center justify-end gap-2 mt-2">
-                <button onClick={() => { setNotesDraft(selectedTopic.notes); setEditingNotes(false); }} className="px-4 min-h-[40px] rounded-xl text-xs text-content-secondary hover:text-content-primary transition-colors">Cancel</button>
-                <button onClick={saveNotes} disabled={!notesDirty} className="px-4 min-h-[40px] rounded-xl bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-xs font-semibold transition-colors">Save notes</button>
+                <button onClick={() => setEditingNotes(false)} className="px-4 min-h-[40px] rounded-xl text-xs text-content-secondary hover:text-content-primary transition-colors">Done</button>
+                {notesSaved && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
               </div>
             </div>
           ) : (
@@ -444,7 +436,11 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
                 topic={selectedTopic}
                 className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 mb-1"
               />
-              <MarkdownNotes text={selectedTopic.notes} />
+              <MarkdownNotes
+                text={selectedTopic.notes}
+                html={selectedTopic.contentHtml}
+                hasHtml={topicUsesHtml(selectedTopic)}
+              />
               <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-border/50">
                 {notesSaved && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
                 <button onClick={() => setEditingNotes(true)} className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-border-strong transition-colors">

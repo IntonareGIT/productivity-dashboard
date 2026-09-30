@@ -265,9 +265,16 @@ const renderWith = ({ signedIn, currentUserValue }) => {
   //
   // v9 (note titles) came later and IS an intentional schema change, so this
   // guard is pinned to "nothing beyond v9", not to "nothing beyond v8".
+  // v11 (rich-text note fields) was added intentionally, so this guard is pinned
+  // to "nothing beyond v11", not to "nothing beyond v8". v11 is additive: the
+  // notes fields are added to the existing `topics` store with no index change,
+  // and its upgrade contains no upgrade function at all (nothing to migrate).
   const dbSrc = read('src/db/db.ts');
-  check('8 no schema version beyond v10 (resource groups) was added',
-    !/this\.version\(1[1-9]\)/.test(dbSrc));
+  check('8 no schema version beyond v11 (rich-text notes) was added',
+    !/this\.version\(1[2-9]\)/.test(dbSrc));
+  check('8 v11 adds the note fields additively and migrates nothing',
+    /this\.version\(11\)[\s\S]{0,200}?topics: 'id, subjectId, status, createdAt, title'/.test(dbSrc)
+    && !/this\.version\(11\)[\s\S]{0,400}?\.upgrade\(/.test(dbSrc));
   check('8 no Version.upgrade() on any synced table',
     !/upgrade\s*\(\s*\)\s*\.modify\(\s*async\s*\(\s*t\s*,\s*c\s*\)\s*=>\s*\{[\s\S]*?aiProviders/i
       .test(dbSrc));

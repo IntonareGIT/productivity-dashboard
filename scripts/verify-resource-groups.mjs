@@ -213,7 +213,8 @@ check('listResourceGroups is scoped to one subject', listed.length === 1 && list
 // --------------------------------------------------------- schema and syncing
 const dbSrc = readFileSync('src/db/db.ts', 'utf8');
 const cloudSrc = readFileSync('src/db/cloudConfig.ts', 'utf8');
-check('schema: v10 is the latest version', /this\.version\(10\)/.test(dbSrc) && !/this\.version\(1[1-9]\)/.test(dbSrc));
+check('schema: the resource-group store is still declared at v10 and still present',
+  /this\.version\(10\)[\s\S]{0,120}?resourceGroups: 'id, subjectId, order, createdAt'/.test(dbSrc));
 check('schema: resourceGroups table is declared', /resourceGroups: 'id, subjectId, order, createdAt'/.test(dbSrc));
 check('schema: groupId is indexed on resources', /resources: '[^']*\bgroupId\b[^']*'/.test(dbSrc));
 check('schema: the resources primary key is unchanged', /resources: 'id,/.test(dbSrc));

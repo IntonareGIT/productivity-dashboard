@@ -192,6 +192,27 @@ export class ProductivityDB extends Dexie {
           await tx.table('resources').put({ ...r, groupId: null });
         }
       });
+
+    /**
+     * v11: the rich-text note fields.
+     *
+     * ADDITIVE ONLY, and the upgrade is deliberately empty of content work:
+     *
+     * - `contentHtml`    the WYSIWYG editor's HTML, absent on every existing row
+     * - `contentFormat`  a marker, absent on every existing row
+     *
+     * Neither field is indexed, because nothing queries notes by their body.
+     *
+     * The upgrade touches NO row. `Topic.notes` (the markdown) stays byte-for-byte
+     * as the permanent backup, and no note is converted here: conversion happens
+     * lazily, on first open, and the result is persisted only once the user edits
+     * it. That is the whole safety argument, and it means a note nobody opens is
+     * byte-identical to before this version.
+     */
+    this.version(11)
+      .stores({
+        topics: 'id, subjectId, status, createdAt, title',
+      });
   }
 }
 

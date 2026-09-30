@@ -18,7 +18,31 @@ export interface Topic {
   id: string;              // UUID
   subjectId: string;       // FK -> Subject.id
   title: string;           // Topic title
-  notes: string;           // Markdown / LaTeX / code-supported notes
+  /**
+   * The ORIGINAL markdown / LaTeX note body.
+   *
+   * NEVER overwritten, never deleted. This is the permanent backup: once a note
+   * has been edited in the rich-text editor the authoritative content moves to
+   * `contentHtml`, but this field is left exactly as it was so there is always a
+   * readable original to fall back on.
+   */
+  notes: string;
+  /**
+   * Rich-text body produced by the WYSIWYG editor (v11+).
+   *
+   * Absent on notes that have not been edited in the editor yet. The editor
+   * converts the markdown lazily on first open and only writes this once the
+   * user actually changes something.
+   */
+  contentHtml?: string;
+  /**
+   * Which format is authoritative for display.
+   *
+   * `'html'` once `contentHtml` exists; `undefined` while `notes` (markdown) is
+   * the only body. Renderers must read this and must not guess from the mere
+   * presence of a string.
+   */
+  contentFormat?: 'html';
   status: TopicStatus;
   order: number;           // manual ordering within a subject
   createdAt: string;       // ISO 8601

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_NOTE_TITLE } from '../../../db/noteTitle';
 import { setTopicTitle } from '../libraryRepo';
 import { extractFormatting, restoreFormatting } from '../noteFormat';
+import { sanitizeEditorHtml } from '../noteEditor/sanitizeHtml';
 import { NoteToolbar, type NoteToolbarApi } from './NoteToolbar';
 import type { Topic } from '../../../types';
 
@@ -87,7 +88,12 @@ export const NoteTitleInput: React.FC<{
 };
 
 interface MarkdownNotesProps {
+  /** The original markdown. Always the fallback and never ignored. */
   text: string;
+  /** Rich-text body, used only when `hasHtml` is true. */
+  html?: string;
+  /** Whether `contentFormat` says this note is stored as HTML. */
+  hasHtml?: boolean;
 }
 
 /** Escape HTML to keep the tiny renderer XSS-safe. */
@@ -338,17 +344,24 @@ export const __renderLatex = renderLatex;
  * The output is sanitized inside `renderNoteHtml` before it ever reaches
  * `dangerouslySetInnerHTML` — see the comment there for the ordering.
  */
-export const MarkdownNotes: React.FC<MarkdownNotesProps> = ({ text }) => {
-  const html = useMemo(() => renderNoteHtml(text), [text]);
+export const MarkdownNotes: React.FC<MarkdownNotesProps> = ({ text, html, hasHtml = false }) => {
+  // A note edited in the rich-text editor is rendered from its stored HTML; a
+  // legacy note is rendered from markdown. `html` is only trusted when
+  // `hasHtml` is set by the caller that read `contentFormat`, so a stray field
+  // cannot change which renderer is used.
+  const out = hasHtml && html
+    ? sanitizeEditorHtml(html)
+    : renderNoteHtml(text);
+  const body = useMemo(() => out, [out]);
 
-  if (!text.trim()) {
-    return <p className="text-sm text-content-tertiary italic">No notes yet — click Edit to write markdown notes.</p>;
+  if (!body.trim()) {
+    return <p className="text-sm text-content-tertiary italic">No notes yet. Click Edit to write your notes.</p>;
   }
 
   return (
     <div
       className="space-y-2 break-words"
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={{ __html: body }}
     />
   );
 };

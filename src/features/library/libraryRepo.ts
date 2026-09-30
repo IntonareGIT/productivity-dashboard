@@ -2,6 +2,8 @@ import { db } from '../../db/db';
 import { DEFAULT_NOTE_TITLE } from '../../db/noteTitle';
 import type { Assessment, AssessmentStatus, AssessmentType, Resource, ResourceGroup, ResourceKind, Subject, Topic, TopicStatus } from '../../types';
 import { newId } from '../../utils/id';
+import { markdownToEditorHtml } from './noteEditor/markdownToHtml';
+import { htmlToPlainText, sanitizeEditorHtml } from './noteEditor/sanitizeHtml';
 
 /* ---------------- Subjects ---------------- */
 
@@ -133,6 +135,71 @@ export async function updateTopicNotes(id: string, notes: string): Promise<void>
   const existing = await db.topics.get(id);
   if (!existing) return;
   await db.topics.put({ ...existing, notes, updatedAt: new Date().toISOString() });
+}
+
+/**
+ * Persist an edit made in the rich-text editor.
+ *
+ * Writes ONLY `contentHtml` and `contentFormat`. `notes` is never touched here,
+ * which is the safety property the whole storage design rests on: the original
+ * markdown survives every edit forever, so a bad conversion or a bad future
+ * editor can always be undone by clearing `contentHtml` and falling back to it.
+ */
+export async function updateTopicContentHtml(id: string, contentHtml: string): Promise<void> {
+  const existing = await db.topics.get(id);
+  if (!existing) return;
+  await db.topics.put({
+    ...existing,
+    contentHtml,
+    contentFormat: 'html',
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * The body the editor should open with.
+ *
+ * A note that already has editor HTML uses it. A note that is still markdown is
+ * converted ON THE FLY and returned, but nothing is written: the conversion is
+ * persisted only when `updateTopicContentHtml` is called, which happens on a real
+ * user edit. So merely OPENING a note never modifies it.
+ */
+export function editorHtmlForTopic(topic: Topic): string {
+  if (topic.contentFormat === 'html' && typeof topic.contentHtml === 'string') {
+    return sanitizeEditorHtml(topic.contentHtml);
+  }
+  return sanitizeEditorHtml(markdownToEditorHtml(topic.notes ?? ''));
+}
+
+/** True when the note's authoritative body is the rich-text field. */
+export function topicUsesHtml(topic: Topic): boolean {
+  return topic.contentFormat === 'html' && typeof topic.contentHtml === 'string';
+}
+
+/**
+ * Plain text for a note, from WHICHEVER format it is in.
+ *
+ * Used by `searchLibrary` and the AI note tools so neither has to know which
+ * format a given note happens to be stored in.
+ */
+export function topicPlainText(topic: Topic): string {
+  if (topicUsesHtml(topic)) return htmlToPlainText(topic.contentHtml ?? '');
+  return stripMarkdownForSearch(topic.notes ?? '');
+}
+
+/**
+ * Reduce markdown to comparable text for search.
+ *
+ * Only the decorative characters are removed, never the words, so a search for a
+ * formula or a code snippet still matches.
+ */
+function stripMarkdownForSearch(markdown: string): string {
+  return markdown
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_~#>]/g, '')
+    .trim();
 }
 
 export async function setTopicStatus(id: string, status: TopicStatus): Promise<void> {

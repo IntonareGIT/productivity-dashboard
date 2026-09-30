@@ -143,8 +143,9 @@ check('migration: no duplicate ids', new Set(migrated.map((t) => t.id)).size ===
 
 // ------------------------------------------------------- schema declarations
 const src = readFileSync('src/db/db.ts', 'utf8');
-check('schema: v9 is present and v10 (resource groups) is the latest version',
-  /\.version\(9\)/.test(src) && /\.version\(10\)/.test(src) && !/\.version\(1[1-9]\)/.test(src));
+check('schema: v9 is present and v11 (rich-text notes) is the latest version',
+  /\.version\(9\)/.test(src) && /\.version\(10\)/.test(src)
+  && /\.version\(11\)/.test(src) && !/\.version\(1[2-9]\)/.test(src));
 check('schema: v9 stores topics (additive only)', /this\.version\(9\)[\s\S]{0,220}?topics: 'id, subjectId, status, createdAt, title'/.test(src));
 check('schema: primary key is still `id` (not rewritten)', /topics: 'id,/.test(src));
 check('schema: title is indexed for by-title lookup', /topics: '[^']*\btitle\b[^']*'/.test(src));
