@@ -67,7 +67,7 @@ await build({
   ],
 });
 
-globalThis.__S = { subjects: new Map(), topics: new Map(), resources: new Map() };
+globalThis.__S = { subjects: new Map(), topics: new Map(), resources: new Map(), resourceGroups: new Map() };
 const { saveResource } = await import(`file://${outFile.replace(/\\/g, '/')}`);
 
 let pass = 0;

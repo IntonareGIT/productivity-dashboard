@@ -153,3 +153,49 @@ html[data-theme="playing"].light {
   --pane-ring-idle: color-mix(in srgb, var(--border-subtle) 35%, transparent);
   --pane-glow: color-mix(in srgb, var(--accent-primary) 12%, transparent);
 }
+
+/* ---- Note text colors (v11) ----------------------------------------------
+   The eight-color palette the notes toolbar offers, stored in a note as
+   `var(--note-c-rose)` etc. and resolved here.
+
+   Deriving from the theme's OWN text token with `color-mix` is what makes a
+   color readable in BOTH modes without eight hard-coded values per theme: a
+   dark mode pulls the hue toward the light `--text-primary`, a light mode
+   pulls it toward the dark one, so each stays close to the body-text contrast
+   in that mode. This mirrors how `--pane-ring` above follows the theme, and
+   means a new theme is readable without touching this file.
+
+   The 78% hue / 22% text mix keeps the color identifiable as itself while
+   staying legible; the darker `.light` blend (60%) is needed because light
+   backgrounds lose contrast much faster than dark ones. */
+:root {
+  --note-hue-rose: 225 25% 62%;
+  --note-hue-orange: 25 80% 60%;
+  --note-hue-amber: 40 85% 55%;
+  --note-hue-green: 145 45% 52%;
+  --note-hue-teal: 175 50% 48%;
+  --note-hue-blue: 210 70% 62%;
+  --note-hue-purple: 270 50% 66%;
+  --note-hue-gray: 220 8% 68%;
+
+  --note-c-rose: hsl(var(--note-hue-rose) / 78%) ;
+  --note-c-orange: hsl(var(--note-hue-orange) / 78%);
+  --note-c-amber: hsl(var(--note-hue-amber) / 80%);
+  --note-c-green: hsl(var(--note-hue-green) / 78%);
+  --note-c-teal: hsl(var(--note-hue-teal) / 80%);
+  --note-c-blue: hsl(var(--note-hue-blue) / 80%);
+  --note-c-purple: hsl(var(--note-hue-purple) / 80%);
+  --note-c-gray: hsl(var(--note-hue-gray) / 75%);
+}
+
+/* On a light surface, darken every hue toward the theme's dark text color. */
+html.light {
+  --note-c-rose: color-mix(in srgb, hsl(var(--note-hue-rose)) 60%, var(--text-primary));
+  --note-c-orange: color-mix(in srgb, hsl(var(--note-hue-orange)) 60%, var(--text-primary));
+  --note-c-amber: color-mix(in srgb, hsl(var(--note-hue-amber)) 62%, var(--text-primary));
+  --note-c-green: color-mix(in srgb, hsl(var(--note-hue-green)) 58%, var(--text-primary));
+  --note-c-teal: color-mix(in srgb, hsl(var(--note-hue-teal)) 62%, var(--text-primary));
+  --note-c-blue: color-mix(in srgb, hsl(var(--note-hue-blue)) 58%, var(--text-primary));
+  --note-c-purple: color-mix(in srgb, hsl(var(--note-hue-purple)) 60%, var(--text-primary));
+  --note-c-gray: color-mix(in srgb, hsl(var(--note-hue-gray)) 55%, var(--text-primary));
+}

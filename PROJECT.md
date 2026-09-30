@@ -15,6 +15,18 @@ stacks below 768px).
 **This file is the source of truth for data shapes.** Re-read it before adding
 any new feature and keep it updated whenever the schema evolves.
 
+> **RULE: the About / Help page must be updated in the same change as any
+> feature.** `src/features/about/helpContent.ts` holds every word on that page
+> as data. Whenever a feature is added, removed, or its behaviour changes, edit
+> that file in the same commit — a feature that ships without a line there is a
+> feature the user cannot discover.
+>
+> `scripts/verify-about-help.mjs` (part of `npm run verify`) enforces the
+> mechanical part: it checks the required sections exist, that the copy lives in
+> one data file rather than JSX, that **every AI tool the runtime actually
+> registers is described on the page**, and that the sync wording matches what
+> `blobMode` really does. Adding a tool without a matching line will fail it.
+
 ---
 
 ## 1. Dexie.js Database Schema
@@ -70,7 +82,74 @@ db.version(7).stores({
 db.version(8).stores({
   uiState:          'id',   // single row, key 'current'
 });
+db.version(9).stores({
+  topics:           'id, subjectId, status, createdAt, title',  // +title index
+});
+db.version(10).stores({
+  resourceGroups:   'id, subjectId, order, createdAt',          // new table
+  resources:        'id, subjectId, topicId, title, dueDate, createdAt, groupId',
+});
 ```
+
+Notes carry their formatting as a tiny inline-HTML subset **inside** the
+markdown source, so the storage format is still markdown and an existing note
+is byte-for-byte unchanged.
+
+### 1.3.2 Note formatting — size, alignment, color
+
+Notes support basic rich text without changing the storage format or the
+editor. The toolbar wraps the selected text (or inserts at the cursor) with a
+small allowlisted subset of inline HTML:
+
+| Control | Stored as |
+| --- | --- |
+| Size (Small / Normal / Large / Huge) | `<span style="font-size:0.85em…1.6em">` |
+| Alignment (left / center / right) | `<div style="text-align:center">` block wrapper |
+| Color (8 swatches + Default) | `<span style="color:var(--note-c-rose)">` |
+| Clear formatting | removes every `span`/`div`, keeping the text |
+
+**The palette uses CSS variables, not fixed hex values.** A note stores
+`var(--note-c-rose)` and `themes.css` resolves it per theme *and* per mode,
+mixing the hue toward that theme's `--text-primary`. That is what makes a color
+readable in both light and dark without eight hard-coded values per theme, and
+it follows the same pattern as `--pane-ring`. A literal hex, `rgb()`, or a named
+color is **rejected by the sanitizer** precisely so this guarantee cannot be
+bypassed.
+
+**Rendering order — sanitize first, then markdown, then math.** `renderNoteHtml`
+in `MarkdownNotes.tsx`:
+
+1. `extractFormatting(raw)` pulls the allowlisted tags out and leaves private-use
+   placeholders; everything else becomes plain text.
+2. The existing `escapeHtml` + markdown + `renderLatex` pass runs on that
+   markup-free text, so neither the markdown rules nor the math pass can
+   manufacture a tag, and a formatting tag cannot break a `$..$` span.
+3. `restoreFormatting` puts the sanitized tags back where the placeholders were.
+
+The sanitizer allowlist is deliberately narrow: **only `span` and `div`, and
+only `color`, `font-size`, `text-align`** against fixed value lists. There is no
+`on*` handler, `href`, `src`, `class`, or `url()`. A rejected tag is dropped but
+its **text survives**, so an imported note degrades to plain text rather than
+losing content. This is the module that feeds `dangerouslySetInnerHTML`, so it
+is the security boundary; `scripts/verify-note-formatting.mjs` asserts the
+rejection cases directly.
+
+**Math is a separate seam.** `renderLatex()` is one self-contained function
+taking escaped text and returning HTML, so swapping in real KaTeX later is a
+change to that function alone — the toolbar, the sanitizer and the markdown
+pipeline do not move. It currently styles `$..$` / `$$..$$` rather than
+typesetting them, and the verification script pins every case the fake renderer
+must keep working: math inside a colored span, inside a sized span, inside an
+aligned block, and with a formatting tag wrapping only part of a formula.
+
+The toolbar renders from the shared `NotesEditorBody`, used by **both** the
+standalone Library editor and the split-pane notes view, so the controls cannot
+drift apart. On mobile it is one horizontally scrolling row with 40px targets
+and `overscroll-x-contain`.
+
+**Out of scope, deliberately:** the AI reply renderer. `AssistantChat.tsx` still
+renders message text as plain `whitespace-pre-wrap` and does not use this
+renderer.
 
 Indexed fields are listed; `tags`, `notes`, etc. are stored but not indexed.
 
@@ -121,6 +200,8 @@ export interface Resource {
   id: string;              // UUID primary key
   subjectId: string;       // Denormalized FK -> subjects.id (fast dashboard queries)
   topicId: string | null;  // FK -> topics.id (null = legacy subject-level row)
+  groupId?: string | null; // FK -> resourceGroups.id (null = ungrouped). Independent
+                            // of topicId: a grouped resource still has its topic.
   kind: ResourceKind;      // 'link' = urlOrPath; 'file' = blob holds the upload
   title: string;           // Title / label
   urlOrPath?: string;      // Web URL or file reference/path — REQUIRED for
@@ -203,6 +284,42 @@ mode saves and still rejects a missing URL or title; a PDF, a PNG and a DOCX
 each save with **no** URL and keep their blob, fileName, mimeType and fileSize;
 editing an upload's title without re-picking a file keeps the stored bytes; and
 an upload that omits `kind` is still rejected, which pins the original bug.
+
+### 1.3.1 `resourceGroups` — named folders for resources (v10)
+
+```typescript
+export interface ResourceGroup {
+  id: string;              // UUID primary key
+  subjectId: string;       // FK -> subjects.id
+  name: string;            // User-given group name
+  order: number;           // Manual ordering within a subject
+  createdAt: string;       // ISO 8601
+}
+```
+
+A group is a **lane over resources inside one subject**, not a new level in the
+hierarchy. It is deliberately *not* a child of `topics`: a grouped resource
+keeps its own `topicId`, so notes, split-with-notes and `deleteTopicCascade`
+are unaffected, and grouping *across* topics ("every past paper") works.
+
+Invariants, all enforced in `libraryRepo.ts` and pinned by
+`scripts/verify-resource-groups.mjs`:
+
+- A group belongs to exactly one subject; it is never re-homed.
+- Only a resource **of that same subject** may join it — checked in
+  `moveResourceToGroup`, `moveResourcesToGroup` and `saveResource`.
+- A resource is in **at most one** group, or none.
+- **Deleting a group ungroups its members and never deletes them.** Losing a
+  folder must not lose the work in it.
+- Changing a resource's subject clears its `groupId`.
+- Deleting a subject deletes its groups (`deleteSubjectCascade`).
+- The v10 upgrade only *normalises*: it clears a `groupId` that points at a
+  missing group or a group of another subject, and drops groups whose subject
+  is gone. Existing resources simply have no `groupId` and stay ungrouped.
+
+`resourceGroups` is metadata, so it **syncs**: it is deliberately absent from
+`UNSYNCED_TABLES` in `cloudConfig.ts`, and the file-blob rules (`BLOB_MODE`,
+`LARGE_BLOB_WARNING_BYTES`) are untouched.
 
 ### 1.4 `assessments` — exams/quizzes/assignments/projects per subject (v5)
 
@@ -683,8 +800,11 @@ primary key — never `++id` and never `@id`. This is deliberate:
   re-keying every row — a table migration, and migrations on *synced* tables
   cannot be performed consistently on the client.
 - Consequently there is **no `Version.upgrade()` touching any synced table**.
-  The only `.upgrade()` in the codebase is the historical schema v5 one, which
-  predates sync.
+  The `.upgrade()` callbacks in the codebase are all client-side value
+  migrations that run on the upgrading device: the historical schema v5 one
+  (which predates sync), v9 (note titles) and v10 (resource groups). None of
+  them needs to execute consistently on the server, because each derives its
+  writes from data the client already has.
 
 `themeStatusMap` (keyed on `status`), `appSettings` (keyed on the literal
 `'pomodoro'`) and `uiState` (keyed on the literal `'current'`) keep their natural
@@ -1550,6 +1670,47 @@ shared `MarkdownNotes` and writes through the same `updateTopicNotes()`.
   grouped by subject. `db/backup.ts` exports all 10 tables (schemaVersion 5,
   file blobs stripped from JSON). Cascade delete covers topics, resources,
   assessments, linked events; pomodoro sessions are unlinked, not deleted.
+
+- **Note titles (schema v9):** a "note" is a `topics` row — `notes` is the body
+  and `title` is its label. The field always existed but was hard-coded to the
+  placeholder `'General'` and never surfaced, so every note looked identical.
+  v9 indexes `title` and backfills the placeholder from the note's own first
+  line (markdown stripped, ~60 chars) or `'Untitled note'` when empty. The
+  upgrade never touches `notes`. New notes default to `'Untitled note'`. An
+  editable title now sits at the top of both note views (Library and split
+  pane), and `searchLibrary` already matched and returned titles, so the
+  assistant can now find notes by name. Rules live in `src/db/noteTitle.ts`
+  (pure, no Dexie) and are pinned by `scripts/verify-note-titles.mjs`.
+
+- **Note formatting (no schema change):** notes gained font size, text
+  alignment and text color while remaining **markdown at rest**. The toolbar
+  wraps the selection with a small inline-HTML subset; the renderer sanitizes
+  it through a strict allowlist (`span`/`div`; only `color`, `font-size`,
+  `text-align`, each value-validated) and a rejected tag is dropped with its
+  text intact. The pipeline sanitizes **before** the markdown and math passes,
+  which is what lets a formula render correctly inside a colored span, a sized
+  span, an aligned block, or with a tag covering only part of it. `renderLatex()`
+  is a single seam, so real KaTeX can replace it later without touching the
+  toolbar or the sanitizer. Palette colors are theme-aware CSS variables
+  (`--note-c-*`) so they stay readable in both light and dark. The toolbar is
+  shared by the standalone Library editor and the split-pane notes view, and
+  scrolls horizontally with 40px targets on mobile. The AI reply renderer was
+  left alone. Verified by `scripts/verify-note-formatting.mjs` (128 checks),
+  which also pins that an unformatted note renders byte-identically to before.
+
+- **Resource groups (schema v10):** added the `resourceGroups` table and an
+  optional indexed `groupId` on `resources` — named, folder-like lanes for
+  resources within a subject. A group is a *sibling* of `Topic`, not its child:
+  a grouped resource keeps its own `topicId`, so notes, split-with-notes and
+  topic deletes are untouched and grouping across topics works. The Library
+  gains a "New group" button, per-group rename/delete/collapse, and a
+  "Move to group" menu on every resource row (with "No group" and
+  "New group…"). Every control is tap-driven with 40px targets — no drag, no
+  long-press, no hover-only affordance. Deleting a group ungroups its members
+  and never deletes them; moving a resource to another subject clears its
+  `groupId`; deleting a subject deletes its groups. `searchLibrary` now
+  reports each hit's `group` and also matches on the group name. Verified by
+  `scripts/verify-resource-groups.mjs` (63 checks).
 
 - **Global AI Assistant (schema v6, AI Part 1):** added the `aiProviders`
   table (label, baseUrl, apiKey, modelName, isDefault) and a Settings "AI

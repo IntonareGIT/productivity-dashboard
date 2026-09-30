@@ -39,6 +39,10 @@ const check = (name, cond, detail = '') => {
   else { console.log(`FAIL  ${name}${detail ? ' :: ' + detail : ''}`); fail += 1; }
 };
 
+// The two-finger gesture maths lives in the shared hook, so every touch
+// assertion reads that ONE implementation rather than an inline copy per viewer.
+const hook10touch = readFileSync('src/features/library/useZoomAnchor.ts', 'utf8');
+
 const BLOB = { __blob: true };
 const res = (over = {}) => ({
   id: 'r1', subjectId: 's1', topicId: 't1', kind: 'file', title: 'Doc',
@@ -372,7 +376,7 @@ const res = (over = {}) => ({
     /const boxClass = fullScreen/.test(pdf) &&
     /fixed inset-0 z-\[60\] flex flex-col gap-0 p-0 h-full min-h-0 min-w-0 w-full/.test(pdf));
   check('T fullscreen no longer imposes a max-height on the surface',
-    /variant === 'standalone' \|\| fullScreen \? undefined : \{ maxHeight/.test(pdf));
+    /maxHeight: variant === 'standalone' \|\| fullScreen \? undefined : 'min\(72vh, 720px\)'/.test(pdf));
   check('T the viewer is focusable so arrows reach it', /tabIndex=\{0\}/.test(pdf));
   check('T Up/Down are handled by the viewer', /case 'ArrowDown'/.test(pdf) && /case 'ArrowUp'/.test(pdf));
   check('T Up/Down prevent the dashboard behind from scrolling',
@@ -462,6 +466,7 @@ const stripComments = (src) => src
   // Comments stripped — see `stripComments` at module scope. Section 10 does the
   // same inside its own block, since each numbered section has its own scope.
   const pdfCode = stripComments(pdf);
+
 
   // --- PDF: content scales from the origin, so the anchor is centre * ratio.
   const pdfAnchor = (z) => {
@@ -826,21 +831,48 @@ const stripComments = (src) => src
   check('9 the render ledger is only set after a render completes',
     /await task\.promise;[\s\S]{0,400}?renderedKeyRef\.current\.set\(n, key\);/.test(pdfCode));
   // Every canvas backing-store write is logged, so a blank frame is traceable.
-  check('9 every canvas resize is logged with its owner',
-    (pdfCode.match(/zdbg\('canvas-size', \{/g) || []).length === 2 &&
-    /who: 'renderInto'/.test(pdfCode) && /who: 'swap'/.test(pdfCode));
-  check('9 the pdf.js render lifecycle is logged',
-    /zdbg\('render-start'/.test(pdfCode) && /zdbg\('render-done'/.test(pdfCode) &&
-    /zdbg\('render-cancel'/.test(pdfCode));
+  // REGRESSION: `stagedSwapRef.current` is null on every commit that did not go
+  // through off-screen staging (button/keyboard zoom, no pages, or a swap already
+  // consumed). A temporary [zoomdbg] probe once read `staged.probeBefore` outside
+  // its guard, so EVERY zoom threw and the error boundary took over the viewer.
+  // The probe is gone; this pins the structural rule that replaced it: inside the
+  // commit block, every read of `staged` must sit under an `if (staged)`.
+  {
+    const commit = (pdfCode.match(/const zoomAnchor = useZoomAnchor\([\s\S]*?\n {2}\}, \[/) || [''])[0];
+    const guardAt = commit.indexOf('if (staged) {');
+    check('9 the commit block guards every read of the staged swap',
+      commit.includes('const staged = stagedSwapRef.current;') &&
+      guardAt > -1 &&
+      // No `staged.` access may appear before the guard opens.
+      !/staged\.[a-zA-Z]/.test(commit.slice(0, guardAt)),
+      commit.slice(0, guardAt).match(/staged\.[a-zA-Z]+/g)?.join(',') ?? 'clean');
+    // And the swap must be consumed exactly once, or a later commit would reuse a
+    // stale generation and swap already-discarded bitmaps in.
+    check('9 the staged swap is consumed once per commit',
+      (commit.match(/stagedSwapRef\.current = null;/g) || []).length === 1);
+    // No probe/debug measurement may creep back into the zoom path.
+    check('9 no probe or debug measurement remains in the zoom path',
+      !/probeBefore|probeAfter|probe\(\)|frameCounter|zdbg|zoomdbg|previewAtRelease/.test(pdfCode) &&
+      !/probeBefore|probeAfter|frameCounter|ZOOM_DEBUG|zoomdbg/.test(hook10touch));
+  }
+
+  // The temporary [zoomdbg] instrumentation was removed once pinch zoom felt
+  // right, so the three checks that asserted its presence went with it. What
+  // matters is pinned below instead: the render lifecycle still runs, the canvas
+  // backing store is still only written imperatively, and the hand-off values
+  // agree. Asserting on log calls would only re-introduce dead code.
+  //
   // React must never set the canvas backing store through props.
   check('9 the canvas bitmap is never set through React props',
     !/<canvas[^>]*\bwidth=\{/.test(pdf) && !/<canvas[^>]*\bheight=\{/.test(pdf));
-  // The preview and the commit must agree on the scale handed off.
-  check('9 the preview scale and the committed ratio are cross-checked',
-    /ratioMatchesPreview: Math\.abs\(ratio - previewAtRelease\) < 0\.0005/.test(pdfCode) &&
-    // The reset must NOT happen before the value is captured, or the log (and
-    // anything reading it) sees 1 instead of the real ratio.
-    /const previewAtRelease = liveScaleRef\.current;/.test(pdfCode));
+  // The preview ratio and the committed ratio are the same `ratio` value handed
+  // to stageSwap, so the hand-off cannot disagree with what was previewed. This
+  // used to be a logged cross-check (`ratioMatchesPreview`); with the debug
+  // logging gone the invariant is the value flow itself, asserted here.
+  check('9 the preview scale and the committed ratio are the same value',
+    /const ratio = prev > 0 && target !== null \? target \/ prev : 1;/.test(pdfCode) &&
+    /stageSwap\(target, ratio, focal/.test(pdfCode) &&
+    /applyZoom\(target, focal\.x, focal\.y, ratio\)/.test(pdfCode));
 
   // --- Pinch runaway: ONE running gesture scale, committed zoom folded in once
   // The handler used to feed `zoomRef * liveScale * exp(...)` into a function
@@ -1070,9 +1102,10 @@ const stripComments = (src) => src
   check('10 the commit folds the committed zoom in exactly once',
     /const target = quantizeZoom\(gestureStartZoomRef\.current \* liveScaleRef\.current\);/.test(pdfCode) &&
     (pdfCode.match(/gestureStartZoomRef\.current \* liveScaleRef\.current/g) || []).length === 1);
-  check('10 a touchmove never calls setZoom', !/setZoom\(/.test(touch));
+  check('10 a touchmove never calls setZoom', !/setZoom\(/.test(hook10touch));
   check('10 a touchmove applies a GPU transform instead',
-    /applyLive\(dist\(e\.touches\) \/ startDist, c\.x, c\.y\)/.test(touch));
+    /applyLive\(dist\(e\.touches\) \/ startDistRef\.current, c\.x, c\.y\)/.test(hook10touch) &&
+    /useTouchZoomHandlers/.test(pdf));
   check('10 the scale is committed to state only after the gesture pauses',
     /window\.setTimeout\(\(\) => \{[\s\S]*?commitLive\(\);[\s\S]*?\}, 150\)/.test(pdf));
   check('10 the live transform is written directly to the DOM',
@@ -1118,12 +1151,23 @@ const stripComments = (src) => src
     /useZoomAnchor\(shellRef, layout, zoom, getFixed, \(el\) => \{/.test(pdfCode));
   check('10 the transform target is promoted to a compositor layer',
     /ref=\{contentRef\}/.test(pdf) && /will-change-transform/.test(pdf));
+  // Lifting a finger ends the gesture INSIDE the shared hook, so both viewers
+  // get the same commit-once-and-reset behaviour and a one-finger pan that
+  // follows can never be measured against a stale baseline.
+  // Asserts the BEHAVIOUR (end() commits exactly once via commitLive, and both
+  // touchend and touchcancel reach it) without depending on the parameter name,
+  // which is `_why` now that the [zoomdbg] logging that used it is gone.
   check('10 touchend commits the gesture',
-    /const onEnd = \(e: TouchEvent\) => \{[\s\S]*?commitLive\(\);/.test(pdf));
+    /const end = \(_?why: string\) => \{[\s\S]{0,200}?if \(startDistRef\.current === 0\) return;[\s\S]{0,200}?commitLive\(\);/.test(hook10touch) &&
+    /const onTouchEnd = \(e: TouchEvent\) => \{[\s\S]{0,500}?if \(startDistRef\.current > 0\) end\(/.test(hook10touch) &&
+    /const onTouchCancel = \(e: TouchEvent\) => \{[\s\S]{0,200}?if \(startDistRef\.current > 0\) end\(/.test(hook10touch));
   // Only the zoom surface may carry a non-passive wheel listener.
   check('10 the non-passive wheel listener is on the zoom surface only',
     (pdf.match(/addEventListener\('wheel'/g) || []).length === 1 &&
-    (pdf.match(/addEventListener\('touchmove', onMove, \{ passive: false \}\)/g) || []).length === 1);
+    // touchmove must be non-passive or preventDefault is ignored and the browser
+    // page-zooms alongside our pinch. Registered ONLY on the viewer element.
+    (pdf.match(/addEventListener\('touchmove', touchZoom\.onTouchMove, \{ passive: false \}\)/g) || []).length === 1 &&
+    (pdf.match(/addEventListener\('touchmove'/g) || []).length === 1);
 
   // ---- 11. Scroll-write feedback loop -----------------------------------
   // A programmatic scrollLeft/scrollTop assignment fires a real `scroll` event.
@@ -1218,22 +1262,43 @@ const stripComments = (src) => src
     /canvas\.width = Math\.floor\(pageW \* geo\.viewportScale\)/.test(pdf) &&
     /getViewport\(\{ scale: geo\.viewportScale, rotation \}\)/.test(pdf));
   // Uncapped DPR would allocate an unbounded canvas at high zoom.
+  // Mobile budgets. The per-canvas cap alone is not enough — several canvases
+  // are alive at once — so the ceiling is divided by the resident page count.
   check('12 the device ratio is bounded by a pixel budget',
     /MAX_CANVAS_PIXELS = 16_777_216/.test(pdf) &&
-    /const dpr = Math\.max\(1, Math\.min\(nativeDpr, budgetDpr\)\)/.test(pdf) &&
-    /const budgetDpr = Math\.sqrt\(MAX_CANVAS_PIXELS \/ cssPixels\)/.test(pdf));
+    /MOBILE_MAX_CANVAS_PIXELS = 8_000_000/.test(pdf) &&
+    /MOBILE_MAX_DPR = 2/.test(pdf) &&
+    /MOBILE_MAX_TOTAL_CANVAS_PIXELS = 24_000_000/.test(pdf) &&
+    /MOBILE_MIN_DPR = 0\.5/.test(pdf) &&
+    /MOBILE_MAX_TOTAL_CANVAS_PIXELS \/ Math\.max\(1, livePages\)/.test(pdf) &&
+    // The old `Math.max(1, ...)` floor silently UNDID the budget whenever
+    // budgetDpr fell below 1 — i.e. precisely on the largest pages. On mobile it
+    // must be allowed below 1 so the page renders at lower internal resolution.
+    /const minDpr = mobile \? MOBILE_MIN_DPR : 1;/.test(pdf) &&
+    /const dpr = Math\.max\(minDpr, Math\.min\(dprCap, budgetDpr\)\);/.test(pdf));
+  // Memory is released, not left to the collector: a phone that has visited
+  // twenty pages at 4x has no chance of GC reclaiming twenty bitmaps in time.
+  check('12 canvases are released when they leave the render window',
+    /canvas\.width = 0;[\s\S]{0,120}?canvas\.height = 0;/.test(pdf) &&
+    /if \(!inWindow\.has\(n\)\) releaseCanvas\(n\);/.test(pdf));
+  check('12 off-screen staging is skipped on mobile',
+    /if \(isMobileViewport\(\)\) \{[\s\S]{0,200}?stagedSwapRef\.current = null;[\s\S]{0,80}?fire\(\);/.test(pdf),
+    'a second full-size detached set doubles peak memory and kills the tab');
 
   // 2. Touch: exactly two fingers, and never cancelled otherwise.
-  check('10 touch move requires exactly two fingers',
-    /if \(e\.touches\.length !== 2 \|\| startDist <= 0\) return;/.test(touch));
-  const touchCode = touch.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+  // The gesture maths lives in the SHARED hook now, so both viewers are asserted
+  // against that one implementation rather than a copy in each.
+  const touchCode = hook10touch.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
   const touchGuard = touchCode.indexOf('touches.length !== 2');
   const touchBlock = touchCode.indexOf('e.preventDefault()');
+  check('10 touch move requires exactly two fingers',
+    /const onTouchStart = \(e: TouchEvent\) => \{[\s\S]{0,120}?if \(e\.touches\.length !== 2\) return;/.test(hook10touch) &&
+    /const onTouchMove = \(e: TouchEvent\) => \{[\s\S]{0,200}?if \(e\.touches\.length !== 2\) return;/.test(hook10touch));
   check('10 a one-finger pan is never preventDefault-ed',
     touchGuard !== -1 && touchBlock !== -1 && touchGuard < touchBlock,
     `guard@${touchGuard} block@${touchBlock}`);
   check('10 touchstart is passive (nothing is cancelled there)',
-    /addEventListener\('touchstart', onStart, \{ passive: true \}\)/.test(pdf));
+    /addEventListener\('touchstart', touchZoom\.onTouchStart, \{ passive: true \}\)/.test(pdf));
 
   // 3. Programmatic scroll writes during a zoom must be instant. The write lives
   // in the shared hook, so the whole set/restore pair is asserted there.

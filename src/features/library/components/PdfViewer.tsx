@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { useZoomAnchor, advanceGestureScale, normalizeWheelDelta, pinchSensitivityFor } from '../useZoomAnchor';
+import { useZoomAnchor, advanceGestureScale, normalizeWheelDelta, pinchSensitivityFor, useTouchZoomHandlers, VIEWER_TOUCH_ACTION } from '../useZoomAnchor';
 
 // Register the worker once, at module load. Vite rewrites the `?url` import to
 // a hashed asset URL, so this works in both dev and the production build.
@@ -53,30 +53,50 @@ const quantizeZoom = (z: number): number | null => {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, +z.toFixed(2)));
 };
 
-/** TEMPORARY pinch instrumentation. Remove this block and its call sites. */
-const ZOOM_DEBUG = true;
-const zdbg = (name: string, data: unknown) => {
-  if (!ZOOM_DEBUG) return;
-  // JSON.stringify so every field is visible as TEXT. Chrome collapses an object
-  // argument to `{...}` unless it is expanded, which hid the very values needed
-  // to diagnose the hand-off.
-  console.log(`[zoomdbg] ${name}`, JSON.stringify(data));
-};
-/** Monotonic wall clock for the [zoomdbg] timestamps. */
+/**
+ * Monotonic wall clock, in milliseconds. Used by real gesture logic (the
+ * post-commit momentum guard below), not for logging.
+ */
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : 0);
 
+// ---- Canvas memory budgets ------------------------------------------------
+//
+// Canvas memory is the failure mode that blanks a PHONE and leaves a desktop
+// alone. Each canvas is width x height x 4 bytes, and a high-zoom page is
+// enormous: an A4 page at 4x on a 390px-wide iPhone is a 3443x4872 canvas, and
+// three of those in the render window is ~192 MB, before the off-screen staging
+// set doubles it. Browsers cap a single canvas near 16.7M px (iOS) and kill the
+// whole tab well before the sum of them is affordable — which surfaces as a
+// blank page with no error, because the process is gone rather than throwing.
+
+/** Desktop: the platform ceiling, unchanged from before. */
+const MAX_CANVAS_PIXELS = 16_777_216;
+/** Mobile: deliberately well under the per-canvas ceiling so we never touch it. */
+const MOBILE_MAX_CANVAS_PIXELS = 8_000_000;
+/** Mobile: dpr 3/4 quadruples memory for no visible gain at page scale. */
+const MOBILE_MAX_DPR = 2;
 /**
- * Monotonic frame counter, so the commit steps can be shown to all land in the
- * same frame. Incremented by a rAF loop that runs for the life of the component.
+ * Mobile: total across every rendered canvas. A page may be rendered at lower
+ * internal resolution (CSS scales it up) to fit inside this.
  */
-const frameCounterRef = { current: 0 };
-if (typeof requestAnimationFrame === 'function') {
-  const tick = () => {
-    frameCounterRef.current += 1;
-    requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
-}
+const MOBILE_MAX_TOTAL_CANVAS_PIXELS = 24_000_000;
+/**
+ * Mobile: how low the internal resolution may be reduced. Below ~0.5 the text
+ * stops being readable, so a blurry page is preferable to a killed tab.
+ */
+const MOBILE_MIN_DPR = 0.5;
+
+/**
+ * Coarse mobile test. Deliberately not a UA sniff: the thing we care about is a
+ * small viewport on a touch device with a tight canvas budget.
+ */
+const isMobileViewport = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  const touch = (navigator.maxTouchPoints ?? 0) > 0;
+  const narrow = Math.min(window.innerWidth, window.innerHeight) < 820;
+  return (coarse && touch) || narrow;
+};
 
 /**
  * The only breathing room around the page. Deliberately small: the whole point
@@ -90,17 +110,6 @@ const PAGE_GAP = 10;
 
 /** An upper bound on auto-fit, so a tiny page can't be blown up to 8x. */
 const MAX_FIT = 3;
-/**
- * Ceiling on a single page canvas, in device pixels (~16 MP).
- *
- * The render scale follows the display's real `devicePixelRatio` so text is
- * sharp on high-DPI screens, but that is unbounded on its own: an A4 page at
- * 4x zoom on a 3x display is ~76 MP, roughly 300 MB for one canvas, and would
- * take the tab down. The budget trims only what cannot be afforded — on any
- * normal page at a normal zoom the full device ratio is used untouched.
- */
-const MAX_CANVAS_PIXELS = 16_777_216;
-
 /**
  * Toolbar control styling, built from the app's theme tokens.
  *
@@ -273,19 +282,12 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     focal: { x: number; y: number };
     canvases: Map<number, HTMLCanvasElement>;
     tasks: Map<number, pdfjsLib.RenderTask>;
-    startedAt: number;
     /**
      * The geometry key the staged bitmaps were produced at. The swap records it
      * against each canvas so the normal render pipeline recognises the page as
      * already correct and leaves its bitmap alone.
      */
     key: string;
-    /**
-     * Where the focal point sits with the preview transform still applied,
-     * captured at staging time. The swap effect compares against it one frame
-     * after the hand-off, which is where a residual jump would show up.
-     */
-    probeBefore: { top: number; left: number } | null;
   } | null>(null);
   /**
    * Bumped once staging completes, to drive the swap. A counter rather than the
@@ -308,6 +310,22 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
    * writes into this map too, which is what makes the two paths agree.
    */
   const renderedKeyRef = useRef<Map<number, string>>(new Map());
+
+  /**
+   * Release a page's canvas memory.
+   *
+   * Setting width/height to 0 is the documented way to hand a canvas's backing
+   * store back immediately rather than waiting for GC. A page that scrolls out of
+   * the render window would otherwise hold a multi-megabyte bitmap that nothing
+   * releases promptly on a phone, and several of those are what blank the tab.
+   */
+  const releaseCanvas = useCallback((n: number) => {
+    const canvas = canvasRefs.current.get(n);
+    if (!canvas) return;
+    canvas.width = 0;
+    canvas.height = 0;
+    renderedKeyRef.current.delete(n);
+  }, []);
   /**
    * Milliseconds since the last commit. A touchpad's momentum tail keeps firing
    * ctrl+wheel events after the fingers lift; without this they would start a
@@ -343,7 +361,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
    * about the geometry: a mismatch here is exactly what makes a swapped page
    * land at a slightly different size than the wrapper that was measured for it.
    */
-  const pageGeometry = useCallback((pageW: number, pageH: number, atZoom: number) => {
+  const pageGeometry = useCallback((pageW: number, pageH: number, atZoom: number, livePages = 1) => {
     const rotated = rotation % 180 !== 0;
     const availW = Math.max(1, containerWidth - PAGE_PAD);
     const availH = Math.max(1, containerHeight - PAGE_PAD);
@@ -351,8 +369,25 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     const cssScale = fitScale * atZoom;
     const nativeDpr = window.devicePixelRatio || 1;
     const cssPixels = Math.max(1, pageW * cssScale * pageH * cssScale);
-    const budgetDpr = Math.sqrt(MAX_CANVAS_PIXELS / cssPixels);
-    const dpr = Math.max(1, Math.min(nativeDpr, budgetDpr));
+
+    const mobile = isMobileViewport();
+    // Mobile gets a much tighter per-canvas ceiling and a capped device ratio;
+    // a page may then be rendered at LOWER internal resolution, which CSS scales
+    // back up. Blurry beats a killed tab.
+    //
+    // The TOTAL budget is what actually matters on a phone: a per-canvas cap
+    // alone still allows N of them alive at once. The ceiling is therefore
+    // divided by how many pages can be resident, so the sum stays bounded.
+    const perCanvasCap = mobile
+      ? Math.min(MOBILE_MAX_CANVAS_PIXELS, MOBILE_MAX_TOTAL_CANVAS_PIXELS / Math.max(1, livePages))
+      : MAX_CANVAS_PIXELS;
+    const dprCap = mobile ? MOBILE_MAX_DPR : nativeDpr;
+    const minDpr = mobile ? MOBILE_MIN_DPR : 1;
+    const budgetDpr = Math.sqrt(perCanvasCap / cssPixels);
+    // The floor matters: the old `Math.max(1, ...)` silently UNDID the budget
+    // whenever budgetDpr fell below 1, so the biggest pages were the ones that
+    // blew past the ceiling. It must be allowed below 1 on mobile.
+    const dpr = Math.max(minDpr, Math.min(dprCap, budgetDpr));
     // The ZOOM-1 size, which does not depend on `atZoom`. Page sizes are stored
     // in these units so the LAYOUT is a pure function of (base size, zoom) and is
     // therefore final the instant the zoom changes — no waiting for a render.
@@ -377,12 +412,18 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // allocate a canvas per page. Canvases that scroll out of range are simply
   // unmounted by React, releasing their memory.
   const renderWindow = useMemo(() => {
-    const from = Math.max(1, page - 1);
-    const to = Math.min(pageCount, page + 1);
+    // Buffering the neighbouring pages keeps scrolling smooth, but each one is a
+    // full-size canvas. On mobile at high zoom that is what exhausts the canvas
+    // budget and blanks the tab, so the buffer shrinks to nothing as the pages
+    // grow: the visible page only.
+    const mobile = isMobileViewport();
+    const buffer = mobile ? (zoom >= 2 ? 0 : 1) : 1;
+    const from = Math.max(1, page - buffer);
+    const to = Math.min(pageCount, page + buffer);
     const out: number[] = [];
     for (let n = from; n <= to; n += 1) out.push(n);
     return out;
-  }, [page, pageCount]);
+  }, [page, pageCount, zoom]);
 
   /**
    * Render the pages near the viewport at `target` into DETACHED canvases.
@@ -405,31 +446,6 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     const gen = swapGenRef.current;
     // Only the pages near the viewport are pre-rendered. Everything else keeps
     // its correct wrapper size and is rendered lazily as it scrolls into range.
-    const pages = renderWindow;
-    const staged = {
-      gen,
-      target,
-      ratio,
-      focal,
-      canvases: new Map<number, HTMLCanvasElement>(),
-      tasks: new Map<number, pdfjsLib.RenderTask>(),
-      startedAt: nowMs(),
-      key: `${target}|${rotation}|${containerWidth}x${containerHeight}`,
-      // Where the focal point sits right now, with the preview transform still
-      // applied. The swap effect compares against this one frame later.
-      probeBefore: null as { top: number; left: number } | null,
-    };
-    stagedSwapRef.current = staged;
-    {
-      const shellNow = shellRef.current;
-      const hit = document.elementFromPoint(focal.x, focal.y) as HTMLElement | null;
-      if (hit && shellNow) {
-        const hr = hit.getBoundingClientRect();
-        const sr = shellNow.getBoundingClientRect();
-        staged.probeBefore = { top: hr.top - sr.top, left: hr.left - sr.left };
-      }
-    }
-
     // Commit exactly once, and only while this generation is still current.
     let fired = false;
     const fire = () => {
@@ -438,6 +454,31 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       fired = true;
       commit();
     };
+
+    // MOBILE: staging is skipped entirely. Holding a second full-size set of
+    // DETACHED canvases alongside the on-screen ones doubles peak memory
+    // (~384 MB on an iPhone at 4x), which is the single largest contributor to
+    // the tab being killed. The commit still happens in the same frame; the
+    // bitmap simply arrives a few ms later via the normal path, leaving a brief
+    // soft-scaled page instead of a dead tab.
+    if (isMobileViewport()) {
+      stagedSwapRef.current = null;
+      fire();
+      return;
+    }
+
+    const pages = renderWindow;
+    const staged = {
+      gen,
+      target,
+      ratio,
+      focal,
+      canvases: new Map<number, HTMLCanvasElement>(),
+      tasks: new Map<number, pdfjsLib.RenderTask>(),
+      key: `${target}|${rotation}|${containerWidth}x${containerHeight}`,
+    };
+    stagedSwapRef.current = staged;
+
     // The budget: proceed anyway once the delay is spent, so a slow page can
     // never leave the viewer stuck showing the preview. Missing bitmaps fall back
     // to stretching the old pixels, which is blurry but never blank.
@@ -477,12 +518,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       }
     })).then(() => {
       if (swapGenRef.current !== gen) return;
-      zdbg('staged', {
-        ms: (typeof performance !== 'undefined' ? performance.now() : 0) - staged.startedAt,
-        pages: pages.length,
-        ready: staged.canvases.size,
-        gen,
-      });
+
       clearTimeout(timer);
       setSwapReady((v) => v + 1);
       fire();
@@ -590,43 +626,17 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // separate effect left the wrappers at the new size while the canvases still
   // held old or cleared bitmaps — a frame of blank pages.
   const zoomAnchor = useZoomAnchor(shellRef, layout, zoom, getFixed, (el) => {
+    // `staged` is null whenever the commit did NOT go through the off-screen
+    // staging path — a button/keyboard zoom, a document with no pages, or a
+    // swap already consumed. Every read of it below is therefore inside an
+    // `if (staged)` guard, and NOTHING in this block may dereference it
+    // unguarded: a missing measurement must never be able to break zooming.
     const staged = stagedSwapRef.current;
-    const now = () => (typeof performance !== 'undefined' ? performance.now() : 0);
-    const frame = frameCounterRef.current;
-    const shell = shellRef.current;
-
-    /**
-     * Viewport-relative box of whatever sits under the focal point, plus the
-     * scroll state. Sampled here — the FIRST statement of the commit block, before
-     * the transform is touched — so it is the position the user is looking at as
-     * the commit begins, and it can be compared with the same reading one frame
-     * later.
-     */
-    const probe = () => {
-      if (!staged || !shell) return null;
-      const el = document.elementFromPoint(staged.focal.x, staged.focal.y) as HTMLElement | null;
-      if (!el) return null;
-      const r = el.getBoundingClientRect();
-      const s = shell.getBoundingClientRect();
-      return {
-        top: +(r.top - s.top).toFixed(2),
-        left: +(r.left - s.left).toFixed(2),
-        width: +r.width.toFixed(2),
-        height: +r.height.toFixed(2),
-        scrollLeft: shell.scrollLeft,
-        scrollTop: shell.scrollTop,
-        scrollWidth: shell.scrollWidth,
-        scrollHeight: shell.scrollHeight,
-      };
-    };
-    const before = probe() ?? staged.probeBefore;
-    zdbg('probe-before', { t: +now().toFixed(2), frame, focal: staged?.focal, before });
 
     // (1) Remove the preview transform. A transform grows the scrollable
     // overflow area, so leaving it on would corrupt every measurement below.
     const content = contentRef.current;
     if (content) content.style.transform = '';
-    zdbg('commit-step', { step: 1, name: 'drop-preview-transform', t: +now().toFixed(2), frame });
 
     // (2) Resize the wrappers. React has already applied the new `layout`
     // (the effect runs after DOM mutation), so this only re-asserts the canvas
@@ -635,7 +645,6 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     // (3) Swap in the finished off-screen bitmaps. `width`/`height` clear the
     // bitmap, so the drawImage must follow immediately and synchronously — the
     // browser cannot paint in between, so no blank frame is ever observable.
-    let swapped = 0;
     if (staged) {
       for (const n of renderWindow) {
         const live = canvasRefs.current.get(n);
@@ -643,10 +652,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         const bit = staged.canvases.get(n);
         const entry = layout[n - 1];
         if (bit) {
-          zdbg('canvas-size', {
-            t: +now().toFixed(2), page: n, who: 'swap',
-            width: bit.width, height: bit.height, gen: staged.gen,
-          });
+
           live.width = bit.width;
           live.height = bit.height;
           const ctx = live.getContext('2d');
@@ -661,7 +667,6 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
             // just drew. This is what stops the flash reappearing a frame later.
             renderedKeyRef.current.set(n, staged.key);
           }
-          swapped += 1;
         } else if (entry) {
           // Budget exceeded: new CSS box, OLD bitmap left in place. The browser
           // stretches the old pixels — blurry for a moment, never blank.
@@ -670,28 +675,11 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         }
       }
     }
-    zdbg('commit-step', {
-      step: 2, name: 'resize-wrappers', t: +now().toFixed(2), frame,
-      pages: renderWindow.length, pagesSwapped: swapped,
-    });
-    zdbg('commit-step', { step: 3, name: 'canvas-swap', t: +now().toFixed(2), frame });
 
-    // The staged work is consumed by this block. Held for one frame only so the
-    // "after" probe below can read the settled position.
-    const probeAfter = () => {
-      if (typeof requestAnimationFrame !== 'function') return;
-      requestAnimationFrame(() => {
-        const after = probe() ?? staged?.probeBefore;
-        zdbg('probe-after', {
-          t: +now().toFixed(2), frame: frameCounterRef.current, after,
-          drift: before && after
-            ? { top: +(after.top - before.top).toFixed(2), left: +(after.left - before.left).toFixed(2) }
-            : null,
-        });
-      });
-    };
+
+
+    // The staged work is consumed by this block.
     stagedSwapRef.current = null;
-    probeAfter();
   });
 
   /** The page occupying a viewport-relative y offset. */
@@ -806,16 +794,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       // that measurement is valid there because no transform is applied. Only
       // the gesture path supplies a ratio, because its extents are inflated by
       // the live preview. See useZoomAnchor.
-      zdbg('capture', {
-        from: prev,
-        to: clamped,
-        ratio: knownRatio,
-        ratioSource: knownRatio === undefined ? 'measured-extents' : 'analytic',
-        focal: { x: clientX, y: clientY },
-        scrollWithTransformApplied: el
-          ? { l: el.scrollLeft, t: el.scrollTop, w: el.scrollWidth, h: el.scrollHeight }
-          : null,
-      });
+
       zoomAnchor.capture(el, clientX, clientY, knownRatio);
       isZoomingRef.current = true;
       // The hook performs the write in a layout effect after this render; release
@@ -866,14 +845,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       gestureStartZoomRef.current = zoomRef.current;
       focalRef.current = { x: clientX, y: clientY };
       const r0 = shell.getBoundingClientRect();
-      zdbg('gesture-start', {
-        focalClient: { x: clientX, y: clientY },
-        focalInShell: { x: clientX - r0.left, y: clientY - r0.top },
-        scroll: { l: shell.scrollLeft, t: shell.scrollTop },
-        extent: { w: shell.scrollWidth, h: shell.scrollHeight },
-        committedZoom: zoomRef.current,
-        start: gestureStartZoomRef.current,
-      });
+
     }
     const focal = focalRef.current ?? { x: clientX, y: clientY };
 
@@ -903,11 +875,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     const rect = shell.getBoundingClientRect();
     const ox = shell.scrollLeft + (focal.x - rect.left) - PAGE_PAD;
     const oy = shell.scrollTop + (focal.y - rect.top) - PAGE_PAD;
-    zdbg('tick', {
-      gestureScale: nextRatioQ,
-      previewAbsolute: base > 0 ? base * nextRatioQ : nextRatioQ,
-      origin: { x: ox, y: oy },
-    });
+
     el.style.transformOrigin = `${ox}px ${oy}px`;
     el.style.transform = Math.abs(nextRatioQ - 1) < 0.0005 ? '' : `scale(${nextRatioQ})`;
   }, []);
@@ -927,46 +895,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     const focal = focalRef.current;
     const shell = shellRef.current;
     const prev = gestureStartZoomRef.current;
-    // Read BEFORE the reset below. The staged swap reuses this value, and the
-    // log previously read it after the reset, which is why `commit-handoff`
-    // reported 1 while the swap reported the real ratio.
-    const previewAtRelease = liveScaleRef.current;
     const ratio = prev > 0 && target !== null ? target / prev : 1;
 
-    // Where the focal point sits, in document terms. Logged because it is the
-    // quickest way to tell a genuine anchor error from a rendering stall: a
-    // correct commit keeps this page and this offset under the cursor.
-    const focalPageIndex = focal && layout.length
-      ? (() => {
-        for (let i = 0; i < layout.length; i += 1) {
-          if (focal.y - (shell?.getBoundingClientRect().top ?? 0) + (shell?.scrollTop ?? 0)
-            < layout[i].top + layout[i].height) return i + 1;
-        }
-        return layout.length;
-      })()
-      : null;
-    const focalOffsetInPage = focalPageIndex && layout[focalPageIndex - 1]
-      ? +(focal.y - (shell?.getBoundingClientRect().top ?? 0) + (shell?.scrollTop ?? 0)
-        - layout[focalPageIndex - 1].top).toFixed(2)
-      : null;
-
-    zdbg('commit', {
-      gestureScaleAtRelease: previewAtRelease,
-      gestureStartZoom: prev,
-      committedScale: target,
-      analyticRatio: ratio,
-      ratioMatchesPreview: Math.abs(ratio - previewAtRelease) < 0.0005,
-      focal,
-      focalPageIndex,
-      focalOffsetInPage,
-      pageHeights: layout.map((e) => Math.round(e.height)),
-      pageGap: PAGE_GAP * prev,
-      pagePad: PAGE_PAD * prev,
-      scrollBefore: shell ? { l: shell.scrollLeft, t: shell.scrollTop } : null,
-      extentBeforeWithTransform: shell
-        ? { w: shell.scrollWidth, h: shell.scrollHeight }
-        : null,
-    });
     gestureRef.current = false;
     focalRef.current = null;
     if (target === null || !focal || target === zoomRef.current) {
@@ -988,12 +918,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     // moves the finished bitmaps in atomically. Without this the commit resizes
     // the visible canvases first, which clears their bitmaps and shows a flash of
     // blank pages while pdf.js redraws.
-    zdbg('commit-handoff', {
-      previewScaleAtRelease: previewAtRelease,
-      committedScale: target,
-      ratio,
-      ratioMatchesPreview: Math.abs(ratio - previewAtRelease) < 0.0005,
-    });
+
     stageSwap(target, ratio, focal, () => {
       // The real zoom lands only now: the off-screen bitmaps are ready (or the
       // budget has expired), so the visible canvases can be filled in the same
@@ -1044,9 +969,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       // must not open a gesture or touch the transform.
       const sinceCommit = nowMs() - lastCommitAtRef.current;
       if (Math.abs(delta) < 0.5 && lastCommitAtRef.current > 0 && sinceCommit < 150) {
-        zdbg('momentum-ignored', {
-          deltaY: e.deltaY, deltaMode: e.deltaMode, delta, sinceCommit: +sinceCommit.toFixed(1),
-        });
+
         return;
       }
 
@@ -1059,20 +982,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       const k = pinchSensitivityFor(e.deltaY, e.deltaMode);
       const before = liveScaleRef.current;
       const after = advanceGestureScale(before, e.deltaY, e.deltaMode);
-      zdbg('wheel', {
-        t: +nowMs().toFixed(2),
-        deltaY: e.deltaY,
-        deltaMode: e.deltaMode,
-        normalized: normalizeWheelDelta(e.deltaY, e.deltaMode),
-        k: pinchSensitivityFor(e.deltaY, e.deltaMode),
-        gestureScaleBefore: before,
-        gestureScaleAfter: after,
-        // NOT the zoom limit. This is the zoom that was committed when THIS
-        // gesture began — the base the running ratio is relative to. It reads 4
-        // when a previous gesture had already reached the 4x maximum.
-        committedAtGestureStart: gestureStartZoomRef.current,
-        maxZoom: MAX_ZOOM,
-      });
+
       applyLive(after, e.clientX, e.clientY);
       // Commit once the gesture pauses, so a burst of events costs one re-render
       // instead of one per event.
@@ -1093,60 +1003,39 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   }, [applyLive, commitLive]);
 
   // ---- Mobile / tablet two-finger pinch --------------------------------
-  // Touch is tracked natively because React's synthetic touch events do not
-  // expose the two-touch distance this needs. Also transform-driven; the scale
-  // is committed on touchend.
+  // The gesture maths lives in the shared hook; the zoom itself is delegated to
+  // the SAME `applyLive` / `commitLive` the trackpad pinch uses, so there is one
+  // implementation, not two.
+  const touchZoom = useTouchZoomHandlers({
+    el: shellRef.current,
+    applyLive,
+    commitLive,
+  });
+
   useEffect(() => {
     const el = shellRef.current;
     if (!el) return;
-    // The distance between the two active touch points at gesture start.
-    let startDist = 0;
-
-    const dist = (t: TouchList) => {
-      const [a, b] = [t[0], t[1]];
-      return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-    };
-    const mid = (t: TouchList) => ({
-      x: (t[0].clientX + t[1].clientX) / 2,
-      y: (t[0].clientY + t[1].clientY) / 2,
-    });
-
-    const onStart = (e: TouchEvent) => {
-      if (e.touches.length !== 2) return;
-      startDist = dist(e.touches);
-    };
-
-    const onMove = (e: TouchEvent) => {
-      if (e.touches.length !== 2 || startDist <= 0) return;
-      // Two fingers means a pinch/zoom gesture, not a pan, so the default
-      // page-zoom and scroll are suppressed while it is in progress.
-      e.preventDefault();
-      // Always measured against the ORIGINAL start distance. Re-deriving from
-      // the live scale each move would compound frame over frame and run away.
-      // This is already a RATIO to the committed zoom, which is what `applyLive`
-      // expects — the committed zoom is not multiplied in here.
-      const c = mid(e.touches);
-      applyLive(dist(e.touches) / startDist, c.x, c.y);
-    };
-
-    const onEnd = (e: TouchEvent) => {
-      if (e.touches.length >= 2) return;
-      startDist = 0;
-      // The gesture is over: hand the scale to real layout now.
-      commitLive();
-    };
-
-    el.addEventListener('touchstart', onStart, { passive: true });
-    el.addEventListener('touchmove', onMove, { passive: false });
-    el.addEventListener('touchend', onEnd, { passive: true });
-    el.addEventListener('touchcancel', onEnd, { passive: true });
+    // touchmove MUST be non-passive: preventDefault is ignored on a passive
+    // listener, and without it the browser page-zooms alongside our pinch. It is
+    // claimed only while two touches are down, so one-finger panning stays
+    // native. The gesture events are iOS-only and are simply inert elsewhere.
+    el.addEventListener('touchstart', touchZoom.onTouchStart, { passive: true });
+    el.addEventListener('touchmove', touchZoom.onTouchMove, { passive: false });
+    el.addEventListener('touchend', touchZoom.onTouchEnd, { passive: true });
+    el.addEventListener('touchcancel', touchZoom.onTouchCancel, { passive: true });
+    el.addEventListener('gesturestart', touchZoom.onGestureStart, { passive: false });
+    el.addEventListener('gesturechange', touchZoom.onGestureChange, { passive: false });
+    el.addEventListener('gestureend', touchZoom.onGestureEnd, { passive: false });
     return () => {
-      el.removeEventListener('touchstart', onStart);
-      el.removeEventListener('touchmove', onMove);
-      el.removeEventListener('touchend', onEnd);
-      el.removeEventListener('touchcancel', onEnd);
+      el.removeEventListener('touchstart', touchZoom.onTouchStart);
+      el.removeEventListener('touchmove', touchZoom.onTouchMove);
+      el.removeEventListener('touchend', touchZoom.onTouchEnd);
+      el.removeEventListener('touchcancel', touchZoom.onTouchCancel);
+      el.removeEventListener('gesturestart', touchZoom.onGestureStart);
+      el.removeEventListener('gesturechange', touchZoom.onGestureChange);
+      el.removeEventListener('gestureend', touchZoom.onGestureEnd);
     };
-  }, [applyLive, commitLive]);
+  }, [touchZoom]);
 
   // A new document must never inherit a transform or a pending commit.
   useEffect(() => {
@@ -1201,7 +1090,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       // be computed against the ROTATED dimensions.
       const pageW = rotated ? unit.height : unit.width;
       const pageH = rotated ? unit.width : unit.height;
-      const geo = pageGeometry(pageW, pageH, zoom);
+      const geo = pageGeometry(pageW, pageH, zoom, renderWindow.length);
       const cssW = geo.cssW;
       const cssH = geo.cssH;
 
@@ -1216,7 +1105,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       const done = renderedKeyRef.current.get(n);
       if (done === key) {
         renderTasksRef.current.delete(n);
-        zdbg('render-skip', { page: n, key, reason: 'canvas already holds this scale' });
+
         return;
       }
 
@@ -1230,12 +1119,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       // Every write to canvas.width/height is logged. Setting either one CLEARS
       // the bitmap, so this is the single most important line to be able to
       // account for when a blank frame appears.
-      zdbg('canvas-size', {
-        t: +nowMs().toFixed(2), page: n, who: 'renderInto',
-        width: Math.floor(pageW * geo.viewportScale),
-        height: Math.floor(pageH * geo.viewportScale),
-        gen: swapGenRef.current,
-      });
+
       canvas.width = Math.floor(pageW * geo.viewportScale);
       canvas.height = Math.floor(pageH * geo.viewportScale);
 
@@ -1259,19 +1143,19 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       );
 
       const viewport = pdfPage.getViewport({ scale: geo.viewportScale, rotation });
-      zdbg('render-start', { t: +nowMs().toFixed(2), page: n, scale: +geo.viewportScale.toFixed(4), zoom, gen: swapGenRef.current });
+
       const task = pdfPage.render({ canvas, canvasContext: context, viewport });
       renderTasksRef.current.set(n, task);
       try {
         await task.promise;
       } catch (err) {
-        zdbg('render-cancel', { t: +nowMs().toFixed(2), page: n, gen: swapGenRef.current, reason: String(err) });
+
         throw err;
       }
       // Only now is the canvas genuinely holding a bitmap at this geometry, so
       // only now is it safe to record the key and let future renders skip it.
       renderedKeyRef.current.set(n, key);
-      zdbg('render-done', { t: +nowMs().toFixed(2), page: n, scale: +geo.viewportScale.toFixed(4), zoom, gen: swapGenRef.current });
+
       if (isCurrent()) renderTasksRef.current.delete(n);
     } catch (e) {
       if (isCancel(e) || !isCurrent()) return;
@@ -1291,6 +1175,13 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   useEffect(() => {
     if (status !== 'ready') return;
     for (const n of renderWindow) void renderInto(n);
+    // Release anything that just left the window. React unmounting the <canvas>
+    // does not promptly release its backing store on a phone, so a long scroll
+    // accumulates one full-size bitmap per page visited and takes the tab down.
+    const inWindow = new Set(renderWindow);
+    for (const n of Array.from(renderedKeyRef.current.keys())) {
+      if (!inWindow.has(n)) releaseCanvas(n);
+    }
     // Cancel everything still in flight when the window, zoom, rotation or
     // width changes, so nothing paints over a newer render.
     return () => {
@@ -1299,7 +1190,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     };
     // `windowKey` stands in for the array identity of renderWindow.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, windowKey, zoom, rotation, containerWidth, containerHeight, renderInto]);
+  }, [status, windowKey, zoom, rotation, containerWidth, containerHeight, renderInto, releaseCanvas]);
 
   // A different document starts a fresh set of measured sizes.
   useEffect(() => {
@@ -1680,7 +1571,14 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         // split pane, and the same element in real fullscreen — inherits a
         // definite height from its host, so no cap is applied here and the
         // viewer genuinely fills the pane.
-        style={variant === 'standalone' || fullScreen ? undefined : { maxHeight: 'min(72vh, 720px)' }}
+        style={{
+          maxHeight: variant === 'standalone' || fullScreen ? undefined : 'min(72vh, 720px)',
+          // `pan-x pan-y` keeps ONE-finger panning native and smooth while
+          // denying the browser its own pinch-zoom over this surface, so it can
+          // no longer fight our two-finger zoom. Scoped to the viewer only — the
+          // rest of the app keeps pinch-to-zoom.
+          touchAction: VIEWER_TOUCH_ACTION,
+        }}
       >
         {/* ONE toolbar for everything, floating over the top of the page. It
             is absolutely positioned, so it consumes no layout height and the

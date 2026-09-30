@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Download, Maximize, RotateCw, ZoomIn, ZoomOut } from 'lucide-react';
-import { useZoomAnchor, advanceGestureScale } from '../useZoomAnchor';
+import { useZoomAnchor, advanceGestureScale, useTouchZoomHandlers, VIEWER_TOUCH_ACTION } from '../useZoomAnchor';
 
 /**
  * Shared image viewer with a full control row.
@@ -359,53 +359,38 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
   }, [applyLive, commitLive]);
 
   // ---- Two-finger touch pinch -------------------------------------------
-  // Tracked natively: React's synthetic touch events do not expose the distance
-  // between two fingers, which is the whole measurement here. Also transform-
-  // driven; the scale is committed on touchend.
+  // The gesture maths is the shared hook, and the zoom is delegated to the SAME
+  // `applyLive` / `commitLive` the trackpad pinch uses — one implementation.
+  const touchZoom = useTouchZoomHandlers({
+    el: shellRef.current,
+    applyLive,
+    commitLive,
+  });
+
   useEffect(() => {
     const el = shellRef.current;
     if (!el) return;
-    let startDist = 0;
-    const mid = (t: TouchList) => ({
-      x: (t[0].clientX + t[1].clientX) / 2,
-      y: (t[0].clientY + t[1].clientY) / 2,
-    });
-    const dist = (t: TouchList) =>
-      Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
-
-    const onStart = (e: TouchEvent) => {
-      if (e.touches.length !== 2) return;
-      startDist = dist(e.touches);
-    };
-    const onMove = (e: TouchEvent) => {
-      if (e.touches.length !== 2 || startDist <= 0) return;
-      // Two fingers is a pinch, not a pan, so the browser's own page-zoom and
-      // scrolling are suppressed for the duration of the gesture.
-      e.preventDefault();
-      const c = mid(e.touches);
-      // Always measured against the ORIGINAL start distance. Re-deriving from
-      // the live scale each move would compound frame over frame and run away.
-      // This is already a RATIO to the committed zoom, which is what `applyLive`
-      // expects — the committed zoom is not multiplied in here.
-      applyLive(dist(e.touches) / startDist, c.x, c.y);
-    };
-    const onEnd = (e: TouchEvent) => {
-      if (e.touches.length >= 2) return;
-      startDist = 0;
-      commitLive();
-    };
-
-    el.addEventListener('touchstart', onStart, { passive: true });
-    el.addEventListener('touchmove', onMove, { passive: false });
-    el.addEventListener('touchend', onEnd, { passive: true });
-    el.addEventListener('touchcancel', onEnd, { passive: true });
+    el.addEventListener('touchstart', touchZoom.onTouchStart, { passive: true });
+    // Non-passive: preventDefault is ignored on a passive listener, and it is
+    // what stops the browser page-zooming alongside our pinch. Claimed only while
+    // two touches are down, so one-finger panning stays native.
+    el.addEventListener('touchmove', touchZoom.onTouchMove, { passive: false });
+    el.addEventListener('touchend', touchZoom.onTouchEnd, { passive: true });
+    el.addEventListener('touchcancel', touchZoom.onTouchCancel, { passive: true });
+    // iOS-only, inert elsewhere.
+    el.addEventListener('gesturestart', touchZoom.onGestureStart, { passive: false });
+    el.addEventListener('gesturechange', touchZoom.onGestureChange, { passive: false });
+    el.addEventListener('gestureend', touchZoom.onGestureEnd, { passive: false });
     return () => {
-      el.removeEventListener('touchstart', onStart);
-      el.removeEventListener('touchmove', onMove);
-      el.removeEventListener('touchend', onEnd);
-      el.removeEventListener('touchcancel', onEnd);
+      el.removeEventListener('touchstart', touchZoom.onTouchStart);
+      el.removeEventListener('touchmove', touchZoom.onTouchMove);
+      el.removeEventListener('touchend', touchZoom.onTouchEnd);
+      el.removeEventListener('touchcancel', touchZoom.onTouchCancel);
+      el.removeEventListener('gesturestart', touchZoom.onGestureStart);
+      el.removeEventListener('gesturechange', touchZoom.onGestureChange);
+      el.removeEventListener('gestureend', touchZoom.onGestureEnd);
     };
-  }, [applyLive, commitLive]);
+  }, [touchZoom]);
 
   // A new document must never inherit a transform or a pending commit.
   useEffect(() => {
@@ -511,6 +496,10 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
         // shows up as the image snapping back. The `!` PREFIX is Tailwind v3's
         // important modifier; the v4 suffix form emits no `!important` here.
         className="relative flex-1 min-h-[160px] min-w-0 w-full overflow-auto overscroll-contain bg-bg-elevated/40 outline-none rounded-xl border border-border [scroll-snap-type:none] ![overflow-anchor:none]"
+        // `pan-x pan-y` keeps ONE-finger panning native and smooth while
+        // denying the browser its own pinch-zoom over this surface. Scoped to
+        // the viewer only — the rest of the app keeps pinch-to-zoom.
+        style={{ touchAction: VIEWER_TOUCH_ACTION }}
       >
         {/* The GPU-transform target. `will-change: transform` promotes it to its
             own compositor layer for the duration of a gesture, so the scale is

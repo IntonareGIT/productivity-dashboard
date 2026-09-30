@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { FileUp } from 'lucide-react';
 import { Modal } from '../../../components/ui/Modal';
 import { saveResource } from '../libraryRepo';
 import { LARGE_BLOB_WARNING_BYTES } from '../../../db/cloudConfig';
+import { db } from '../../../db/db';
 import type { Resource, ResourceKind } from '../../../types';
 
 interface ResourceModalProps {
@@ -29,6 +31,12 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  /** Groups of this subject, for the picker. */
+  const groups = useLiveQuery(
+    () => db.resourceGroups.where('subjectId').equals(subjectId).toArray(),
+    [subjectId],
+  ) ?? [];
+  const [groupId, setGroupId] = useState<string>('');
 
   useEffect(() => {
     setKind(resource?.kind ?? 'link');
@@ -38,6 +46,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
     setDueDate(resource?.dueDate ?? '');
     setFile(null);
     setError('');
+    setGroupId(resource?.groupId ?? '');
   }, [resource]);
 
   const submit = async () => {
@@ -68,6 +77,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
           urlOrPath,
           tags,
           dueDate: dueDate || null,
+          groupId: groupId || null,
         });
       } else {
         await saveResource({
@@ -84,6 +94,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
           fileSize: file?.size,
           tags,
           dueDate: dueDate || null,
+          groupId: groupId || null,
         });
       }
       onClose();
@@ -161,6 +172,18 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
             <span className="block text-xs text-content-secondary mb-1">Due date (optional)</span>
             <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className={inputCls} />
           </label>
+
+          {/* A plain select: one tap on a phone, and the group list is short.
+              The row menu stays the richer path (it also offers "New group…"). */}
+          <div>
+            <span className="block text-xs text-content-secondary mb-1">Group (optional)</span>
+            <select value={groupId} onChange={(e) => setGroupId(e.target.value)} className={inputCls}>
+              <option value="">No group</option>
+              {[...groups].sort((a, b) => a.name.localeCompare(b.name)).map((g) => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {error && <p className="text-xs text-rose-500">{error}</p>}

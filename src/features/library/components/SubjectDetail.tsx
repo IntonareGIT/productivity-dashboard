@@ -1,17 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { endOfWeek, format, isBefore, isToday, isWithinInterval, parseISO, startOfWeek } from 'date-fns';
-import { ArrowLeft, BookOpenCheck, CalendarClock, Check, Columns2, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Pencil, Plus, Search, Timer, Trash2 } from 'lucide-react';
+import { ArrowLeft, BookOpenCheck, CalendarClock, Check, ChevronRight, Columns2, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Pencil, Plus, Search, Timer, Trash2 } from 'lucide-react';
 import { db } from '../../../db/db';
 import { Card } from '../../../components/ui/Card';
-import { MarkdownNotes } from './MarkdownNotes';
+import { MarkdownNotes, NoteTitleInput, NotesEditorBody } from './MarkdownNotes';
 import { TopicModal } from './TopicModal';
 import { ResourceModal } from './ResourceModal';
 import { ResourceViewer } from './ResourceViewer';
 import { ResourceFullScreen, useResourceFullScreen } from '../../split/useResourceFullScreen';
 import { AssessmentModal } from './AssessmentModal';
-import { deleteAssessment, deleteResource, deleteTopicCascade, ensureDefaultTopic, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes } from '../libraryRepo';
-import type { Assessment, Resource, Subject, Topic, TopicStatus } from '../../../types';
+import { MoveToGroupMenu } from './MoveToGroupMenu';
+import { GroupNameEditor, NewGroupButton } from './ResourceGroups';
+import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes } from '../libraryRepo';
+import type { Assessment, Resource, ResourceGroup, Subject, Topic, TopicStatus } from '../../../types';
 
 interface SubjectDetailProps {
   subject: Subject;
@@ -55,9 +57,11 @@ interface ResourceRowProps {
   onSplitWithNotes?: (resourceId: string, topicId: string | null) => void;
   /** The topic currently selected in the detail view, for the notes fallback. */
   fallbackTopicId?: string | null;
+  /** Groups of this subject, for the "Move to group" menu. */
+  groups?: ResourceGroup[];
 }
 
-function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onPreview, onDownload, onSplitWithNotes, fallbackTopicId }: ResourceRowProps) {
+function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onPreview, onDownload, onSplitWithNotes, fallbackTopicId, groups }: ResourceRowProps) {
   const meta = dueMeta(resource);
   const isFile = resource.kind === 'file';
   return (
@@ -117,6 +121,12 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {groups && <MoveToGroupMenu
+            resourceId={resource.id}
+            subjectId={resource.subjectId}
+            currentGroupId={resource.groupId ?? null}
+            groups={groups}
+          />}
           <button onClick={onEdit} aria-label="Edit resource" className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
           <button onClick={onDelete} aria-label="Delete resource" className={`p-2 rounded-lg ${confirmDelete ? 'bg-rose-600 text-white' : 'text-content-tertiary hover:text-rose-500 hover:bg-rose-500/10'}`}>
             <Trash2 className="w-3.5 h-3.5" />
@@ -131,6 +141,10 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
 export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, onEditSubject, onDeleteSubject, onSplitWithNotes }) => {
   const topics = useLiveQuery(() => db.topics.where('subjectId').equals(subject.id).toArray(), [subject.id]) ?? [];
   const resources = useLiveQuery(() => db.resources.where('subjectId').equals(subject.id).toArray(), [subject.id]) ?? [];
+  const groups = useLiveQuery(
+    () => db.resourceGroups.where('subjectId').equals(subject.id).toArray(),
+    [subject.id],
+  ) ?? [];
   const assessments = useLiveQuery(() => db.assessments.where('subjectId').equals(subject.id).toArray(), [subject.id]) ?? [];
   const sessions = useLiveQuery(() => db.pomodoroSessions.where('subjectId').equals(subject.id).toArray(), [subject.id]) ?? [];
 
@@ -154,6 +168,23 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   const [deleteResourceId, setDeleteResourceId] = useState<string | null>(null);
   const [deleteTopicId, setDeleteTopicId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  /** Collapsed group ids. A Set keyed by id so expanding one is a single change. */
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
+  /** Which group is showing its inline rename box, and which awaits delete confirmation. */
+  const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
+  const [deleteGroupId, setDeleteGroupId] = useState<string | null>(null);
+
+  const sortedGroups = useMemo(
+    () => [...groups].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.createdAt.localeCompare(b.createdAt)),
+    [groups],
+  );
+  const toggleGroupCollapsed = (id: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (topics.length === 0) void ensureDefaultTopic(subject.id);
@@ -194,6 +225,12 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
     if (!q) return sorted;
     return sorted.filter((r) => r.title.toLowerCase().includes(q) || (r.urlOrPath ?? '').toLowerCase().includes(q) || (r.fileName ?? '').toLowerCase().includes(q) || r.tags.some((t) => t.toLowerCase().includes(q)));
   }, [resources, selectedTopic, filter, topics.length]);
+
+  /** The resources with no group, shown after the grouped sections. */
+  const ungroupedResources = useMemo(
+    () => topicResources.filter((r) => !r.groupId),
+    [topicResources],
+  );
 
   const sortedAssessments = useMemo(() => [...assessments].sort((a, b) => a.date.localeCompare(b.date)), [assessments]);
 
@@ -346,7 +383,16 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
             <p className="text-xs text-content-tertiary">No topic selected.</p>
           ) : editingNotes ? (
             <div>
-              <textarea autoFocus value={notesDraft} onChange={(e) => setNotesDraft(e.target.value)} rows={14} placeholder={'# Heading\n**bold** *italic* `code`\n- list item'} className="w-full bg-bg-elevated border border-border rounded-xl px-3 py-2.5 text-sm text-content-primary outline-none focus:border-accent resize-y min-h-[280px] font-mono" />
+              <NoteTitleInput
+                topic={selectedTopic}
+                className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 mb-1"
+              />
+              <NotesEditorBody
+                value={notesDraft}
+                onChange={setNotesDraft}
+                minHeight="min-h-[280px]"
+                textareaClassName="resize-y"
+              />
               <div className="flex items-center justify-end gap-2 mt-2">
                 <button onClick={() => { setNotesDraft(selectedTopic.notes); setEditingNotes(false); }} className="px-4 min-h-[40px] rounded-xl text-xs text-content-secondary hover:text-content-primary transition-colors">Cancel</button>
                 <button onClick={saveNotes} disabled={!notesDirty} className="px-4 min-h-[40px] rounded-xl bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-xs font-semibold transition-colors">Save notes</button>
@@ -354,6 +400,11 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
             </div>
           ) : (
             <div>
+              {/* Same title input as the split pane, above the body. */}
+              <NoteTitleInput
+                topic={selectedTopic}
+                className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 mb-1"
+              />
               <MarkdownNotes text={selectedTopic.notes} />
               <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-border/50">
                 {notesSaved && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
@@ -381,24 +432,112 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
           {topicResources.length === 0 ? (
             <p className="text-xs text-content-tertiary py-6 text-center">{filter ? 'No resources match.' : 'No resources for this topic yet.'}</p>
           ) : (
-            <div className="space-y-2.5">
-              {topicResources.map((resource) => (
-                <ResourceRow
-                  key={resource.id}
-                  resource={resource}
-                  copied={copiedId === resource.id}
-                  confirmDelete={deleteResourceId === resource.id}
-                  onToggle={() => toggleResourceCompleted(resource)}
-                  onEdit={() => setEditingResource(resource)}
-                  onDelete={() => (deleteResourceId === resource.id ? void deleteResource(resource.id).then(() => setDeleteResourceId(null)) : setDeleteResourceId(resource.id))}
-                  onCopy={() => copyPath(resource)}
-                  onPreview={() => setPreviewingResource(resource)}
-                  onDownload={() => downloadFile(resource)}
-                  onSplitWithNotes={onSplitWithNotes}
-                  fallbackTopicId={selectedTopic?.id ?? null}
-                />
-              ))}
-            </div>
+            <>
+              <div className="mb-3">
+                <NewGroupButton onCreate={(name) => void saveResourceGroup({ subjectId: subject.id, name })} />
+              </div>
+              <div className="space-y-2.5">
+                {/*
+                  Resources are bucketed by their group. A group whose members all
+                  live in another topic does not appear here, so grouping reads as
+                  a folder view of THIS topic without hiding anything. Ungrouped
+                  resources keep their own trailing section.
+                */}
+                {sortedGroups.map((group) => {
+                  const members = topicResources.filter((r) => r.groupId === group.id);
+                  if (members.length === 0) return null;
+                  const collapsed = collapsedGroups.has(group.id);
+                  return (
+                    <div key={group.id} className="rounded-xl border border-border/70 bg-bg-elevated/20 p-2.5">
+                      {/* Siblings, not a button inside a button: the collapse
+                          toggle and the two actions are independent controls, and
+                          nesting interactive elements is invalid HTML. */}
+                      <div className="flex items-center gap-1 min-h-[40px]">
+                        <button
+                          onClick={() => toggleGroupCollapsed(group.id)}
+                          aria-expanded={!collapsed}
+                          aria-label={`${collapsed ? 'Expand' : 'Collapse'} group ${group.name}`}
+                          className="flex items-center gap-2 min-h-[40px] min-w-0 flex-1 text-left"
+                        >
+                          <ChevronRight className={`w-3.5 h-3.5 shrink-0 text-content-tertiary transition-transform ${collapsed ? '' : 'rotate-90'}`} />
+                          <span className="text-xs font-semibold text-content-primary truncate">{group.name}</span>
+                          <span className="text-[10px] font-semibold text-content-tertiary shrink-0">{members.length}</span>
+                        </button>
+                        <button
+                          onClick={() => setRenamingGroupId(group.id)}
+                          aria-label={`Rename group ${group.name}`}
+                          className="p-2 rounded-lg shrink-0 text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => (deleteGroupId === group.id
+                            ? void deleteResourceGroup(group.id).then(() => setDeleteGroupId(null))
+                            : setDeleteGroupId(group.id))}
+                          aria-label={`Delete group ${group.name}`}
+                          className={`p-2 rounded-lg shrink-0 ${deleteGroupId === group.id ? 'bg-rose-600 text-white' : 'text-content-tertiary hover:text-rose-500 hover:bg-rose-500/10'}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      {renamingGroupId === group.id ? (
+                        <div className="mt-2">
+                          <GroupNameEditor
+                            initialName={group.name}
+                            placeholder="Group name"
+                            submitLabel="Save"
+                            onSubmit={(name) => { void renameResourceGroup(group.id, name); setRenamingGroupId(null); }}
+                            onCancel={() => setRenamingGroupId(null)}
+                          />
+                        </div>
+                      ) : collapsed ? null : (
+                        <div className="space-y-2.5 mt-2">
+                          {members.map((resource) => (
+                            <ResourceRow
+                              key={resource.id}
+                              resource={resource}
+                              copied={copiedId === resource.id}
+                              confirmDelete={deleteResourceId === resource.id}
+                              onToggle={() => toggleResourceCompleted(resource)}
+                              onEdit={() => setEditingResource(resource)}
+                              onDelete={() => (deleteResourceId === resource.id ? void deleteResource(resource.id).then(() => setDeleteResourceId(null)) : setDeleteResourceId(resource.id))}
+                              onCopy={() => copyPath(resource)}
+                              onPreview={() => setPreviewingResource(resource)}
+                              onDownload={() => downloadFile(resource)}
+                              onSplitWithNotes={onSplitWithNotes}
+                              fallbackTopicId={selectedTopic?.id ?? null}
+                              groups={sortedGroups}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {ungroupedResources.length > 0 && (
+                  <div className="space-y-2.5">
+                    {ungroupedResources.map((resource) => (
+                      <ResourceRow
+                        key={resource.id}
+                        resource={resource}
+                        copied={copiedId === resource.id}
+                        confirmDelete={deleteResourceId === resource.id}
+                        onToggle={() => toggleResourceCompleted(resource)}
+                        onEdit={() => setEditingResource(resource)}
+                        onDelete={() => (deleteResourceId === resource.id ? void deleteResource(resource.id).then(() => setDeleteResourceId(null)) : setDeleteResourceId(resource.id))}
+                        onCopy={() => copyPath(resource)}
+                        onPreview={() => setPreviewingResource(resource)}
+                        onDownload={() => downloadFile(resource)}
+                        onSplitWithNotes={onSplitWithNotes}
+                        fallbackTopicId={selectedTopic?.id ?? null}
+                        groups={sortedGroups}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </Card>
       </div>

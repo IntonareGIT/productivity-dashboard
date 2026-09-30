@@ -2,11 +2,12 @@ import type { Table } from 'dexie';
 import { format } from 'date-fns';
 import { db } from './db';
 
-/** Every table in the Dexie schema (v6) — must match PROJECT.md. */
+/** Every table in the Dexie schema (v10) — must match PROJECT.md. */
 export const BACKUP_TABLES = [
   'subjects',
   'topics',
   'resources',
+  'resourceGroups',
   'assessments',
   'calendarEvents',
   'weeklySchedules',

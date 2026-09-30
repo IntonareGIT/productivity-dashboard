@@ -27,10 +27,32 @@ export interface Topic {
 
 export type ResourceKind = 'link' | 'file';
 
+/**
+ * A named, folder-like lane for resources WITHIN a subject.
+ *
+ * Deliberately not a child of Topic: a resource keeps its own `topicId` while
+ * grouped, so grouping across topics ("every past paper") stays possible and
+ * notes / split-with-notes / topic deletes keep working unchanged.
+ */
+export interface ResourceGroup {
+  id: string;              // UUID
+  subjectId: string;       // FK -> Subject.id
+  name: string;            // User-given group name
+  order: number;           // manual ordering within a subject
+  createdAt: string;       // ISO 8601
+}
+
 export interface Resource {
   id: string;              // UUID
   subjectId: string;       // FK -> Subject.id (denormalized for fast queries)
   topicId: string | null;  // FK -> Topic.id (null = legacy subject-level, shown under default topic)
+  /**
+   * FK -> ResourceGroup.id (null = ungrouped). OPTIONAL and independent of
+   * topicId: a grouped resource still belongs to its topic, so a group is a
+   * lane over resources rather than a new parent. At most one group per
+   * resource, and only ever a group of the same subject.
+   */
+  groupId?: string | null;
   kind: ResourceKind;      // 'link' = urlOrPath is a URL/path; 'file' = blob holds the upload
   title: string;           // Resource title
   /**

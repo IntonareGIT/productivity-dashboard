@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Pencil } from 'lucide-react';
 import { db } from '../../db/db';
-import { MarkdownNotes } from '../library/components/MarkdownNotes';
+import { MarkdownNotes, NoteTitleInput, NotesEditorBody } from '../library/components/MarkdownNotes';
 import { updateTopicNotes } from '../library/libraryRepo';
 import type { Topic } from '../../types';
 
@@ -60,13 +60,18 @@ export const NotesPane: React.FC<NotesPaneProps> = ({ topicId }) => {
   };
 
   return editing ? (
-    <div className="p-3 flex flex-col h-full min-h-0">
-      <textarea
-        autoFocus
+    <div className="p-3 flex flex-col h-full min-h-0 gap-2">
+      {/* The title sits ABOVE the body in BOTH the editing and reading states,
+          so a note is never just an anonymous block of markdown. */}
+      <NoteTitleInput
+        topic={topic}
+        className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 shrink-0"
+      />
+      <NotesEditorBody
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        placeholder={'# Heading\n**bold** *italic* `code`\n- list item'}
-        className="flex-1 min-h-[160px] w-full bg-bg-elevated border border-border rounded-xl px-3 py-2.5 text-sm text-content-primary outline-none focus:border-accent resize-none font-mono"
+        onChange={setDraft}
+        minHeight="min-h-[160px]"
+        textareaClassName="resize-none"
       />
       <div className="flex items-center justify-end gap-2 mt-2">
         <button
@@ -86,6 +91,10 @@ export const NotesPane: React.FC<NotesPaneProps> = ({ topicId }) => {
     </div>
   ) : (
     <div className="p-3 flex flex-col h-full min-h-0">
+      <NoteTitleInput
+        topic={topic}
+        className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 shrink-0 mb-1"
+      />
       <div className="flex-1 min-h-0 overflow-auto">
         <MarkdownNotes text={topic.notes} />
       </div>

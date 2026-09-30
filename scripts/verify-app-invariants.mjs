@@ -260,12 +260,23 @@ const renderWith = ({ signedIn, currentUserValue }) => {
   check('8 the guard uses the real isLoggedIn flag, not currentUser truthiness',
     initBody.includes('isLoggedIn') && !/db\.cloud\.currentUserId/.test(initBody));
 
-  // 8d. No schema change for this: no new version, no upgrade on a synced table.
+  // 8d. No schema change was needed for the AI-provider work: v8 was the last
+  // version added, and no .modify() upgrade was run on a synced table.
+  //
+  // v9 (note titles) came later and IS an intentional schema change, so this
+  // guard is pinned to "nothing beyond v9", not to "nothing beyond v8".
   const dbSrc = read('src/db/db.ts');
-  check('8 no new schema version was added', !/this\.version\(9\)/.test(dbSrc));
+  check('8 no schema version beyond v10 (resource groups) was added',
+    !/this\.version\(1[1-9]\)/.test(dbSrc));
   check('8 no Version.upgrade() on any synced table',
     !/upgrade\s*\(\s*\)\s*\.modify\(\s*async\s*\(\s*t\s*,\s*c\s*\)\s*=>\s*\{[\s\S]*?aiProviders/i
       .test(dbSrc));
+
+  // v9 itself must stay additive: the topics primary key is unchanged and the
+  // upgrade may only write `title`/`updatedAt`, never the note body.
+  const v9 = dbSrc.slice(dbSrc.indexOf('this.version(9)'));
+  check('9 v9 keeps the topics primary key as `id`', /topics: 'id,/.test(v9));
+  check('9 v9 upgrade only rewrites title', /put\(\{ \.\.\.t, title, updatedAt: now \}\)/.test(v9));
 }
 
 console.log('');

@@ -16,6 +16,7 @@ import { CalendarPage } from './features/calendar/CalendarPage';
 import { ShiftsPage } from './features/shifts/ShiftsPage';
 import { FocusPage } from './features/focus/FocusPage';
 import { SettingsPage } from './features/settings/SettingsPage';
+import { AboutPage } from './features/about/AboutPage';
 import { AssistantLauncher } from './features/ai/components/AssistantLauncher';
 import { AssistantPanel } from './features/ai/components/AssistantPanel';
 import { AssistantPage } from './features/ai/components/AssistantPage';
@@ -260,7 +261,9 @@ export const App: React.FC = () => {
       case 'focus':
         return <FocusPage />;
       case 'settings':
-        return <SettingsPage />;
+        return <SettingsPage onOpenAbout={() => setActiveTab('about')} />;
+      case 'about':
+        return <AboutPage />;
       default:
         return <DashboardPage onNavigate={(tab) => setActiveTab(tab)} />;
     }

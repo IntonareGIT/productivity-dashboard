@@ -78,9 +78,6 @@ export interface ZoomAnchor {
   clearWrite: () => void;
 }
 
-/** TEMPORARY pinch instrumentation. Remove with the rest of the [zoomdbg] set. */
-const ZOOM_DEBUG = true;
-
 /**
  * Shared zoom-gesture maths for the PDF and image viewers.
  *
@@ -177,6 +174,152 @@ export const pinchSensitivityFor = (deltaY: number, deltaMode: number): number =
   const delta = normalizeWheelDelta(deltaY, deltaMode);
   return Math.abs(delta) >= COARSE_DELTA ? PINCH_K_FINE : PINCH_K;
 };
+
+/**
+ * Two-finger touch pinch, shared by the PDF and image viewers.
+ *
+ * This is EVENT PLUMBING ONLY. The zoom itself is entirely delegated to
+ * `applyLive` / `commitLive`, which are the same functions the trackpad pinch
+ * uses — so there is exactly ONE zoom implementation, and a two-finger pinch gets
+ * the identical live-transform preview, focal point, analytic-ratio commit and
+ * render-then-swap hand-off. No second zoom maths exists anywhere.
+ *
+ * The scale is the distance between the two touches relative to the distance at
+ * gesture start, and the focal point is their midpoint.
+ */
+export interface TouchZoomHandlers {
+  /** Attach to the viewer's scroll container. */
+  onTouchStart: (e: TouchEvent) => void;
+  onTouchMove: (e: TouchEvent) => void;
+  onTouchEnd: (e: TouchEvent) => void;
+  onTouchCancel: (e: TouchEvent) => void;
+  /** iOS-only; see below. */
+  onGestureStart: (e: Event) => void;
+  onGestureChange: (e: Event) => void;
+  onGestureEnd: (e: Event) => void;
+}
+
+interface Options {
+  /** The scroll container the listeners are attached to. */
+  el: HTMLElement | null;
+  /** Preview a step. Receives a RATIO to the committed zoom. */
+  applyLive: (ratio: number, clientX: number, clientY: number) => void;
+  /** Fold the live scale into real layout. */
+  commitLive: () => void;
+}
+
+export const useTouchZoomHandlers = ({ el, applyLive, commitLive }: Options): TouchZoomHandlers => {
+  // Baseline distance for the CURRENT gesture. Zero means "no pinch in
+  // progress", which is what stops a later one-finger pan from being measured
+  // against a stale baseline.
+  const startDistRef = { current: 0 };
+  // iOS fires BOTH the touch events and its own gesture events for a pinch.
+  // Once the gesture events have taken over, the touch path must stand down or
+  // the two zoom at once and visibly fight.
+  const iOSGestureRef = { current: false };
+  // Last two-finger midpoint, reused as the focal point by the iOS gesture path,
+  // which carries no coordinates of its own.
+  const lastMidRef = { current: { x: 0, y: 0 } };
+
+  const dist = (t: TouchList) => {
+    const [a, b] = [t[0], t[1]];
+    return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  };
+  const mid = (t: TouchList) => ({
+    x: (t[0].clientX + t[1].clientX) / 2,
+    y: (t[0].clientY + t[1].clientY) / 2,
+  });
+
+  /** End the gesture exactly once, whichever way it ended. */
+  const end = (_why: string) => {
+    if (startDistRef.current === 0) return;
+    startDistRef.current = 0;
+    commitLive();
+  };
+
+  const onTouchStart = (e: TouchEvent) => {
+    if (e.touches.length !== 2) return;
+    const d = dist(e.touches);
+    if (d <= 0) return;
+    startDistRef.current = d;
+    lastMidRef.current = mid(e.touches);
+  };
+
+  const onTouchMove = (e: TouchEvent) => {
+    if (iOSGestureRef.current) return;              // the iOS path owns this gesture
+    if (e.touches.length !== 2) return;
+    // Claimed ONLY while two touches are down, so one-finger panning stays
+    // native and smooth. The listener itself is non-passive (see below) because
+    // preventDefault is ignored on a passive one.
+    e.preventDefault();
+    if (startDistRef.current <= 0) {
+      // Two fingers arrived without a touchstart we saw (possible when the first
+      // finger landed before the element existed). Re-baseline rather than
+      // measuring against a stale zero.
+      const d = dist(e.touches);
+      if (d <= 0) return;
+      startDistRef.current = d;
+    }
+    const c = mid(e.touches);
+    lastMidRef.current = c;
+    applyLive(dist(e.touches) / startDistRef.current, c.x, c.y);
+  };
+
+  const onTouchEnd = (e: TouchEvent) => {
+    // A finger lifted: the pinch is over, whatever the remaining count is.
+    // Committing here (rather than waiting for zero) is what stops the view
+    // jumping when the user releases both fingers a frame apart.
+    if (startDistRef.current > 0) end(`touches:${e.touches.length}`);
+  };
+  const onTouchCancel = (e: TouchEvent) => {
+    if (startDistRef.current > 0) end(`cancel:${e.touches.length}`);
+  };
+
+  // ---- iOS Safari ------------------------------------------------------
+  // iOS fires its own pinch events and can still zoom the PAGE with them, even
+  // when touchmove is prevented. They carry a scale rather than coordinates, so
+  // the focal point is the last two-finger midpoint we saw.
+  const onGestureStart = (e: Event) => {
+    e.preventDefault();
+    iOSGestureRef.current = true;
+    if (!el) return;
+    lastMidRef.current = {
+      x: el.getBoundingClientRect().left + el.clientWidth / 2,
+      y: el.getBoundingClientRect().top + el.clientHeight / 2,
+    };
+    startDistRef.current = 1;   // non-zero => the gesture is live
+  };
+
+  const onGestureChange = (e: Event) => {
+    e.preventDefault();
+    if (!iOSGestureRef.current) return;
+    const scale = (e as unknown as { scale: number }).scale;
+    if (!Number.isFinite(scale) || scale <= 0) return;
+    applyLive(scale, lastMidRef.current.x, lastMidRef.current.y);
+  };
+
+  const onGestureEnd = (e: Event) => {
+    e.preventDefault();
+    iOSGestureRef.current = false;
+    end('ios-gesture');
+  };
+
+  return {
+    onTouchStart, onTouchMove, onTouchEnd, onTouchCancel,
+    onGestureStart, onGestureChange, onGestureEnd,
+  };
+};
+
+/**
+ * `touch-action` for a viewer's scroll container.
+ *
+ * `pan-x pan-y` grants native panning in both directions — so ONE-finger
+ * scrolling of the document stays native and smooth — while implicitly denying
+ * `pinch-zoom` and `double-tap-zoom`. That is what stops the browser from
+ * running its own page zoom alongside ours. Applied ONLY to the viewer surface,
+ * never to the app: the rest of the dashboard keeps pinch-to-zoom.
+ */
+export const VIEWER_TOUCH_ACTION = 'pan-x pan-y';
 
 export function useZoomAnchor(
   elRef: RefObject<HTMLElement | null>,
@@ -304,12 +447,6 @@ export function useZoomAnchor(
     // echo were matched against the requested value it would miss by more than
     // the tolerance — so the view would treat its own write as a user drag and
     // cancel the anchor.
-    const nowMs = typeof performance !== 'undefined' ? performance.now() : 0;
-    if (ZOOM_DEBUG) {
-      console.log('[zoomdbg] commit-step', JSON.stringify({
-        step: 4, name: 'force-layout', t: +nowMs.toFixed(2),
-      }));
-    }
     const previous = el.style.scrollBehavior;
     el.style.scrollBehavior = 'auto';
     el.scrollLeft = wantLeft;
@@ -328,17 +465,6 @@ export function useZoomAnchor(
       actual: actualNow,
       extent: { w: el.scrollWidth, h: el.scrollHeight },
     });
-    if (ZOOM_DEBUG) {
-      console.log('[zoomdbg] commit-step', JSON.stringify({
-        step: 5, name: 'write-scroll', t: +nowMs.toFixed(2),
-        want: { l: wantLeft, t: wantTop },
-        actual: actualNow,
-        clampedByBrowser: clampedL || clampedT,
-        // Non-zero here is a BUG, not a normal edge case: the surface must be at
-        // its committed size before this write.
-        severity: clampedL || clampedT ? 'ERROR' : 'ok',
-      }));
-    }
 
     // Retry once on the next frame if the browser clamped. If the layout was
     // genuinely final this is a no-op; if it was not, the surface has since
@@ -352,56 +478,6 @@ export function useZoomAnchor(
         el.scrollTop = wantTop;
         el.style.scrollBehavior = prev2;
         writeRef.current = { l: el.scrollLeft, t: el.scrollTop };
-        if (ZOOM_DEBUG) {
-          console.log('[zoomdbg] write-retry', JSON.stringify({
-            t: +nowMs.toFixed(2),
-            want: { l: wantLeft, t: wantTop },
-            actual: { l: el.scrollLeft, t: el.scrollTop },
-            recovered: Math.abs(el.scrollLeft - wantLeft) <= 0.5 && Math.abs(el.scrollTop - wantTop) <= 0.5,
-            extent: { w: el.scrollWidth, h: el.scrollHeight },
-          }));
-        }
-      });
-    }
-
-    // The browser clamps an out-of-range assignment, and at commit time the
-    // content may be momentarily smaller than the target offset implies (the new
-    // wrapper sizes land in the same commit, but a page still awaiting its
-    // canvas render can briefly report the old band). Re-assert ONCE on the next
-    // frame, and only if the value actually differs — a second write is
-    // invisible when it is a no-op, and is the difference between landing on the
-    // focal point and landing near it.
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(() => {
-        if (el.scrollLeft !== wantLeft || el.scrollTop !== wantTop) {
-          el.style.scrollBehavior = 'auto';
-          el.scrollLeft = wantLeft;
-          el.scrollTop = wantTop;
-          el.style.scrollBehavior = previous;
-          writeRef.current = { l: el.scrollLeft, t: el.scrollTop };
-        }
-      });
-    }
-
-    // TEMPORARY pinch instrumentation. Remove with the rest of the [zoomdbg] set.
-    if (ZOOM_DEBUG) {
-      const now = { l: el.scrollLeft, t: el.scrollTop };
-      console.log('[zoomdbg] write', JSON.stringify({
-        ratioX,
-        ratioY,
-        fixedOld: a.fixedOld,
-        fixedNew,
-        want: { l: wantLeft, t: wantTop },
-        actual: now,
-        clampedByBrowser: Math.abs(now.l - wantLeft) > 0.5 || Math.abs(now.t - wantTop) > 0.5,
-        extentAfter: { w: el.scrollWidth, h: el.scrollHeight },
-      }));
-      requestAnimationFrame(() => {
-        console.log('[zoomdbg] next-frame', JSON.stringify({
-          scroll: { l: el.scrollLeft, t: el.scrollTop },
-          movedSinceWrite: Math.abs(el.scrollLeft - now.l) > 0.5 || Math.abs(el.scrollTop - now.t) > 0.5,
-          extent: { w: el.scrollWidth, h: el.scrollHeight },
-        }));
       });
     }
   }, [elRef, layout, zoom, getFixed, beforeWrite, onWritten]);

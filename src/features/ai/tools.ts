@@ -97,7 +97,8 @@ export const TOOL_SPECS: ToolSpec[] = [
       name: 'searchLibrary',
       description:
         'Search the Study Library by keyword across subject names, topic titles, topic notes, resource titles and assessment names. Use this before answering questions about the user\'s study material. ' +
-        'The result includes a "resources" array of { id, title, type, subject, topic } and a "topics" array of { id, title, subject }. ' +
+        'The result includes a "resources" array of { id, title, type, subject, topic, group } and a "topics" array of { id, title, subject }. ' +
+        '"group" is the name of the resource\'s folder within its subject, or null when it is ungrouped — a resource matches a search on its group name too. ' +
         'Any other tool that asks for a resource_id needs the "id" field from these results — never the file name or the title.',
       parameters: {
         type: 'object',
@@ -304,18 +305,20 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
   if (!query) throw new ToolError('searchLibrary needs a non-empty "query".');
   const q = query.toLowerCase();
 
-  const [subjects, topics, resources, assessments] = await Promise.all([
+  const [subjects, topics, resources, assessments, groups] = await Promise.all([
     db.subjects.toArray(),
     db.topics.toArray(),
     db.resources.toArray(),
     db.assessments.toArray(),
+    db.resourceGroups.toArray(),
   ]);
+  const groupName = new Map(groups.map((g) => [g.id, g.name]));
 
   interface Bucket {
     subject: string;
     matchedSubject: boolean;
     topics: { id: string; title: string; status: Topic['status']; excerpt: string }[];
-    resources: { id: string; title: string; kind: Resource['kind']; dueDate: string | null }[];
+    resources: { id: string; title: string; kind: Resource['kind']; dueDate: string | null; group: string | null }[];
     assessments: { name: string; type: Assessment['type']; date: string }[];
   }
 
@@ -353,17 +356,29 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
   // that throws without a response is exactly how a chat stops talking.
   const matchesResource = (r: Resource) => {
     const tags = Array.isArray(r.tags) ? r.tags : [];
+    // A resource matches on its group name too, so "show me the past papers"
+    // finds the folder as well as its contents.
+    const group = r.groupId ? groupName.get(r.groupId) : undefined;
     return (
       r.title.toLowerCase().includes(q) ||
       (r.fileName ?? '').toLowerCase().includes(q) ||
-      tags.some((tag) => String(tag).toLowerCase().includes(q))
+      tags.some((tag) => String(tag).toLowerCase().includes(q)) ||
+      (group ?? '').toLowerCase().includes(q)
     );
   };
 
   for (const r of resources) {
     if (matchesResource(r)) {
       const subject = subjects.find((s) => s.id === r.subjectId);
-      if (subject) bucketFor(subject).resources.push({ id: r.id, title: r.title, kind: r.kind, dueDate: r.dueDate ?? null });
+      if (subject) {
+        bucketFor(subject).resources.push({
+          id: r.id,
+          title: r.title,
+          kind: r.kind,
+          dueDate: r.dueDate ?? null,
+          group: (r.groupId ? groupName.get(r.groupId) : undefined) ?? null,
+        });
+      }
     }
   }
   for (const a of assessments) {

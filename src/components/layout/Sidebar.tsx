@@ -7,10 +7,11 @@ import {
   Timer, 
   Settings2,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Compass
 } from 'lucide-react';
 
-export type NavTab = 'dashboard' | 'library' | 'calendar' | 'shifts' | 'focus' | 'settings';
+export type NavTab = 'dashboard' | 'library' | 'calendar' | 'shifts' | 'focus' | 'settings' | 'about';
 
 interface SidebarProps {
   activeTab: NavTab;
@@ -19,13 +20,25 @@ interface SidebarProps {
   onToggleCollapse: () => void;
 }
 
-export const navItems: { id: NavTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+export const navItems: {
+  id: NavTab;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  /**
+   * Omitted from the PHONE bottom bar, where six items is already the practical
+   * limit before the labels start to crowd. About is reference material, not a
+   * daily destination, so on a phone it is reached from the sidebar collapse /
+   * Settings instead of costing a permanent slot.
+   */
+  hideOnMobile?: boolean;
+}[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'library', label: 'Library', icon: BookMarked },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'shifts', label: 'Shifts', icon: CalendarClock },
   { id: 'focus', label: 'Focus', icon: Timer },
   { id: 'settings', label: 'Settings', icon: Settings2 },
+  { id: 'about', label: 'About & Help', icon: Compass, hideOnMobile: true },
 ];
 
 

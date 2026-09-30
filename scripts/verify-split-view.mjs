@@ -177,6 +177,9 @@ const paneHeader = readFileSync('src/features/split/PaneHeader.tsx', 'utf8');
 // derive them from the theme's own tokens rather than hard-coding a colour.
 const themes = readFileSync('src/styles/themes.css', 'utf8');
 const pdfViewer = readFileSync('src/features/library/components/PdfViewer.tsx', 'utf8');
+// The two-finger gesture maths lives in the shared hook, so the image touch
+// assertions read that ONE implementation rather than an inline copy.
+const touchHook = readFileSync('src/features/library/useZoomAnchor.ts', 'utf8');
 
 // ---- 10. Components honour the model --------------------------------
 {
@@ -403,9 +406,9 @@ const pdfViewer = readFileSync('src/features/library/components/PdfViewer.tsx', 
   // overflow-auto never engages, scrollTop writes are no-ops, and pages 2..N
   // are painted far below the visible area.
   check('12 the page surface is height-bounded so it can actually scroll',
-    /maxHeight: 'min\(72vh, 720px\)'/.test(pdf));
+    /maxHeight: variant === 'standalone' \|\| fullScreen \? undefined : 'min\(72vh, 720px\)'/.test(pdf));
   check('12 the bound is lifted for standalone and fullscreen (definite parent)',
-    /style=\{variant === 'standalone' \|\| fullScreen \? undefined : \{ maxHeight/.test(pdf));
+    /maxHeight: variant === 'standalone' \|\| fullScreen \? undefined : 'min\(72vh, 720px\)'/.test(pdf));
   check('12 the surface still declares overflow-auto', /overflow-auto/.test(pdf));
   // Navigation uses scrollIntoView, and there is deliberately NO layout-driven
   // "scroll to the current page" effect — that effect is what used to yank the
@@ -505,7 +508,7 @@ const pdfViewer = readFileSync('src/features/library/components/PdfViewer.tsx', 
   check('16 standalone PDF fills its host height instead of collapsing',
     /variant === 'standalone'/.test(pdf) && /h-full min-h-0/.test(pdf));
   check('16 the inline PDF cap is lifted for standalone AND fullscreen',
-    /variant === 'standalone' \|\| fullScreen \? undefined : \{ maxHeight/.test(pdf));
+    /maxHeight: variant === 'standalone' \|\| fullScreen \? undefined : 'min\(72vh, 720px\)'/.test(pdf));
   check('16 the viewer full-screen overlay clips overflow and adds no padding',
     /z-\[60\] flex flex-col gap-0 p-0 h-full min-h-0 min-w-0 w-full bg-bg-primary overflow-hidden/.test(pdf));
 
@@ -514,9 +517,14 @@ const pdfViewer = readFileSync('src/features/library/components/PdfViewer.tsx', 
     /renderWindow\.map\(\(n\)/.test(pdf) && /style=\{\{ top: `\$\{entry\.top\}px` \}\}/.test(pdf));
   check('17 each page owns its own canvas in document order',
     /ref=\{setCanvas\(n\)\}/.test(pdf) && /key=\{n\}/.test(pdf));
-  check('17 only a window of pages is rendered (current +/-1)',
-    /const from = Math\.max\(1, page - 1\)/.test(pdf) &&
-    /const to = Math\.min\(pageCount, page \+ 1\)/.test(pdf));
+  // Desktop keeps current +/-1. Mobile drops the buffer entirely at zoom >= 2,
+  // because each buffered page is a full-size canvas and that is what exhausts
+  // the budget on a phone.
+  check('17 only a window of pages is rendered, and mobile narrows it further',
+    /const from = Math\.max\(1, page - buffer\)/.test(pdf) &&
+    /const to = Math\.min\(pageCount, page \+ buffer\)/.test(pdf) &&
+    /const buffer = mobile \? \(zoom >= 2 \? 0 : 1\) : 1;/.test(pdf) &&
+    /\}, \[page, pageCount, zoom\]\);/.test(pdf));
   check('17 canvases outside the window are released by unmounting',
     /renderWindow\.map/.test(pdf) && !/Array\.from\(\{ length: pageCount \}\)/.test(pdf));
   check('17 cancellation is tracked PER PAGE, not globally',
@@ -565,7 +573,7 @@ const pdfViewer = readFileSync('src/features/library/components/PdfViewer.tsx', 
     /viewportScale: cssScale \* dpr/.test(pdf) &&
     /getViewport\(\{ scale: geo\.viewportScale, rotation \}\)/.test(pdf));
   check('17 the render window re-runs on zoom/rotation change',
-    /\[status, windowKey, zoom, rotation, containerWidth, containerHeight, renderInto\]/.test(pdf));
+    /\[status, windowKey, zoom, rotation, containerWidth, containerHeight, renderInto, releaseCanvas\]/.test(pdf));
   check('17 the rendering spinner still reflects real work',
     /setRendering\(true\)/.test(pdf) && /renderTasksRef\.current\.size === 0\) setRendering\(false\)/.test(pdf));
   check('17 the old single-canvas-per-page band is gone',
@@ -885,26 +893,44 @@ const pdfViewer = readFileSync('src/features/library/components/PdfViewer.tsx', 
       /gestureStartZoomRef\.current = zoomRef\.current;/.test(imgCode));
     const imgCommit = (img.match(/const commitLive = useCallback\(\(\) => \{[\s\S]*?\n {2}\}, \[/) || [''])[0];
     check('19 the image pinch measures from the gesture start, not frame to frame',
-      /applyLive\(dist\(e\.touches\) \/ startDist, c\.x, c\.y\)/.test(img) &&
+      // Measured against the ORIGINAL start distance, in the shared hook.
+      /applyLive\(dist\(e\.touches\) \/ startDistRef\.current, c\.x, c\.y\)/.test(touchHook) &&
       // After the commit the running ratio resets, so the next gesture is 1x
       // relative to whatever is now committed.
       /liveScaleRef\.current = 1;/.test(imgCommit) &&
       /const target = quantizeZoom\(gestureStartZoomRef\.current \* liveScaleRef\.current\);/.test(imgCode));
 
     check('19 two-finger touch pinch is tracked natively',
-      /addEventListener\('touchstart', onStart, \{ passive: true \}\)/.test(img) &&
-      /addEventListener\('touchmove', onMove, \{ passive: false \}\)/.test(img) &&
+      /addEventListener\('touchstart', touchZoom\.onTouchStart, \{ passive: true \}\)/.test(img) &&
+      // Non-passive, or preventDefault is ignored and the browser page-zooms too.
+      /addEventListener\('touchmove', touchZoom\.onTouchMove, \{ passive: false \}\)/.test(img) &&
       // A guard on exactly two fingers, in both the start and the move handler.
-      /if \(e\.touches\.length !== 2\) return;/.test(img) &&
-      /if \(e\.touches\.length !== 2 \|\| startDist <= 0\) return;/.test(img));
+      /const onTouchStart = \(e: TouchEvent\) => \{[\s\S]{0,120}?if \(e\.touches\.length !== 2\) return;/.test(touchHook) &&
+      /const onTouchMove = \(e: TouchEvent\) => \{[\s\S]{0,200}?if \(e\.touches\.length !== 2\) return;/.test(touchHook));
     check('19 the gesture ends when a finger lifts, and commits',
-      /if \(e\.touches\.length >= 2\) return;/.test(img) &&
-      /const onEnd = \(e: TouchEvent\) => \{[\s\S]*?commitLive\(\);/.test(img) &&
-      /addEventListener\('touchend', onEnd, \{ passive: true \}\)/.test(img) &&
-      /addEventListener\('touchcancel', onEnd, \{ passive: true \}\)/.test(img));
+      // The baseline is cleared BEFORE the commit, so the one-finger pan that
+      // follows can never be measured against a stale start distance.
+      /if \(startDistRef\.current === 0\) return;/.test(touchHook) &&
+      /if \(startDistRef\.current > 0\) end\(/.test(touchHook) &&
+      /addEventListener\('touchend', touchZoom\.onTouchEnd, \{ passive: true \}\)/.test(img) &&
+      /addEventListener\('touchcancel', touchZoom\.onTouchCancel, \{ passive: true \}\)/.test(img));
     check('19 touch listeners are all removed on cleanup',
-      /removeEventListener\('touchstart', onStart\)/.test(img) &&
-      /removeEventListener\('touchmove', onMove\)/.test(img));
+      (img.match(/removeEventListener\('touch/g) || []).length === 4 &&
+      /removeEventListener\('gesturechange', touchZoom\.onGestureChange\)/.test(img));
+    // iOS Safari fires its own pinch events and can still page-zoom; both viewers
+    // must claim them.
+    check('19 iOS gesture events are claimed on the viewer',
+      /addEventListener\('gesturestart', touchZoom\.onGestureStart, \{ passive: false \}\)/.test(img) &&
+      /addEventListener\('gesturechange', touchZoom\.onGestureChange, \{ passive: false \}\)/.test(img) &&
+      /addEventListener\('gestureend', touchZoom\.onGestureEnd, \{ passive: false \}\)/.test(img) &&
+      /const onGestureStart = \(e: Event\) => \{[\s\S]{0,120}?e\.preventDefault\(\);/.test(touchHook) &&
+      /const onGestureChange = \(e: Event\) => \{[\s\S]{0,120}?e\.preventDefault\(\);/.test(touchHook) &&
+      /const onGestureEnd = \(e: Event\) => \{[\s\S]{0,120}?e\.preventDefault\(\);/.test(touchHook));
+    // `pan-x pan-y` grants native panning while denying the browser its own
+    // pinch-zoom over the surface.
+    check('19 the viewer surface denies browser pinch-zoom',
+      /export const VIEWER_TOUCH_ACTION = 'pan-x pan-y';/.test(touchHook) &&
+      /touchAction: VIEWER_TOUCH_ACTION/.test(img) && /touchAction: VIEWER_TOUCH_ACTION/.test(pdfViewer));
 
     // ---- Focal-point anchoring, checked numerically ----------------------
     // The image is CENTRED in its scroll surface, so the naive
@@ -1001,8 +1027,10 @@ const pdfViewer = readFileSync('src/features/library/components/PdfViewer.tsx', 
         `guard@${wheelCode.indexOf('!e.ctrlKey')} block@${wheelCode.indexOf('e.preventDefault()')}`);
 
       check('19 a one-finger pan is never preventDefault-ed',
-        /if \(e\.touches\.length !== 2 \|\| startDist <= 0\) return;/.test(touchCode) &&
-        touchCode.indexOf('touches.length !== 2') < touchCode.indexOf('e.preventDefault()'));
+        // The guard is BEFORE the preventDefault, and both are in the shared hook.
+        /if \(e\.touches\.length !== 2\) return;/.test(touchHook) &&
+        touchHook.indexOf('touches.length !== 2') < touchHook.indexOf('e.preventDefault()'),
+        `guard@${touchHook.indexOf('touches.length !== 2')} block@${touchHook.indexOf('e.preventDefault()')}`);
 
       // Both halves of the instant-write live in the shared hook: set auto, write,
       // restore. All three in order, in one layout effect.

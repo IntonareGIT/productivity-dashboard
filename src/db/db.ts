@@ -6,6 +6,7 @@ import type {
   Subject,
   Topic,
   Resource,
+  ResourceGroup,
   CalendarEvent,
   WeeklySchedule,
   ShiftOverride,
@@ -19,10 +20,13 @@ import type {
 import { newId } from '../utils/id';
 import { BLOB_MODE, DEXIE_CLOUD_URL, UNSYNCED_TABLES } from './cloudConfig';
 
+import { deriveNoteTitle, needsTitleBackfill } from './noteTitle';
+
 export class ProductivityDB extends Dexie {
   subjects!: Table<Subject, string>;
   topics!: Table<Topic, string>;
   resources!: Table<Resource, string>;
+  resourceGroups!: Table<ResourceGroup, string>;
   assessments!: Table<Assessment, string>;
   calendarEvents!: Table<CalendarEvent, string>;
   weeklySchedules!: Table<WeeklySchedule, string>;
@@ -121,6 +125,73 @@ export class ProductivityDB extends Dexie {
     this.version(8).stores({
       uiState: 'id',
     });
+    // v9: notes get a real, editable title. `title` is now indexed so the
+    // assistant can find a note BY TITLE, and the upgrade backfills every topic
+    // still carrying the generic 'General' placeholder from the first line of
+    // its own content.
+    //
+    // A "note" is a Topic: `notes` holds the markdown body and `title` is its
+    // label. The field already existed and was simply never surfaced, so this is
+    // additive — an index plus a value backfill. NOTE CONTENT IS NEVER TOUCHED.
+    this.version(9)
+      .stores({
+        topics: 'id, subjectId, status, createdAt, title',
+      })
+      .upgrade(async (tx) => {
+        const topics = (await tx.table('topics').toArray()) as Topic[];
+        const now = new Date().toISOString();
+        for (const t of topics) {
+          if (!needsTitleBackfill(t.title)) continue;
+          const title = deriveNoteTitle(t.notes);
+          if (title === t.title) continue;
+          // `{ ...t }` preserves `notes` byte-for-byte: only the label changes.
+          await tx.table('topics').put({ ...t, title, updatedAt: now });
+        }
+      });
+    // v10: named groups (folders) for resources within a subject.
+    //
+    // Two changes, both additive:
+    //   1. a new `resourceGroups` table (id, subjectId, name, order, createdAt)
+    //   2. an indexed, optional `groupId` on `resources`
+    //
+    // `groupId` is indexed so "all resources in this group" is a single indexed
+    // read rather than a full table scan on every render.
+    //
+    // The upgrade exists to NORMALISE, not to create: existing rows simply have
+    // no `groupId`, and the loop below normalises the three ways that can be
+    // untrue (a dangling group, a group from another subject, a non-null
+    // non-string). Every existing resource therefore stays ungrouped, and no
+    // resource is deleted or rewritten beyond clearing a groupId that could not
+    // have been valid.
+    this.version(10)
+      .stores({
+        resourceGroups: 'id, subjectId, order, createdAt',
+        resources: 'id, subjectId, topicId, title, dueDate, createdAt, groupId',
+      })
+      .upgrade(async (tx) => {
+        const groups = (await tx.table('resourceGroups').toArray()) as ResourceGroup[];
+        const byId = new Map(groups.map((g) => [g.id, g]));
+        const resources = (await tx.table('resources').toArray()) as Resource[];
+
+        // Drop groups that lost their subject (e.g. a partial sync) rather than
+        // leaving rows nothing can reach.
+        for (const g of groups) {
+          if (!(await tx.table('subjects').get(g.subjectId))) {
+            await tx.table('resourceGroups').delete(g.id);
+            byId.delete(g.id);
+          }
+        }
+
+        for (const r of resources) {
+          if (r.groupId === undefined || r.groupId === null) continue; // already ungrouped
+          const group = byId.get(r.groupId);
+          const valid = group && group.subjectId === r.subjectId;
+          if (valid) continue;
+          // Clear an impossible groupId so the invariant "grouped resource is
+          // in a group of its own subject" holds for every row.
+          await tx.table('resources').put({ ...r, groupId: null });
+        }
+      });
   }
 }
 

@@ -66,6 +66,9 @@ globalThis.__S = {
   calendarEvents: new Map(), weeklySchedules: new Map(), shiftOverrides: new Map(),
   pomodoroSessions: new Map(), themeStatusMap: new Map(), appSettings: new Map(),
   aiProviders: new Map(), chatSessions: new Map(), chatMessages: new Map(),
+  // v10 resource groups. searchLibrary reads this to label each hit with its
+  // folder name, so the table must exist even when no groups have been created.
+  resourceGroups: new Map(),
 };
 // The Dexie Cloud addon wires rxjs fromEvent() against `document` and `window`
 // at import time, but only when those globals exist — in Node they don't, and

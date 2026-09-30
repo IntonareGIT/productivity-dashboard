@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card } from '../../components/ui/Card';
-import { Settings2, Palette, Check, RotateCcw } from 'lucide-react';
+import { Settings2, Palette, Check, RotateCcw, Compass } from 'lucide-react';
 import { useStatusThemeStore, defaultMappingFor } from '../../stores/useStatusThemeStore';
 import { useThemeStatusMap } from '../../hooks/useThemeStatusMap';
 import { WeeklySchedulesSettings } from './components/WeeklySchedulesSettings';
@@ -11,7 +11,9 @@ import { SyncSettings } from './components/SyncSettings';
 import { DataBackupSection } from './components/DataBackupSection';
 import type { UserStatus, ThemeMode, ColorScheme } from '../../types';
 
-export const SettingsPage: React.FC = () => {
+/** Navigation into the About page, so it is reachable where the bottom bar
+ *  has no room for it. */
+export const SettingsPage: React.FC<{ onOpenAbout?: () => void }> = ({ onOpenAbout }) => {
   const { mappings, currentStatus, setStatus } = useStatusThemeStore();
   const { rows, saveMapping, resetMapping } = useThemeStatusMap();
 
@@ -145,6 +147,19 @@ export const SettingsPage: React.FC = () => {
 
       {/* Export / import all app data */}
       <DataBackupSection />
+
+      {/* About & Help is not in the phone bottom bar (six items is already the
+          limit there), so on a phone this is how you reach it. It is a real
+          destination rather than a link out, so the same button works on
+          desktop too. */}
+      <Card title="About & Help" subtitle="What this app can do, and how to get the most out of it">
+        <button
+          onClick={onOpenAbout}
+          className="inline-flex items-center gap-1.5 px-3 min-h-[44px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+        >
+          <Compass className="w-3.5 h-3.5" /> Open About &amp; Help
+        </button>
+      </Card>
     </div>
   );
 };

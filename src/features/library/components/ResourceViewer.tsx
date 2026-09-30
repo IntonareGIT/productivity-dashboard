@@ -2,6 +2,7 @@ import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { Download, ExternalLink, FileText, HardDriveDownload, Loader2, TriangleAlert } from 'lucide-react';
 import { Modal } from '../../../components/ui/Modal';
 import { ImageViewer } from './ImageViewer';
+import { ViewerErrorBoundary } from './ViewerErrorBoundary';
 import type { Resource } from '../../../types';
 import { fileTypeLabel, googleDriveEmbedUrl, previewKindFor } from '../previewKind';
 
@@ -78,6 +79,10 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
   const kind = previewKindFor(resource);
   const [imgUrl, setImgUrl] = useState<string | null>(null);
   const [imgFailed, setImgFailed] = useState(false);
+  // Bumped by the boundary's "Reload viewer" button. A key change remounts the
+  // viewer subtree, which is what actually recovers from a crashed canvas.
+  const [imgFailKey, setImgFailKey] = useState(0);
+  const [pdfFailKey, setPdfFailKey] = useState(0);
 
   // Object URL for the stored blob, revoked on unmount so the blob is not
   // pinned in memory for the life of the tab.
@@ -115,21 +120,24 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
   const body = (
       <div className="space-y-4 flex-1 min-h-0 min-w-0 w-full flex flex-col overflow-hidden">
         {kind === 'image' && resource.blob && !imgFailed && (
-          imgUrl ? (
-            /* The SHARED ImageViewer — the same component in the Library modal
-               and in a split pane, so zoom/rotate/fit/download are identical.
-               It publishes its control row up to the pane header when there is
-               one, and draws its own bar in the modal. */
-            <ImageViewer
-              src={imgUrl}
-              alt={resource.title}
-              onDownload={download}
-              onRegisterControls={embedded ? onRegisterImageControls : undefined}
-              onError={() => setImgFailed(true)}
-            />
-          ) : (
-            <div className="py-10 text-center text-xs text-content-tertiary">Preparing image…</div>
-          )
+          <ViewerErrorBoundary
+            label="image viewer"
+            reloadKey={imgFailKey}
+            onReload={() => setImgFailKey((k) => k + 1)}
+          >
+            {imgUrl ? (
+              <ImageViewer
+                key={`img-${imgFailKey}`}
+                src={imgUrl}
+                alt={resource.title}
+                onDownload={download}
+                onRegisterControls={embedded ? onRegisterImageControls : undefined}
+                onError={() => setImgFailed(true)}
+              />
+            ) : (
+              <div className="py-10 text-center text-xs text-content-tertiary">Preparing image…</div>
+            )}
+          </ViewerErrorBoundary>
         )}
 
         {kind === 'image' && imgFailed && (
@@ -147,15 +155,22 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
         )}
 
         {kind === 'pdf' && resource.blob && (
-          <Suspense fallback={<PdfLoading />}>
-            <PdfViewer
-              blob={resource.blob}
-              title={resource.title}
-              variant={embedded ? 'standalone' : 'inline'}
-              onDownload={resource.blob ? download : undefined}
-              onRegisterControls={onRegisterPdfControls}
-            />
-          </Suspense>
+          <ViewerErrorBoundary
+            label="PDF viewer"
+            reloadKey={pdfFailKey}
+            onReload={() => setPdfFailKey((k) => k + 1)}
+          >
+            <Suspense fallback={<PdfLoading />}>
+              <PdfViewer
+                key={`pdf-${pdfFailKey}`}
+                blob={resource.blob}
+                title={resource.title}
+                variant={embedded ? 'standalone' : 'inline'}
+                onDownload={resource.blob ? download : undefined}
+                onRegisterControls={onRegisterPdfControls}
+              />
+            </Suspense>
+          </ViewerErrorBoundary>
         )}
 
         {kind === 'drive' && driveEmbed && (

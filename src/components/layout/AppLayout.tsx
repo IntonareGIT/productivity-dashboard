@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Sidebar, type NavTab } from './Sidebar';
 import { TopBar } from './TopBar';
 import { BottomNav } from './BottomNav';
+import { GlobalErrorBanner } from '../../features/library/components/ViewerErrorBoundary';
 
 interface AppLayoutProps {
   activeTab: NavTab;
@@ -78,6 +79,11 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 
       {/* Mobile Bottom Navigation (< 768px) */}
       <BottomNav activeTab={activeTab} onSelectTab={onSelectTab} />
+
+      {/* Last-resort diagnostics. Mounted at the root so it survives anything a
+          viewer throws: there is no console on a phone, and a blank page with no
+          message is impossible to act on or report. */}
+      <GlobalErrorBanner />
     </div>
   );
 };

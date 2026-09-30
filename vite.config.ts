@@ -5,6 +5,11 @@ import path from 'path';
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  define: {
+    // Injected at build time and shown on the About / Help page. `toISOString`
+    // so the page can slice it into a readable date without parsing.
+    __BUILD_DATE__: JSON.stringify(new Date().toISOString()),
+  },
   plugins: [
     react(),
     VitePWA({
