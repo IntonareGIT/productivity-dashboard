@@ -172,6 +172,74 @@ const rConf = await chatCompletion({
 });
 check('7: confirmation follow-up, no 400', rConf.content === 'Schedule saved.', rConf.content);
 
+// ---- Flow 8: Gemini thinking parts are split from the answer --------------
+// This is the DEFAULT model's real shape: reasoning arrives as content parts
+// flagged `"thought": true`, NOT as <think> tags. Concatenating them into the
+// body left no tags for extractThinking to find, so `thought` stayed null and
+// the thought block never rendered — the reasoning was shown as the answer.
+script = [{
+  choices: [{
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'The user asked about their week.', thought: true },
+        { type: 'text', text: 'listTopics needs a subjectId first.', thought: true },
+        { type: 'text', text: 'You are studying Physics this term.' },
+      ],
+    },
+  }],
+}];
+current = 0;
+r = await chatCompletion({ provider, messages: [{ role: 'user', content: 'what am I studying?' }], tools: [] });
+check('8: the answer excludes the reasoning parts', r.content === 'You are studying Physics this term.', r.content);
+check('8: the reasoning is captured separately', !!r.reasoning && /listTopics/.test(r.reasoning), r.reasoning);
+check('8: every thought part is kept', !!r.reasoning && /asked about their week/.test(r.reasoning));
+check('8: no thought flag leaks into the answer', !/thought: true/.test(r.content));
+
+// Reasoning only, no answer part at all (model spent the budget thinking).
+script = [{
+  choices: [{ message: { role: 'assistant', content: [{ type: 'text', text: 'Still working it out.', thought: true }] } }],
+}];
+current = 0;
+r = await chatCompletion({ provider, messages: [{ role: 'user', content: 'q' }], tools: [] });
+check('8: a reasoning-only reply is not lost', r.content === '' && !!r.reasoning, `${r.content} / ${r.reasoning}`);
+
+// A `thoughts` sibling array is also honored.
+script = [{
+  choices: [{
+    message: { role: 'assistant', content: 'Done.', thoughts: [{ text: 'Checked the roster.' }] },
+  }],
+}];
+current = 0;
+r = await chatCompletion({ provider, messages: [{ role: 'user', content: 'q' }], tools: [] });
+check('8: a thoughts array becomes the reasoning', r.content === 'Done.' && /roster/.test(r.reasoning || ''), r.reasoning);
+
+// Both sources at once are combined, not one-over-the-other.
+script = [{
+  choices: [{
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'From parts.', thought: true }, { type: 'text', text: 'Final answer.' }],
+      reasoning_content: 'From the field.',
+    },
+  }],
+}];
+current = 0;
+r = await chatCompletion({ provider, messages: [{ role: 'user', content: 'q' }], tools: [] });
+check('8: both reasoning sources are combined',
+  r.content === 'Final answer.' && /From parts/.test(r.reasoning) && /From the field/.test(r.reasoning), r.reasoning);
+
+// A plain string reply must stay a plain reply, with no phantom reasoning.
+script = [say('Just an answer.')];
+current = 0;
+r = await chatCompletion({ provider, messages: [{ role: 'user', content: 'q' }], tools: [] });
+check('8: a plain reply has no reasoning', r.content === 'Just an answer.' && r.reasoning === undefined, r.reasoning);
+
+// The budget must cover reasoning AND answer, or thinking eats the answer.
+sentBodies.length = 0;
+await chatCompletion({ provider, messages: [{ role: 'user', content: 'q' }], tools: [] });
+check('8: max_tokens leaves room for a thinking model', sentBodies[0].max_tokens >= 2048, `got ${sentBodies[0].max_tokens}`);
+
 rmSync(outDir, { recursive: true, force: true });
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

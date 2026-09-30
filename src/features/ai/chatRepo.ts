@@ -2,6 +2,7 @@ import { db } from '../../db/db';
 import type { ChatMessageRow, ChatSession } from '../../types';
 import { newId } from '../../utils/id';
 import type { ChatMessage } from './types';
+import { extractThinking } from './thinking';
 
 /**
  * Persistent assistant chat history (schema v7).
@@ -85,6 +86,7 @@ export async function appendMessage(sessionId: string, msg: ChatMessage): Promis
     toolCallId: msg.toolCallId ?? null,
     toolName: msg.name ?? null,
     display: msg.display ?? null,
+    reasoning: msg.reasoning ?? null,
     error: msg.error ?? false,
     createdAt: new Date().toISOString(),
   };
@@ -134,11 +136,58 @@ export function buildTranscript(rows: ChatMessageRow[], limit = 20): ChatMessage
     }
   }
 
-  return rows
-    .slice(start)
-    // Never send a tool result that no assistant turn asked for.
-    .filter((r) => !(r.role === 'tool' && r.toolCallId && parentOf(r.toolCallId) < 0))
-    .map(toChatMessage);
+  return closeDanglingCalls(
+    rows
+      .slice(start)
+      // Never send a tool result that no assistant turn asked for.
+      .filter((r) => !(r.role === 'tool' && r.toolCallId && parentOf(r.toolCallId) < 0))
+      .map(toChatMessage)
+  );
+}
+
+/**
+ * Guarantee every `tool_calls` turn is immediately followed by a tool turn
+ * answering it.
+ *
+ * The provider requires the sequence `user -> model call -> tool response ->
+ * model answer`. An assistant call with no response after it is rejected with
+ * HTTP 400, so a single unanswered call poisons every later request in that
+ * session. The store refuses to create that state, but rows written before that
+ * guard — or by an older build, or restored from a backup — can still contain
+ * it, and those rows are never rewritten.
+ *
+ * So this is the backstop: any call id left unanswered gets a synthetic
+ * function response saying so. The model can then recover on its own ("that
+ * action did not run") instead of the request failing outright. The synthetic
+ * turn is added to the outgoing payload ONLY — nothing is persisted, so this can
+ * never invent history in the database.
+ */
+function closeDanglingCalls(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (let idx = 0; idx < messages.length; idx += 1) {
+    const m = messages[idx];
+    out.push(m);
+    if (m.role !== 'assistant' || !m.toolCalls || m.toolCalls.length === 0) continue;
+
+    // Ids answered by the tool turns that directly follow this call.
+    const answered = new Set<string>();
+    for (let j = idx + 1; j < messages.length && messages[j].role === 'tool'; j += 1) {
+      if (messages[j].toolCallId) answered.add(messages[j].toolCallId as string);
+    }
+    for (const call of m.toolCalls) {
+      if (answered.has(call.id)) continue;
+      out.push({
+        role: 'tool',
+        content: JSON.stringify({
+          ok: false,
+          error: 'This action did not run: its result was never recorded. Treat it as not performed.',
+        }),
+        toolCallId: call.id,
+        name: call.name,
+      });
+    }
+  }
+  return out;
 }
 
 function toChatMessage(row: ChatMessageRow): ChatMessage {
@@ -173,6 +222,12 @@ export interface AssistantViewMessage {
   role: 'user' | 'assistant' | 'tool';
   text: string;
   toolName?: string;
+  /**
+   * Model reasoning for this turn, extracted from `<think>`-style tags or the
+   * provider's native reasoning field. Absent for standard models, which is what
+   * lets the UI skip the thought block entirely.
+   */
+  thought?: string;
   error?: boolean;
 }
 
@@ -181,6 +236,11 @@ export interface AssistantViewMessage {
  *
  * Only user and assistant prose is shown as conversation. Tool calls and tool
  * results collapse into a small "action" confirmation — never raw JSON.
+ *
+ * Assistant prose is passed through `extractThinking`, so a rendered message is
+ * always the ANSWER with any reasoning split out into `thought`. Doing this here
+ * (rather than at write time) means rows stored before this change still display
+ * correctly, and the stored `content` stays exactly what the provider sent.
  */
 export function toViewMessages(rows: ChatMessageRow[]): AssistantViewMessage[] {
   const out: AssistantViewMessage[] = [];
@@ -188,7 +248,13 @@ export function toViewMessages(rows: ChatMessageRow[]): AssistantViewMessage[] {
     if (row.role === 'user' && row.content) {
       out.push({ id: row.id, role: 'user', text: row.content });
     } else if (row.role === 'assistant' && row.content) {
-      out.push({ id: row.id, role: 'assistant', text: row.content });
+      const { thought, body } = extractThinking(row.content, row.reasoning);
+      out.push({
+        id: row.id,
+        role: 'assistant',
+        text: body,
+        thought: thought ?? undefined,
+      });
     } else if (row.role === 'tool') {
       out.push({
         id: row.id,

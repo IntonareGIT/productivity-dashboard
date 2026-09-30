@@ -24,6 +24,8 @@ interface PaneContentProps {
    * instead of a header plus a second toolbar inside the viewer.
    */
   onRegisterPdfControls?: (node: React.ReactNode) => void;
+  /** The image viewer's zoom/rotate/fit/download row, published the same way. */
+  onRegisterImageControls?: (node: React.ReactNode) => void;
 }
 
 const Blank = ({ children }: { children: React.ReactNode }) => (
@@ -40,14 +42,16 @@ const Blank = ({ children }: { children: React.ReactNode }) => (
  * completely independent viewer state.
  */
 export const PaneContent: React.FC<PaneContentProps> = ({
-  slot, onNavigate, onOpenAssistantSettings, onRegisterPdfControls,
+  slot, onNavigate, onOpenAssistantSettings, onRegisterPdfControls, onRegisterImageControls,
 }) => {
-  // Resources are read live, so a pane opened on a file picks up edits.
+  // Resources are read live, so a pane opened on a file picks up edits. PDFs and
+  // images are both "a resource with a blob", just routed to different viewers.
+  const resourceId = slot.kind === 'pdf' ? slot.resourceId
+    : slot.kind === 'image' ? slot.imageId
+    : undefined;
   const resource = useLiveQuery(
-    () => (slot.kind === 'pdf' && slot.resourceId
-      ? db.resources.get(slot.resourceId)
-      : Promise.resolve(undefined)),
-    [slot.kind, slot.resourceId],
+    () => (resourceId ? db.resources.get(resourceId) : Promise.resolve(undefined)),
+    [resourceId],
   ) as Resource | undefined;
 
   switch (slot.kind) {
@@ -93,11 +97,25 @@ export const PaneContent: React.FC<PaneContentProps> = ({
       // here would make the whole pane scroll as well, and the page controls
       // would drift away from the page.
       return (
-        <div className="flex flex-col h-full min-h-0 overflow-hidden p-1">
+        <div className="flex flex-col h-full min-h-0 min-w-0 w-full overflow-hidden p-1">
           <EmbeddedResourceViewer
           resource={resource}
           onRegisterPdfControls={onRegisterPdfControls}
         />
+        </div>
+      );
+
+    case 'image':
+      if (!slot.imageId) return <Blank>Pick an image in this pane&apos;s header.</Blank>;
+      if (!resource) return <Blank>Loading resource…</Blank>;
+      // The SAME ResourceViewer the Library modal uses, so the image controls are
+      // identical in both places; it publishes its row up to the pane header.
+      return (
+        <div className="flex flex-col h-full min-h-0 min-w-0 w-full overflow-hidden p-1">
+          <EmbeddedResourceViewer
+            resource={resource}
+            onRegisterImageControls={onRegisterImageControls}
+          />
         </div>
       );
 
@@ -119,9 +137,12 @@ const EmbeddedResourceViewer: React.FC<{
    * instead of a header plus a second toolbar inside the viewer.
    */
   onRegisterPdfControls?: (node: React.ReactNode) => void;
-}> = ({ resource, onRegisterPdfControls }) => (
+  /** The image viewer's zoom/rotate/fit/download row, published the same way. */
+  onRegisterImageControls?: (node: React.ReactNode) => void;
+}> = ({ resource, onRegisterPdfControls, onRegisterImageControls }) => (
   <ResourceViewer
     onRegisterPdfControls={onRegisterPdfControls}
+    onRegisterImageControls={onRegisterImageControls}
     resource={resource}
     onClose={() => { /* panes are closed by the pane header, not the viewer */ }}
     embedded

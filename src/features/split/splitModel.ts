@@ -8,13 +8,15 @@
  * so a refresh always returns to the default single full-width dashboard.
  */
 
-export type PaneKind = 'empty' | 'dashboard' | 'pdf' | 'notes' | 'assistant';
+export type PaneKind = 'empty' | 'dashboard' | 'pdf' | 'image' | 'notes' | 'assistant';
 
 /** What one pane is showing. `resourceId`/`topicId` are per-kind. */
 export interface PaneSlot {
   kind: PaneKind;
   /** For kind 'pdf': the resource being previewed. */
   resourceId?: string;
+  /** For kind 'image': the image resource being previewed. */
+  imageId?: string;
   /** For kind 'notes': the topic whose notes are being edited. */
   topicId?: string;
 }
@@ -26,6 +28,14 @@ export interface SplitState {
   ratio: number;
   /** Index of the temporarily maximized pane, or null when both are shown. */
   maximized: number | null;
+  /**
+   * The pane the user is working in — the one that gets the focus glow.
+   *
+   * Null until they touch a pane, so a freshly opened split glows in neither
+   * half rather than arbitrarily claiming one. Only meaningful while actually
+   * split: a single full-width pane has nothing to be distinguished from.
+   */
+  activePane: number | null;
 }
 
 /**
@@ -36,6 +46,7 @@ export const emptySplitState: SplitState = {
   panes: [{ kind: 'empty' }, { kind: 'empty' }],
   ratio: 0.5,
   maximized: null,
+  activePane: null,
 };
 
 /** The state on every load: one full-width dashboard, no split. */
@@ -43,6 +54,7 @@ export const initialSplitState: SplitState = {
   panes: [{ kind: 'dashboard' }],
   ratio: 0.5,
   maximized: null,
+  activePane: null,
 };
 
 export const MIN_RATIO = 0.2;
@@ -59,7 +71,7 @@ export const clampRatio = (r: number) =>
  * the PDF "split with notes" entry point, which supplies both pane slots.
  */
 export function openSplit(state: SplitState, a: PaneSlot, b: PaneSlot): SplitState {
-  return { panes: [a, b], ratio: 0.5, maximized: null };
+  return { panes: [a, b], ratio: 0.5, maximized: null, activePane: null };
 }
 
 /** Add a second pane beside the current one, cloning nothing. */
@@ -82,7 +94,21 @@ export function swapPanes(state: SplitState): SplitState {
 export function closePane(state: SplitState, index: number): SplitState {
   if (!isSplit(state)) return state;
   const keep = index === 0 ? 1 : 0;
-  return { panes: [state.panes[keep]], ratio: 0.5, maximized: null };
+  // The survivor is the only pane left, so it becomes index 0 and owns focus.
+  return { panes: [state.panes[keep]], ratio: 0.5, maximized: null, activePane: 0 };
+}
+
+/**
+ * Mark one pane as the one the user is working in.
+ *
+ * Kept deliberately dumb — an out-of-range index or a repeat of the current
+ * value returns the SAME object, so `pointerdown`/`focus` firing repeatedly
+ * during normal editing cannot cause a re-render storm.
+ */
+export function setActivePane(state: SplitState, index: number): SplitState {
+  if (index < 0 || index >= state.panes.length) return state;
+  if (state.activePane === index) return state;
+  return { ...state, activePane: index };
 }
 
 /** Replace one pane's content. */

@@ -6,7 +6,11 @@ import { CommandPalette } from './components/ui/CommandPalette';
 import { Toaster } from './components/ui/Toaster';
 import { DashboardPage } from './features/dashboard/DashboardPage';
 import { SplitView } from './features/split/SplitView';
-import { initialSplitState, emptySplitState, splitWithNotes, type SplitState } from './features/split/splitModel';
+import {
+  addSecondPane, emptySplitState, initialSplitState, isSplit, setPane, splitWithNotes, swapPanes,
+  type PaneSlot, type SplitState,
+} from './features/split/splitModel';
+import { useSplitCommandStore } from './stores/useSplitCommandStore';
 import { LibraryPage } from './features/library/LibraryPage';
 import { CalendarPage } from './features/calendar/CalendarPage';
 import { ShiftsPage } from './features/shifts/ShiftsPage';
@@ -60,6 +64,52 @@ export const App: React.FC = () => {
   }, []);
 
   const closeSplit = useCallback(() => setSplitOpen(false), []);
+
+  // ---- AI-driven split commands -------------------------------------------
+  // The assistant's `manage_split_screen` tool cannot touch React state, so it
+  // queues a command in `useSplitCommandStore` and this applies it using the
+  // SAME splitModel functions the UI uses. Keeping App as the single owner of
+  // the split state is what preserves the "React state only, never persisted"
+  // rule documented above.
+  const splitCommand = useSplitCommandStore((s) => s.command);
+  const settleSplitCommand = useSplitCommandStore((s) => s.settle);
+
+  useEffect(() => {
+    if (!splitCommand) return;
+    const { action, pane, viewType, resourceId, topicId, id } = splitCommand;
+    // 'left' is index 0, 'right' is index 1; an omitted side defaults to left.
+    const target = pane === 'right' ? 1 : 0;
+    const slot: PaneSlot = { kind: viewType ?? 'empty', resourceId, topicId };
+
+    if (action === 'close') {
+      setSplitOpen(false);
+    } else if (action === 'swap') {
+      setSplitState((s) => swapPanes(s));
+      setSplitOpen(true);
+    } else {
+      // Open: if we are not already split, add the second pane with the
+      // requested view; if we are, retarget the chosen pane in place.
+      setSplitState((s) => (
+        isSplit(s)
+          ? setPane(s, target, slot)
+          : addSecondPane(s, slot)
+      ));
+      setSplitOpen(true);
+    }
+    // Settle by id so a command queued during this apply is not swallowed.
+    settleSplitCommand(id);
+  }, [splitCommand, settleSplitCommand]);
+
+  // Publish the split shape so the tool can report what is actually on screen
+  // rather than what it merely asked for.
+  const publishSplitSnapshot = useSplitCommandStore((s) => s.publish);
+  useEffect(() => {
+    publishSplitSnapshot({
+      open: splitOpen,
+      panes: splitState.panes.map((p) => p.kind),
+      maximized: splitState.maximized,
+    });
+  }, [splitOpen, splitState, publishSplitSnapshot]);
 
   // Navigating to a different tab closes the split overlay, so the user is
   // never left staring at the previous tab's content behind an overlay.

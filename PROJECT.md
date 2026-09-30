@@ -531,18 +531,68 @@ Two related invariants the same loop depends on:
 - A tool result must carry a matching `tool_call_id`. A confirmation-gated call
   stores its `callId` on `pending` so the result written after the user
   approves stays paired.
-- History is trimmed with `trimHistory()`, never a bare `slice(-N)`, which
-  could cut between a `tool_calls` message and the results answering it.
-  `trimHistory()` walks back to the parent turn so the sequence is never split.
+- **Every `tool_calls` turn is immediately followed by a tool turn answering
+  it.** The provider requires `user -> model call -> tool response -> model
+  answer`; a call with nothing after it is rejected with **HTTP 400**, and
+  because the bad turn stays in the stored history, it poisons *every* later
+  request in that session — the chat is then permanently broken, not just one
+  turn. Three layers keep this true:
+  1. `runTool()` (in `useAssistantStore`) always returns a tool turn, including
+     when the tool throws, so a failure is reported rather than left dangling.
+  2. Two paths that used to leave a call unanswered are now closed. Sending a
+     new message while a confirmation is open resolves the pending call as
+     declined first; and a turn mixing gated and ungated calls now executes the
+     ungated ones before pausing, instead of `break`ing past all of them.
+  3. `buildTranscript()` ends with `closeDanglingCalls()`, a payload-only
+     backstop for rows written by an older build or restored from a backup.
+     Any unanswered id gets a synthetic response saying the action did not run,
+     so the model can recover on its own. It never writes to the database, so
+     it cannot invent history.
+- History is trimmed with `buildTranscript()`, never a bare `slice(-N)`, which
+  could cut between a `tool_calls` message and the results answering it. The
+  window walks back to the parent turn, and orphaned tool *results* (whose
+  parent fell outside the window) are dropped, since an unpaired
+  `tool_call_id` is also rejected.
 
 Regression coverage: `node scripts/verify-thought-signature.mjs` drives the real
 `chatCompletion()` against a mock Gemini endpoint that returns HTTP 400 on an
 unsigned tool call, covering single tool calls, two calls in one turn, chained
 calls, an unsigned provider, legacy history without `raw`, and a confirmed
 gated call. `node scripts/verify-chat-history.mjs` covers the persistence
-rules and `node scripts/verify-extended-tools.mjs` covers every callable
-function (writes reaching Dexie, argument validation, confirmation gating, and
-the confirmation wording).
+rules, the window-widening rules, and sequence integrity (group 8: a dangling
+call is closed, an answered call is never double-answered, a partially answered
+multi-call turn is completed, and the repair writes nothing to the database).
+`node scripts/verify-extended-tools.mjs` covers every callable function (writes
+reaching Dexie, argument validation, confirmation gating, and the confirmation
+wording).
+
+**The model must be able to see an id, or it will invent one.** Every lookup
+tool that returns a reference must include the `id` field in the payload that
+goes back to the model — the UI pill is irrelevant, only the tool response
+matters. `searchLibrary` returns a flat, id-carrying list
+(`resources: [{ id, title, type, subject, topic }]`, `topics: [{ id, title,
+subject }]`) alongside the grouped view, and its summary says so explicitly.
+Without that, the model had only the file name to hand back, passed it as
+`resource_id`, and the tool failed — repeatedly, with no way to recover.
+
+`manage_split_screen` is deliberately forgiving, in this order:
+
+1. exact id lookup;
+2. else case-insensitive exact match on title / fileName;
+3. else contains-match; **one** match is used;
+4. **several** matches return `{ error: 'ambiguous_resource', candidates: [{ id,
+   title, type }] }` as a normal tool result — a list the model can act on, not
+   a dead-end error;
+5. only a genuinely unknown value throws, and the message names the `"id"` field
+   and says *never the file name*.
+
+**The tool loop must always end in a sentence.** Every failure path returns a
+`role: 'tool'` turn, so the strict order (`user -> model call -> tool response
+-> model answer`) is never broken. And if the round budget runs out while the
+model is still calling tools, `send()` makes one final `chatCompletion` **with no
+tools offered** and persists that reply. Without it the loop simply fell through
+with the transcript ending on a tool turn — the action chip rendered, the chat
+looked frozen, and no HTTP 400 ever fired to explain it.
 
 ### Scope: this is Part 1
 
@@ -850,6 +900,227 @@ browser back button) returns to that tab. The page and the bubble share one
 Dexie history and one provider configuration — switching between them keeps
 the same conversation open.
 
+> **Thinking blocks.** `extractThinking()` (pure, in `src/features/ai/thinking.ts`)
+> splits each assistant reply into its reasoning and its answer: tagged blocks
+> (`<think>`, `<thinking>`, `<reasoning>`, tolerant of case/attributes and of an
+> unclosed streaming tag) plus the provider-native `reasoning_content` /
+> `reasoning` field, which `aiClient` reads into `ChatMessage.reasoning` and
+> `appendMessage` persists on the row (never replayed to the model). The stored
+> content stays verbatim; `toViewMessages` projects the answer into `text` and
+> the reasoning into `thought`. `AssistantChat` renders a `ThoughtBlock` above
+> the answer only when `thought` exists — collapsed by default, showing
+> "💭 Thought process" with a chevron and a one-line preview. Standard models
+> produce neither source, so `thought` stays `undefined` and their messages
+> render exactly as before.
+>
+> **Gemini does not use tags — it flags parts.** The default model
+> (`gemini-3.1-flash-lite`) returns reasoning as content parts marked
+> `"thought": true`, with the real answer in the unflagged parts. Those parts
+> must be **split, not concatenated**: joining them left the reasoning inline in
+> the visible reply as untagged prose, so `extractThinking` found no tags,
+> `thought` was null, and the block never rendered — the reasoning was silently
+> shown as part of the answer. `readContent()` now returns `{ body, reasoning }`
+> and drops thought parts from the body; a `thoughts` sibling array and the
+> `reasoning_content` field are also read, and all three sources are **combined**
+> rather than treated as alternatives, since a provider can legitimately send
+> more than one.
+>
+> **`max_tokens` must cover reasoning too.** Thinking tokens come out of the same
+> budget as the answer, so the old 900-token cap could be spent entirely on
+> reasoning and return an empty reply. It is now 4096.
+
+**Image panes and strict feature parity.** `image` is a first-class `PaneKind`
+(alongside `pdf`), with its own `imageId` and its own controls registry, so a
+pane is never handed another view's toolbar. The document dropdown lists images
+in their own `<optgroup>` and filters them with the viewer's OWN
+`previewKindFor()` — sharing the detector is what stops the picker offering
+something the viewer then refuses to render.
+
+**The parity rule: one component, two hosts.** `ResourceViewer` is already the
+single host for both the Library modal and a split pane (the `embedded` prop
+selects the chrome), so parity is achieved by extending that shared component
+rather than building a parallel one. `ImageViewer` follows the exact contract
+`PdfViewer` already used:
+
+| Host | Behaviour |
+| --- | --- |
+| Library modal (`embedded=false`) | Viewer draws its own control bar |
+| Split pane (`embedded=true`) | Viewer **publishes** the row to `PaneHeader` |
+
+The row is a single `useMemo` value published through `onRegisterControls`, so a
+pane never grows a second toolbar, and the parent cannot be forced into a
+register/render loop. Host callbacks are read through refs so they never
+invalidate the memo. `ImageViewer` offers zoom out / level % / zoom in / **Fit** /
+**1:1** / **Rotate** / **Download**, and sizes the image from one proportional
+box (`{ w: base.h, h: base.w }` when rotated) with `object-contain` as a
+belt-and-braces guard — never `width: 100%`.
+
+**Zoom keeps the point you are looking at.** Changing the scale re-lays-out the
+stack at a new size, and the browser leaves `scrollTop`/`scrollLeft` at the old
+pixel offset — so without help the view slides toward the top-left and the text
+under the cursor is no longer under the cursor. Every zoom therefore goes
+through one `applyZoom()`-style entry point that:
+
+1. captures the focal point in content coordinates **before** the scale
+   changes (`scrollLeft + clientWidth / 2`, `scrollTop + clientHeight / 2`);
+2. records `ratio = clampedTarget / previousZoom` — from the **clamped** value,
+   so a gesture that runs into a zoom limit does not try to restore an offset
+   for a scale that never happened;
+3. reapplies it in a `useLayoutEffect`, before the browser paints the
+   intermediate position.
+
+Two details make it actually hold:
+
+- **The anchor survives a clamped write.** pdf.js reports page sizes
+  asynchronously, so an early pass can be clamped by a scroll area that has not
+  grown yet. The anchor is cleared only once the write actually took; otherwise
+  it stays armed and the next layout pass re-applies it. This terminates,
+  because the effect only runs when the geometry changes.
+- **The page-sync effect defers.** Otherwise it would snap the view to the page
+  top and immediately undo the anchor, and the two effects would fight over the
+  scroll position on every zoom frame.
+
+**A centred image needs a different anchor than a page stack.** The image is
+centred in its scroll surface, so the naive `scroll = centre * ratio - half` is
+only correct once the image is wider than the viewport — the centring offset
+scales too, and scaling a content coordinate alone ignores that.
+`ImageViewer` therefore stores the point in **image-local** pixels and re-derives
+the offset from the new size each time. A numeric check confirms it: with an
+off-centre cursor at x=300 the correct anchor holds x=300, while the naive
+formula lands on 400.
+
+**Pinch-to-zoom on images.** A trackpad pinch arrives as a `wheel` event with
+`ctrlKey` set; it is intercepted with a `{ passive: false }` listener (without
+which `preventDefault` is ignored and the browser page still zooms behind the
+viewer) and mapped onto the image's own scale as
+`zoom - deltaY * 0.01`. A wheel **without** `ctrlKey` is left completely alone,
+so the image can still be panned. Two-finger touch pinch is tracked natively —
+React's synthetic touch events do not expose the distance between fingers — and
+is always measured against the **original** gesture start, so repeated moves
+cannot compound and run away to the clamp. Zoom is bounded to **0.5×–5×**.
+
+**Scroll health: never cancel what you do not own.** A viewer that "locks" or
+freezes is almost always a handler cancelling events it should have let through.
+Both viewers follow one rule:
+
+- **Wheel.** Only a modifier gesture is claimed — `!e.ctrlKey && !e.metaKey`
+  returns immediately, **before** any `preventDefault()`. A pinch sets
+  `ctrlKey`; macOS Cmd+wheel (and some trackpads) set `metaKey`; both are
+  handled. Every other wheel falls through to the browser, so normal
+  vertical/horizontal scrolling stays 100% native. The listener stays
+  `{ passive: false }` — that is what makes `preventDefault` legal at all.
+- **Touch.** `e.touches.length !== 2` returns before `preventDefault()`, so a
+  one-finger pan is never cancelled. `touchstart` is registered `passive: true`
+  because nothing is cancelled there. No `touch-action: none` is set anywhere;
+  that would kill one-finger panning outright.
+- **Instant programmatic scrolls.** The focal-point correction assigns
+  `scrollLeft`/`scrollTop` directly. It brackets the write with
+  `scrollBehavior = 'auto'` (restoring the previous inline value afterwards),
+  so a `scroll-behavior: smooth` — ours, inherited, or added by a theme later —
+  cannot animate the assignment and fight the next zoom frame. That is the
+  snap-back.
+- **No CSS snap or scroll anchoring.** Both scroll surfaces carry
+  `[scroll-snap-type:none]` and `[overflow-anchor:none]`. Browser scroll
+  anchoring adjusts `scrollTop` on its own whenever content above the viewport
+  changes size — precisely what a zoom does — and it fights the correction.
+
+**Gestures run on the compositor, not in React.** A `wheel`/`touchmove` handler
+that calls `setZoom` re-renders the whole page stack and re-issues a pdf.js
+render task for every visible page, on *every event*. That is the single
+biggest source of pinch hitch. So a gesture is split in two:
+
+- **During** the gesture, `applyLive()` writes ONE inline `transform` /
+  `transformOrigin` on the content wrapper. That is a compositor-only change:
+  no state, no layout, no reflow, no re-render, so the gesture holds 60fps. The
+  wrapper carries `will-change: transform` to keep it on its own layer. The
+  `transformOrigin` is expressed in content coordinates — the same expression
+  the commit path reconstructs — which is what makes the hand-off seamless.
+- **After** it settles, `commitLive()` clears the transform and folds the scale
+  into real `zoom` state at the same focal point, so the anchor effect restores
+  the identical view. Wheel gestures commit on a **150ms debounce** (a trackpad
+  pinch is a burst of events — committing per event would reintroduce the very
+  hitch the transform removes); touch gestures commit on `touchend`.
+
+Buttons and the keyboard skip the transform entirely and go straight to the
+anchoring setter — a single discrete change has nothing to debounce.
+
+**Unlocked flex ancestors.** A flex item defaults to `min-height: auto` /
+`min-width: auto`, so it refuses to shrink below its content. Without explicit
+`min-h-0 min-w-0` on the ancestors, a growing child (a zoomed page, a large
+image) pushes the box outward instead of scrolling inside it, and the scrollbar
+appears frozen or locked. Every flex ancestor of a scroll area in
+`PaneContainer`, `PaneContent`, `ResourceViewer`, `PdfViewer` and `ImageViewer`
+now carries `min-h-0 min-w-0 h-full w-full`.
+
+**A zoom write is not a user scroll.** Assigning `scrollLeft`/`scrollTop` fires a
+real `scroll` event. Left unguarded that event is indistinguishable from a drag,
+so the viewer recomputes the page in view and calls `setPage` — a re-render and
+a page-indicator flicker in the middle of a zoom. Two refs keep them apart:
+
+- `isZoomingRef` is raised immediately before the write and released in a
+  `requestAnimationFrame` — after the browser has had the chance to dispatch the
+  event. A microtask would be too early.
+- `zoomWriteRef` records the position the write asked for. A scroll event that
+  matches it is our own late echo and is dropped.
+
+Anything else is the user, and then any **still-armed anchor is discarded**. This
+matters because an anchor survives a clamped first write while it waits for
+pdf.js to report the new page sizes; re-applying it over a user drag is exactly
+the "snapping" this guards against. The user always wins.
+
+**The focal math only runs on a real scale change, and only after reflow.**
+`applyZoom` never writes a scroll position — it clamps the target, arms a ref,
+and calls `setZoom`. The write happens in a `useLayoutEffect`, so
+`scrollWidth`/`scrollHeight` already reflect the resized content. The anchor is
+armed only when `clamped !== prev`, so an unchanged scale does no scroll work at
+all, and a plain drag/wheel/swipe never triggers the focal math.
+
+Note the restore is `focal * ratio - half`, not the centre-only
+`(scroll + client/2) * ratio - client/2`. The general form is a superset: the
+centre formula is exactly the case where the focal point *is* the centre, which
+is what buttons and the keyboard use. Gestures pass a cursor or finger midpoint
+and get a better result than centring would give.
+
+**Never write a scroll position against a stale extent.** The page stack is
+re-laid-out *asynchronously* — pdf.js reports each page's size a frame or more
+after the zoom — so on the first layout pass `scrollWidth` still describes the
+OLD scale. Writing `scrollLeft` then is silently clamped by the browser to
+whatever the stale extent allows, and the next pass moves the view again. That
+clamp-then-correct pair is the landing jump. So:
+
+1. `applyZoom` captures the focal point as a **fraction of the current
+   scrollable extent** (`(scrollLeft + focal) / scrollWidth`), plus the extent
+   the new layout is *expected* to reach. A fraction stays valid across the
+   resize; an absolute pixel target does not.
+2. A **readiness gate** refuses to write until the *measured* extent has
+   actually reached the new scale. The gate compares in both directions —
+   growing for zoom-in, shrinking for zoom-out, since the extent can never
+   exceed the old one when zooming out.
+3. Only then is the target computed **from the measured extent**, so rounding
+   and any `minWidth` clamp are absorbed instead of baked into the anchor.
+
+**Scroll anchoring is disabled with priority.** Both surfaces carry
+`[scroll-snap-type:none]` and `![overflow-anchor:none]` — the `!` **prefix**,
+which is Tailwind v3's important modifier (the v4 suffix form `[…]!` compiles
+here but emits no `!important`, so it would lose to any competing rule).
+Browser scroll anchoring adjusts `scrollTop` on its own whenever content above
+the viewport changes size, which is exactly what a zoom does.
+
+**Canvas resolution follows the real device pixel ratio.** The render scale uses
+the display's actual `devicePixelRatio` (previously capped at 2, which left text
+soft on 3x screens), so glyphs are rasterised at native density instead of being
+upscaled by the browser. It is bounded by a **pixel budget**
+(`MAX_CANVAS_PIXELS`, ~16 MP): uncapped, an A4 page at 4x zoom on a 3x display is
+~76 MP — roughly 300 MB for one canvas — which would take the tab down. The
+budget trims only what cannot be afforded; a normal page at a normal zoom uses
+the full device ratio untouched.
+
+**Header overflow.** `PaneHeader` scrolls horizontally with the scrollbar hidden
+in both the WebKit and standard-property forms, `overscroll-x-contain` stops a
+flick chaining out to the page behind, and every group is
+`flex-shrink-0 whitespace-nowrap` over a `min-w-max` row — so a squeezed split
+half or a phone can swipe to reach controls that would otherwise wrap or clip.
+
 ## 1.14 Two-pane split view
 
 `src/features/split/` hosts a two-pane layout where **either** pane can show the
@@ -861,26 +1132,30 @@ active (Dashboard, Library, Calendar, Shifts, Focus, Settings) and below the top
 bar. Opening or closing it never touches `activeTab`, so closing returns to
 exactly the tab that was showing.
 
-**The top-bar icon is the only generic entry point.** A `Columns2` button sits
+**The top-bar icon is the usual generic entry point.** A `Columns2` button sits
 next to the profile avatar, visible on every tab and at every width including
 mobile, with `aria-pressed` reflecting the state. It opens an **empty split** —
 two panes, each a dashed border with *"Choose what to show in this pane:
 Dashboard, a PDF, Notes, or Assistant."* plus its own picker — and toggles
-closed when clicked again. A test asserts only one file may call
-`addSecondPane()`, so no second generic entry point can creep in. The Library's
-per-resource **"Split with notes"** remains as a *contextual* shortcut: it
+closed when clicked again. It is the only entry point a USER can reach by
+accident from any tab. The same generic transitions are also driven by two
+deliberate non-UI paths: the assistant's `manage_split_screen` tool, which
+queues a command that `App` applies through `addSecondPane` / `setPane` /
+`swapPanes` (see "AI-driven split commands" below), and the Library's
+per-resource **"Split with notes"** *contextual* shortcut: it
 opens the split with that PDF and its topic notes immediately, from whatever tab
 the button is on, without navigating to the Dashboard.
 
 | File | Role |
 | --- | --- |
-| `splitModel.ts` | Pure reducer: pane slots, swap, close, maximize, ratio clamp |
+| `splitModel.ts` | Pure reducer: pane slots, swap, close, maximize, ratio clamp, active-pane focus |
 | `SplitView.tsx` | Container, draggable divider, owns the shared PDF-controls registry |
 | `PaneHeader.tsx` | The universal pane header + wrapper, rendered for every pane kind |
 | `PaneContent.tsx` | Dispatches a slot to its renderer |
 | `NotesPane.tsx` | The Library notes editor in a narrow layout |
 | `useResourceFullScreen.tsx` | Shared hook + `ResourceFullScreen` for non-PDF full screen |
 | `FullScreenPreview.tsx` | Full-screen overlay for one non-PDF resource |
+| `useSplitCommandStore.ts` | zustand bridge (in `src/stores/`): queues `manage_split_screen` commands for `App` to apply |
 
 **One header per pane, and one controls registry.** `usePdfControls()` is a
 hook, so it owns state and must be called **exactly once, at the top of
@@ -919,29 +1194,89 @@ full screen — on one 44px row at any width.
 maximized pane are React state only — `splitModel.ts` references no storage or
 Dexie at all — so a refresh always returns to a single full-width dashboard.
 
+> **Active-pane focus.** `SplitState.activePane` (null until touched) records
+> which pane the user is working in. The glow is a **child overlay** with
+> **inset** shadows, not a ring on the pane box: a ring or outer `box-shadow`
+> paints outside the element's border box, and the split pane wrapper is
+> `overflow-hidden` — so it was drawn and then clipped away, which is why the
+> glow was invisible. The overlay is `absolute inset-0`, rendered after the
+> content (so the pane's own background cannot cover it) and
+> `pointer-events-none`, with `inset 0 0 0 2px` plus a soft inner bloom in the
+> full-strength `--accent-primary` (`--accent-subtle` is 0.15 alpha and far too
+> faint). Claiming a pane uses `onPointerDownCapture` / `onFocusCapture` so a
+> child that stops propagation cannot swallow it — though an `<iframe>` still
+> cannot be crossed, so the Drive preview must be claimed from the chrome around
+> it. `setActivePane` is no-op-safe, so focus chatter causes no re-render churn.
+> The glow also shows in single-pane mode, where it marks "focus is here" rather
+> than distinguishing two panes.
+
+**AI-driven split commands.** The assistant's `manage_split_screen` tool
+(`action` open/close/swap, optional `pane` left/right, `viewType` one of
+pdf/notes/dashboard/assistant, optional `resourceId`) never touches layout
+itself: `manageSplitScreen()` in `tools.ts` validates the args (a real resource
+only — never a guessed id; a PDF needs a resource that actually has a stored
+blob; notes need a topic) and then only **queues** a command in
+`useSplitCommandStore`. A tool cannot reach React state, and moving the split
+into a store would have broken the "React state only, never persisted" rule
+above, so `App` subscribes to the queue and applies each command through the
+same `splitModel` functions the UI uses — AI-driven and user-driven splits are
+literally the same reducer. `settle(id)` clears by id, so a command queued while
+the previous one is being applied is never swallowed, and `App` also publishes a
+`SplitSnapshot` so a future tool can report what is on screen rather than what
+it merely asked for.
+
+The tool is **not** confirmation-gated: it is layout, not data, and is undone by
+picking something else. While it runs, `useAssistantStore.activeTool` shows a
+transient ⚡ pill in place of "Working…" — the label comes from
+`describeToolCall()`, which delegates to `describeSplitCommand()` for split calls
+("Opening the PDF in the left pane…"), and it is cleared in a `finally` so a
+throwing tool can never leave it stuck.
+
 Side by side on desktop, **stacked under 768px** (`matchMedia`), with a
 `role="separator"` divider that is draggable by pointer and arrow-key operable.
 The ratio is clamped to 0.2–0.8. Each pane header carries a content picker
-(Dashboard / PDF / Notes / Assistant) plus a sub-picker for the PDF or topic,
-and the swap, close, maximize and open-split controls. Close collapses to a
-single full-width pane holding the other pane's content.
+(Dashboard / PDF / Notes / Assistant) plus **one** document dropdown — a single
+control on every pane kind, with `<optgroup>`s for PDFs and for Notes, rather
+than two sub-pickers that only appeared for those two kinds — plus the swap,
+close, maximize and open-split controls. Close collapses to a single full-width
+pane holding the other pane's content.
 
 A PDF's half-screen mode is just a starting state: `splitWithNotes(resourceId,
 topicId)` opens the split with that PDF in one pane and **its own topic notes**
 in the other, both still changeable through their own pickers. Reached from the
 Library resource row's "Split with notes".
 
-**Page scrolling.** The page surface is a real scroll container holding a spacer
-as tall as every page, with the current page's canvas offset to its own band, so
-the **mouse wheel and touch drags (with momentum) scroll continuously** between
-pages like a normal PDF viewer. Scrolling derives the page in view and feeds it
-into the same `goToPage()` path, so the render-cancellation fix, zoom and
-rotation all still apply, and the page indicator always shows the page in view.
-A `scrollDrivenRef` distinguishes a scroll-originated page change (left alone,
-so the view does not snap back) from a nav-button or page-input change (which
-snaps to the page top). The band height is recomputed on zoom, rotation and
-document change. `overscroll-contain` keeps a flick from scrolling the app
-behind. Next/previous, the page-number input and the arrow keys all remain.
+> **Page scrolling.** The page surface is a real scroll container holding a spacer
+> as tall as every page, with the current page's canvas offset to its own band, so
+> the **mouse wheel and touch drags (with momentum) scroll continuously** between
+> pages like a normal PDF viewer. Scrolling derives the page in view and feeds it
+> into the same `goToPage()` path, so the render-cancellation fix, zoom and
+> rotation all still apply, and the page indicator always shows the page in view.
+> A `scrollDrivenRef` distinguishes a scroll-originated page change (left alone,
+> so the view does not snap back) from a nav-button or page-input change (which
+> snaps to the page top). The band height is recomputed on zoom, rotation and
+> document change. `overscroll-contain` keeps a flick from scrolling the app
+> behind. Next/previous, the page-number input and the arrow keys all remain.
+>
+> **A page is never stretched.** The canvas box is derived from ONE measurement:
+> the layout stores `pageSizes: { w, h }` per page — never a lone height — and
+> the JSX applies `width` and `height` together. Three separate defects used to
+> combine into visible distortion:
+> 1. The canvas took its height from the layout but its width from an imperative
+>    write, so a page whose height was still the A4 *estimate* while its width
+>    was already real rendered at a different scale. Two sources, two answers.
+> 2. `canvas.style.maxWidth = '100%'` squeezed the width while the height stayed
+>    fixed — a guaranteed non-uniform scale — and silently shrank a zoomed page
+>    back to fit so the overflow could never be scrolled to.
+> 3. `overflow-x-hidden` on the scroll surface then clipped whatever overflowed,
+>    hiding the outer columns entirely.
+>
+> Now the width and height are committed together, `max-width` is gone, the
+> surface is `overflow-x-auto`, and the spacer carries
+> `minWidth: contentWidth` so a page zoomed past Fit is fully reachable with
+> native scrollbars. The backing store (`canvas.width`/`height`, from
+> `viewport.width`/`height` at `scale: cssScale * dpr`) is still recomputed on
+> every render, so text stays crisp rather than upscaled.
 
 **Three deliberately separate zoom levels.** Pane maximize hides the other pane
 with `display:none` but keeps it **mounted**, so it retains its page/zoom/
@@ -1011,6 +1346,7 @@ shared `MarkdownNotes` and writes through the same `updateTopicNotes()`.
 │   │   │       ├── ResourceModal.tsx  # link OR file upload (Blob)
 │   │   │       ├── ResourceViewer.tsx # Preview modal: image/pdf/drive/opaque dispatch
 │   │   │       ├── PdfViewer.tsx     # shared pdf.js page renderer (code-split)
+│   │   │       ├── ImageViewer.tsx   # shared image zoom/fit/rotate (modal AND pane)
 │   │   │       ├── previewKind.ts     # pure preview-type + Drive URL detection
 │   │   │       ├── TopicModal.tsx
 │   │   │       ├── AssessmentModal.tsx
@@ -1036,7 +1372,7 @@ shared `MarkdownNotes` and writes through the same `updateTopicNotes()`.
 │   │   │   └── components/
 │   │   │       └── SessionLog.tsx  # collapsed Dexie session history
 │   │   ├── split/                # two-pane split view + full-screen preview
-│   │   │   ├── splitModel.ts     # pure pane reducer (swap/close/maximize/ratio)
+│   │   │   ├── splitModel.ts     # pure pane reducer (swap/close/maximize/ratio/active pane)
 │   │   │   ├── SplitView.tsx     # container, draggable divider, shared PDF-controls registry
 │   │   │   ├── PaneHeader.tsx    # universal pane header + wrapper (every pane kind)
 │   │   │   ├── PaneContent.tsx   # dispatches a pane to its renderer
@@ -1051,9 +1387,11 @@ shared `MarkdownNotes` and writes through the same `updateTopicNotes()`.
 │   │   │   ├── tools.ts         # original tools + merged spec list/dispatch
 │   │   │   ├── toolsExtended.ts # library/calendar/status functions
 │   │   │   ├── types.ts         # ToolSpec / ChatMessage
+│   │   │   ├── thinking.ts      # extractThinking(): tagged/native reasoning split
 │   │   │   └── components/
 │   │   │       ├── AssistantLauncher.tsx   # floating bottom-right button
 │   │   │       ├── AssistantChat.tsx       # transcript + composer (shared)
+│   │   │       ├── ThoughtBlock.tsx        # collapsible "Thought process" panel
 │   │   │       ├── AssistantSessionList.tsx# new/rename/delete sessions
 │   │   │       ├── AssistantPanel.tsx      # floating bubble wrapper
 │   │   │       └── AssistantPage.tsx       # full page at /assistant
@@ -1075,6 +1413,7 @@ shared `MarkdownNotes` and writes through the same `updateTopicNotes()`.
 │   │   ├── useStatusThemeStore.ts   # per-device status/override/scheme + mapping (Zustand)
 │   │   ├── usePomodoroStore.ts      # active timer state (Zustand)
 │   │   ├── useAssistantStore.ts     # chat transcript, tool loop, confirmation
+│   │   ├── useSplitCommandStore.ts  # AI split commands + transient action pill
 │   │   └── useToastStore.ts         # transient action-confirmation toasts
 │   ├── styles/
 │   │   ├── index.css             # Tailwind layers + base styles

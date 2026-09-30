@@ -1,6 +1,7 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { Download, ExternalLink, FileText, HardDriveDownload, Loader2, TriangleAlert } from 'lucide-react';
 import { Modal } from '../../../components/ui/Modal';
+import { ImageViewer } from './ImageViewer';
 import type { Resource } from '../../../types';
 import { fileTypeLabel, googleDriveEmbedUrl, previewKindFor } from '../previewKind';
 
@@ -50,6 +51,11 @@ interface ResourceViewerProps {
    */
   /** Publishes the viewer's controls up to the universal pane header. */
   onRegisterPdfControls?: (node: React.ReactNode) => void;
+  /**
+   * Same contract for an image pane. Separate from the PDF one so a pane can
+   * never be handed controls belonging to a view it is not showing.
+   */
+  onRegisterImageControls?: (node: React.ReactNode) => void;
 }
 
 /**
@@ -67,7 +73,7 @@ interface ResourceViewerProps {
  * regardless of whether the inline preview works.
  */
 export const ResourceViewer: React.FC<ResourceViewerProps> = ({
-  resource, onClose, embedded = false, onRegisterPdfControls,
+  resource, onClose, embedded = false, onRegisterPdfControls, onRegisterImageControls,
 }) => {
   const kind = previewKindFor(resource);
   const [imgUrl, setImgUrl] = useState<string | null>(null);
@@ -107,14 +113,19 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
   const driveEmbed = kind === 'drive' ? googleDriveEmbedUrl(resource.urlOrPath ?? '') : null;
 
   const body = (
-      <div className="space-y-4 flex-1 min-h-0 flex flex-col overflow-hidden">
+      <div className="space-y-4 flex-1 min-h-0 min-w-0 w-full flex flex-col overflow-hidden">
         {kind === 'image' && resource.blob && !imgFailed && (
           imgUrl ? (
-            <img
+            /* The SHARED ImageViewer — the same component in the Library modal
+               and in a split pane, so zoom/rotate/fit/download are identical.
+               It publishes its control row up to the pane header when there is
+               one, and draws its own bar in the modal. */
+            <ImageViewer
               src={imgUrl}
               alt={resource.title}
+              onDownload={download}
+              onRegisterControls={embedded ? onRegisterImageControls : undefined}
               onError={() => setImgFailed(true)}
-              className={embedded ? "h-full min-h-0 w-full object-contain rounded-xl border border-border bg-bg-elevated/40" : "max-h-[55vh] w-full object-contain rounded-xl border border-border bg-bg-elevated/40"}
             />
           ) : (
             <div className="py-10 text-center text-xs text-content-tertiary">Preparing image…</div>
@@ -125,17 +136,12 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
           <Notice title="Could not display this image." body="The stored file may be corrupt. You can still download it below." />
         )}
 
-        {/* An image has no PDF toolbar to host its actions, so they live in the
-            branch itself rather than in a separate bottom bar. */}
-        {kind === 'image' && resource.blob && (
+        {/* The image's own zoom/rotate/download controls now live in the shared
+            ImageViewer, so only the "open the original" action is left here. */}
+        {kind === 'image' && resource.blob && resource.urlOrPath && (
           <div className="flex flex-wrap items-center justify-end gap-2">
-            {resource.urlOrPath && (
-              <button onClick={openLink} className={`${btn} border border-border text-content-secondary hover:text-content-primary hover:bg-bg-elevated`}>
-                <ExternalLink className="w-4 h-4" /> Open original
-              </button>
-            )}
-            <button onClick={download} className={`${btn} border border-border text-content-secondary hover:text-content-primary hover:bg-bg-elevated`}>
-              <Download className="w-4 h-4" /> Download
+            <button onClick={openLink} className={`${btn} border border-border text-content-secondary hover:text-content-primary hover:bg-bg-elevated`}>
+              <ExternalLink className="w-4 h-4" /> Open original
             </button>
           </div>
         )}
@@ -225,8 +231,8 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
   // what lets a PDF fill a split pane and scroll internally.
   if (embedded) {
     return (
-      <div className="flex flex-col h-full min-h-0 overflow-hidden rounded-xl border border-border bg-bg-surface p-2">
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">{body}</div>
+      <div className="flex flex-col h-full min-h-0 min-w-0 w-full overflow-hidden rounded-xl border border-border bg-bg-surface p-2">
+        <div className="flex-1 min-h-0 min-w-0 w-full flex flex-col overflow-hidden">{body}</div>
       </div>
     );
   }

@@ -6,11 +6,18 @@ import { buildShiftContext, dayEndTime, resolveDay, toDateKey } from '../shifts/
 import { saveWeeklySchedule } from '../shifts/shiftsRepo';
 import { usePomodoroStore } from '../../stores/usePomodoroStore';
 import {
+  SPLIT_VIEW_LABELS,
+  describeSplitCommand,
+  requestSplitCommand,
+  type SplitCommand,
+} from '../../stores/useSplitCommandStore';
+import {
   DAY_NAMES,
   ToolError,
   normalizeHours,
   normalizeOffDays,
   normalizeTime,
+  requireOneOf,
   type ToolExecution,
 } from './toolRuntime';
 import {
@@ -89,7 +96,9 @@ export const TOOL_SPECS: ToolSpec[] = [
     function: {
       name: 'searchLibrary',
       description:
-        'Search the Study Library by keyword across subject names, topic titles, topic notes, resource titles and assessment names. Use this before answering questions about the user\'s study material.',
+        'Search the Study Library by keyword across subject names, topic titles, topic notes, resource titles and assessment names. Use this before answering questions about the user\'s study material. ' +
+        'The result includes a "resources" array of { id, title, type, subject, topic } and a "topics" array of { id, title, subject }. ' +
+        'Any other tool that asks for a resource_id needs the "id" field from these results — never the file name or the title.',
       parameters: {
         type: 'object',
         properties: { query: { type: 'string', description: 'Keyword or phrase to search for.' } },
@@ -133,6 +142,40 @@ export const TOOL_SPECS: ToolSpec[] = [
           label: { type: 'string', description: 'Optional label describing what is being focused on.' },
         },
         required: ['durationMinutes'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'manage_split_screen',
+      description:
+        'Control the two-pane split view for side-by-side work: show a PDF, its notes, the dashboard or the assistant in a pane, close the split, or swap the panes. Use searchLibrary first and pass resource_id as the "id" field from its "resources" results — never the file name or the title.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['open', 'close', 'swap'],
+            description: 'open shows a view in a pane, close returns to a single pane, swap exchanges the two panes.',
+          },
+          pane: {
+            type: 'string',
+            enum: ['left', 'right'],
+            description: 'Which pane to act on. Optional for close and swap.',
+          },
+          viewType: {
+            type: 'string',
+            enum: ['pdf', 'notes', 'dashboard', 'assistant'],
+            description: 'What to show in the pane. Required for action "open".',
+          },
+          resourceId: {
+            type: 'string',
+            description: 'The study resource (PDF) to preview. Required when viewType is "pdf".',
+          },
+        },
+        required: ['action'],
         additionalProperties: false,
       },
     },
@@ -271,8 +314,8 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
   interface Bucket {
     subject: string;
     matchedSubject: boolean;
-    topics: { title: string; status: Topic['status']; excerpt: string }[];
-    resources: { title: string; kind: Resource['kind']; dueDate: string | null }[];
+    topics: { id: string; title: string; status: Topic['status']; excerpt: string }[];
+    resources: { id: string; title: string; kind: Resource['kind']; dueDate: string | null }[];
     assessments: { name: string; type: Assessment['type']; date: string }[];
   }
 
@@ -298,16 +341,29 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
     }
   }
   for (const t of topics) {
-    if (t.title.toLowerCase().includes(q) || t.notes.toLowerCase().includes(q)) {
+    if (t.title.toLowerCase().includes(q) || (t.notes ?? '').toLowerCase().includes(q)) {
       const subject = subjects.find((s) => s.id === t.subjectId);
-      if (subject) bucketFor(subject).topics.push({ title: t.title, status: t.status, excerpt: excerpt(t.notes, q) });
+      // The id travels with the topic: without it the model can name a topic
+      // but can never pass one to a tool.
+      if (subject) bucketFor(subject).topics.push({ id: t.id, title: t.title, status: t.status, excerpt: excerpt(t.notes, q) });
     }
   }
+  // Defensive: a row restored from an older backup can be missing `tags` or
+  // `fileName`. Throwing here would take down the whole search — and a tool
+  // that throws without a response is exactly how a chat stops talking.
+  const matchesResource = (r: Resource) => {
+    const tags = Array.isArray(r.tags) ? r.tags : [];
+    return (
+      r.title.toLowerCase().includes(q) ||
+      (r.fileName ?? '').toLowerCase().includes(q) ||
+      tags.some((tag) => String(tag).toLowerCase().includes(q))
+    );
+  };
+
   for (const r of resources) {
-    const hit = r.title.toLowerCase().includes(q) || (r.fileName ?? '').toLowerCase().includes(q) || r.tags.some((tag) => tag.toLowerCase().includes(q));
-    if (hit) {
+    if (matchesResource(r)) {
       const subject = subjects.find((s) => s.id === r.subjectId);
-      if (subject) bucketFor(subject).resources.push({ title: r.title, kind: r.kind, dueDate: r.dueDate ?? null });
+      if (subject) bucketFor(subject).resources.push({ id: r.id, title: r.title, kind: r.kind, dueDate: r.dueDate ?? null });
     }
   }
   for (const a of assessments) {
@@ -326,13 +382,44 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
     }))
     .slice(0, 6);
 
+  // A FLAT, id-carrying list of every matching resource. The bucketed view above
+  // is grouped by subject and is fine for a human, but the model must be able to
+  // take an `id` straight from it and hand it to another tool. This is what
+  // stops it inventing one: without a real id to copy it has nothing but the
+  // file name, and passes that as an id, which then fails to resolve.
+  const resourceList = resources
+    .filter(matchesResource)
+    .slice(0, 25)
+    .map((r) => {
+      const subject = subjects.find((s) => s.id === r.subjectId);
+      const topic = topics.find((t) => t.id === r.topicId);
+      return {
+        id: r.id,
+        title: r.title,
+        type: r.kind,
+        subject: subject?.name ?? null,
+        topic: topic?.title ?? null,
+      };
+    });
+
+  const topicList = topics
+    .filter((t) => t.title.toLowerCase().includes(q) || (t.notes ?? '').toLowerCase().includes(q))
+    .slice(0, 25)
+    .map((t) => ({
+      id: t.id,
+      title: t.title,
+      subject: subjects.find((s) => s.id === t.subjectId)?.name ?? null,
+    }));
+
   return {
     ok: true,
     summary:
       results.length === 0
         ? `No library matches for “${query}”.`
-        : `Found matches in ${results.length} subject(s) for “${query}”.`,
-    data: { query, results },
+        : `Found ${resourceList.length} resource(s) and ${topicList.length} topic(s) for “${query}”. Pass an id from "resources" (or "topics") to any tool that asks for one.`,
+    // `resources` / `topics` are the actionable, id-carrying lists the model
+    // should read first; `results` keeps the grouped, excerpt-rich view.
+    data: { query, resources: resourceList, topics: topicList, results },
   };
 }
 
@@ -404,7 +491,121 @@ async function stopPomodoroSession(): Promise<ToolExecution> {
 
 
 
-/* ---------------- Dispatcher ---------------- */
+/* ---------------- Split-screen multitasking ---------------- */
+
+/**
+ * Drive the two-pane split view — open a pane on a chosen view, close it, or
+ * swap the panes.
+ *
+ * The actual layout lives in `App` as React state, so this QUEUES a command and
+ * `App` applies it with the very same `splitModel` functions the UI uses
+ * (`addSecondPane` / `setPane` / `swapPanes`). The tool never mutates layout
+ * itself, which is what keeps AI-driven and user-driven splits identical.
+ */
+async function manageSplitScreen(args: Record<string, unknown>): Promise<ToolExecution> {
+  const action = requireOneOf(args.action, ['open', 'close', 'swap'] as const, 'action');
+  const paneRaw = String(args.pane ?? '').trim();
+  // `pane` is optional for close/swap: a closed split has no sides, and a swap
+  // is symmetric. Validate it when it IS supplied so a typo cannot silently
+  // mean "left".
+  const pane = paneRaw === '' ? undefined : requireOneOf(paneRaw, ['left', 'right'] as const, 'pane');
+  const viewRaw = String(args.viewType ?? '').trim();
+  const viewType = viewRaw === ''
+    ? undefined
+    : requireOneOf(viewRaw, ['pdf', 'notes', 'dashboard', 'assistant'] as const, 'viewType');
+  const resourceId = String(args.resourceId ?? '').trim() || undefined;
+
+  if (action === 'open' && !viewType && !resourceId) {
+    throw new ToolError('Opening a pane needs a "viewType" (and a "resourceId" for a PDF).');
+  }
+
+  // Resolve a real resource. An id always wins; only then is a title/name
+  // attempted. The model used to have no id to copy and would pass the FILE
+  // NAME as one, which failed outright. Forgiving that here is far better than
+  // another round-trip the model cannot recover from.
+  let resource: Resource | undefined;
+  let ambiguous: Resource[] = [];
+  if (resourceId) {
+    resource = await db.resources.get(resourceId);
+    if (!resource) {
+      const needle = resourceId.trim().toLowerCase();
+      const all = await db.resources.toArray();
+      // Exact (case-insensitive) title/fileName matches first, then contains.
+      const exact = all.filter(
+        (r) => r.title.toLowerCase() === needle || (r.fileName ?? '').toLowerCase() === needle
+      );
+      const pool = exact.length > 0 ? exact : all.filter(
+        (r) => r.title.toLowerCase().includes(needle) || (r.fileName ?? '').toLowerCase() === needle
+      );
+      if (pool.length === 1) {
+        resource = pool[0];
+      } else if (pool.length > 1) {
+        ambiguous = pool.slice(0, 10);
+      }
+    }
+  }
+
+  // Several plausible matches is not an error to throw away — return the
+  // candidates WITH their ids so the model can pick one and call again.
+  if (ambiguous.length > 0) {
+    return {
+      ok: false,
+      summary: `“${resourceId}” matches ${ambiguous.length} resources. Call again with one of these ids.`,
+      data: {
+        error: 'ambiguous_resource',
+        query: resourceId,
+        candidates: ambiguous.map((r) => ({
+          id: r.id,
+          title: r.title,
+          type: r.kind,
+        })),
+      },
+    };
+  }
+
+  if (resourceId && !resource) {
+    throw new ToolError(
+      `No resource has id “${resourceId}”, and nothing is titled like it. Call searchLibrary and use the "id" field from its "resources" results — never the file name.`
+    );
+  }
+
+  // A PDF pane is meaningless without a document, and notes need a topic.
+  let topicId: string | undefined;
+  if (viewType === 'pdf') {
+    if (!resource) throw new ToolError('A PDF pane needs a "resourceId" — search the library first.');
+    if (!resource.blob) {
+      throw new ToolError(`“${resource.title}” has no stored file on this device, so it cannot be previewed.`);
+    }
+  }
+  if (viewType === 'notes') {
+    topicId = resource?.topicId ?? undefined;
+    if (!topicId) {
+      throw new ToolError('A notes pane needs a topic. Open a resource that belongs to a topic, or name the topic.');
+    }
+  }
+
+  const cmd: Omit<SplitCommand, 'id'> = { action, pane, viewType, resourceId: resource?.id, topicId };
+  const id = requestSplitCommand(cmd);
+  const label = describeSplitCommand(cmd);
+  const side = pane === 'right' ? 'right' : 'left';
+
+  const summary =
+    action === 'close'
+      ? 'Closing the split view and returning to a single pane.'
+      : action === 'swap'
+        ? 'Swapping the two panes.'
+        : viewType === 'pdf'
+          ? `Opening “${resource?.title}” in the ${side} pane.`
+          : `Opening ${SPLIT_VIEW_LABELS[viewType ?? 'dashboard']} in the ${side} pane.`;
+
+  return {
+    ok: true,
+    summary,
+    data: { requested: cmd, commandId: id, pane: side, action },
+    toast: { kind: 'info', title: label.replace(/…$/, ''), description: summary },
+  };
+}
+
 
 /** Human-readable one-liner for the confirmation step / transcript. */
 export function describeToolCall(name: string, argsJson: string): string {
@@ -432,6 +633,12 @@ export function describeToolCall(name: string, argsJson: string): string {
       return `Start a ${String(args.durationMinutes ?? '?')}-minute focus timer.`;
     case 'stopPomodoroSession':
       return 'Stop the running focus timer.';
+    case 'manage_split_screen':
+      return describeSplitCommand({
+        action: (String(args.action ?? 'open') as SplitCommand['action']),
+        pane: args.pane as SplitCommand['pane'],
+        viewType: args.viewType as SplitCommand['viewType'],
+      });
     default:
       return describeExtendedToolCall(name, args);
   }
@@ -465,6 +672,8 @@ export async function executeTool(name: string, argsJson: string): Promise<ToolE
       return startPomodoroSession(args);
     case 'stopPomodoroSession':
       return stopPomodoroSession();
+    case 'manage_split_screen':
+      return manageSplitScreen(args);
     default: {
       // Library / calendar / status functions live in toolsExtended.ts.
       const extended = await executeExtendedTool(name, args);

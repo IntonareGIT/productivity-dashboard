@@ -45,7 +45,7 @@ function systemPrompt(now: Date): string {
     'READ FUNCTIONS:',
     "- getTodaysSchedule(): today's shift, events and focus progress.",
     '- getUpcomingDeadlines(days): study deadlines and assessments due soon.',
-    '- searchLibrary(query): find subjects, topics and study resources.',
+    '- searchLibrary(query): find subjects, topics and study resources. Returns resources as { id, title, type, subject, topic } — any other tool needing a resource_id must use the "id" field from that list, never the file name.',
     '- getWeekSchedule(weekStartDate): resolve one week to per-day work/off/PTO, including one-off exceptions.',
     '- getFocusStats(range): total focus time for "today", "week" or "month", per subject.',
     '- getSubjectProgress(subjectId): topic counts by status plus the next upcoming assessment.',
@@ -62,6 +62,7 @@ function systemPrompt(now: Date): string {
     '- addAssessment(subjectId, type, date, weight).',
     '- startPomodoroSession(durationMinutes, label?): start a focus timer (1-180 min).',
     '- stopPomodoroSession(): stop the running focus timer.',
+    '- manage_split_screen(action, pane?, viewType?, resourceId?): control the two-pane split view — action is open/close/swap, pane is left/right, viewType is pdf/notes/dashboard/assistant. Use it to put a PDF beside its notes when the user asks to study a document, or to clear the split when they are done. A PDF pane needs a resourceId, which must be the "id" field from searchLibrary results — never the file name.',
     '',
     'WRITE FUNCTIONS NEEDING USER CONFIRMATION (the UI always asks before these run — just call them when asked):',
     '- addOrUpdateWeeklySchedule(weekStartDate, offDays, shiftStartTime, shiftLengthHours).',
@@ -74,6 +75,52 @@ function systemPrompt(now: Date): string {
 }
 
 export type AssistantViewMsg = AssistantViewMessage;
+
+/** Set a transient action pill, run one tool, and always return a tool turn. */
+type SetState = (partial: Partial<AssistantState>) => void;
+
+/**
+ * Execute one tool call and ALWAYS return the `role: 'tool'` turn answering it.
+ *
+ * Never throws and never returns null: a tool that fails still has to produce a
+ * tool message, because an assistant `tool_calls` turn with no following tool
+ * result is rejected by Gemini with HTTP 400. The error text is what the model
+ * then sees, so it reports the failure honestly instead of stalling.
+ */
+async function runTool(
+  call: { id: string; name: string; arguments: string },
+  set: SetState,
+): Promise<ChatMessage> {
+  // The action pill: visible only while the tool actually runs, so the user sees
+  // WHAT is happening ("⚡ Opening the PDF in the left pane…") instead of an
+  // opaque "Working…".
+  set({ activeTool: { name: call.name, label: describeToolCall(call.name, call.arguments) } });
+  try {
+    const exec = await executeTool(call.name, call.arguments);
+    if (exec.toast) toast(exec.toast.kind, exec.toast.title, exec.toast.description);
+    else toast('info', `${call.name} ran`, exec.summary);
+    return {
+      role: 'tool',
+      content: JSON.stringify({ ok: true, result: exec.data }),
+      toolCallId: call.id,
+      name: call.name,
+      display: exec.summary,
+    };
+  } catch (err) {
+    const message = err instanceof ToolError ? err.message : 'Tool execution failed.';
+    return {
+      role: 'tool',
+      content: JSON.stringify({ ok: false, error: message }),
+      toolCallId: call.id,
+      name: call.name,
+      display: message,
+      error: true,
+    };
+  } finally {
+    // The pill is transient: it must disappear whether the tool succeeded or threw.
+    set({ activeTool: null });
+  }
+}
 
 interface PendingCall {
   name: string;
@@ -90,6 +137,12 @@ interface PendingCall {
 interface AssistantState {
   open: boolean;
   busy: boolean;
+  /**
+   * The tool currently executing, for the transient "action pill" in the chat.
+   * Null when nothing is running. Cleared in a `finally`, so the pill can never
+   * get stuck on screen if a tool throws.
+   */
+  activeTool: { name: string; label: string } | null;
   providerLabel: string | null;
   providerReady: boolean;
   providerError: string | null;
@@ -180,6 +233,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     sessionId: null,
     view: WELCOME,
     pending: null,
+    activeTool: null,
 
     setOpen: (open) => {
       set({ open });
@@ -265,12 +319,36 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         // provider (Gemini extra_content) is ever replayed to the new one.
         const sessionId = await ensureSession(provider);
         await autoTitle(sessionId, prompt);
+
+        // Typing a new message while a confirmation is still open would store
+        // a user turn directly after that unanswered assistant tool_calls turn.
+        // Gemini rejects the resulting sequence with HTTP 400, so the pending
+        // call is resolved as declined first — the write never happened, so this
+        // is also the honest record of what occurred.
+        const stale = get().pending;
+        if (stale) {
+          set({ pending: null });
+          await persist(sessionId, {
+            role: 'tool',
+            content: JSON.stringify({ ok: false, error: 'The user moved on without confirming this action.' }),
+            toolCallId: stale.callId,
+            name: stale.name,
+            display: 'Not confirmed — nothing was changed.',
+          });
+        }
+
         await persist(sessionId, { role: 'user', content: prompt });
 
         // Only the most recent messages are replayed, tool sequences intact.
         let transcript: ChatMessage[] = [
           ...buildTranscript(await listMessages(sessionId), CONTEXT_WINDOW),
         ];
+
+        // Whether the model ever produced a plain-language answer. The round
+        // budget can run out mid-chain; without this flag the loop just falls
+        // through with the transcript ending on a TOOL turn, and the user is
+        // left staring at an action chip with no reply at all.
+        let answered = false;
 
         for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
           const result = await chatCompletion({
@@ -280,9 +358,15 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
           });
 
           if (result.toolCalls.length === 0) {
-            const reply = result.content.trim() || 'Done.';
-            transcript = [...transcript, { role: 'assistant', content: reply }];
-            await persist(sessionId, { role: 'assistant', content: reply });
+            const raw = result.content.trim() || 'Done.';
+            // The wire/history keeps what the provider actually said (tags and
+            // all); the transcript split into answer + reasoning is produced by
+            // `persist` -> `toViewMessages`, which applies `extractThinking` to
+            // the stored content. Doing it there means live and reloaded
+            // messages render identically, with no second projection path.
+            transcript = [...transcript, { role: 'assistant', content: raw }];
+            await persist(sessionId, { role: 'assistant', content: raw, reasoning: result.reasoning });
+            answered = true;
             break;
           }
 
@@ -312,37 +396,44 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
               },
             });
             pushView({ role: 'tool', toolName: first.name, text: describeToolCall(first.name, first.arguments) });
+            // The UNGATED calls in the same turn still have to be answered. A
+            // tool_calls turn followed immediately by a plain user message is
+            // rejected by Gemini with HTTP 400, so they are executed now and the
+            // loop then pauses for the gated one.
+            const ungated = result.toolCalls.filter((c) => !CONFIRMATION_TOOL_NAMES.has(c.name));
+            for (const call of ungated) {
+              const toolMsg = await runTool(call, set);
+              transcript = [...transcript, toolMsg];
+              await persist(sessionId, toolMsg);
+            }
             break;
           }
 
           for (const call of result.toolCalls) {
-            let toolMsg: ChatMessage;
-            try {
-              const exec = await executeTool(call.name, call.arguments);
-              toolMsg = {
-                role: 'tool',
-                content: JSON.stringify({ ok: true, result: exec.data }),
-                toolCallId: call.id,
-                name: call.name,
-                display: exec.summary,
-              };
-              if (exec.toast) toast(exec.toast.kind, exec.toast.title, exec.toast.description);
-              else toast('info', `${call.name} ran`, exec.summary);
-            } catch (err) {
-              const message = err instanceof ToolError ? err.message : 'Tool execution failed.';
-              toolMsg = {
-                role: 'tool',
-                content: JSON.stringify({ ok: false, error: message }),
-                toolCallId: call.id,
-                name: call.name,
-                display: message,
-                error: true,
-              };
-            }
+            const toolMsg = await runTool(call, set);
             transcript = [...transcript, toolMsg];
             await persist(sessionId, toolMsg);
           }
         }
+
+        // The round budget ran out while the model was still calling tools. Give
+        // it one last turn with NO tools available, so it must produce prose
+        // rather than another call. Without this the loop just falls through
+        // with the transcript ending on a TOOL turn and nothing said — the chat
+        // appears to stop dead. The transcript already satisfies the strict order
+        // (user -> model call -> tool response -> ...), so appending the missing
+        // final answer here cannot introduce an HTTP 400.
+        if (!answered) {
+          const closing = await chatCompletion({
+            provider,
+            messages: [{ role: 'system', content: systemPrompt(new Date()) }, ...transcript],
+          });
+          const raw = closing.content.trim() ||
+            'I reached the limit on how many actions I can take in one go. Here is where things stand — tell me what to do next.';
+          transcript = [...transcript, { role: 'assistant', content: raw }];
+          await persist(sessionId, { role: 'assistant', content: raw, reasoning: closing.reasoning });
+        }
+
         set({ sessions: await listSessions() });
       } catch (err) {
         pushView({
@@ -351,7 +442,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
           error: true,
         });
       } finally {
-        set({ busy: false });
+        set({ busy: false, activeTool: null });
       }
     },
 
@@ -397,8 +488,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
           ],
         });
         const reply = followUp.content.trim() || exec.summary;
-        const replyMsg: ChatMessage = { role: 'assistant', content: reply };
+        const replyMsg: ChatMessage = { role: 'assistant', content: reply, reasoning: followUp.reasoning };
         await persist(sessionId, toolMsg);
+        // `persist` re-projects the transcript through `toViewMessages`, which
+        // splits any reasoning out, so the reply needs no separate view push.
         await persist(sessionId, replyMsg);
         set({ sessions: await listSessions() });
       } catch (err) {

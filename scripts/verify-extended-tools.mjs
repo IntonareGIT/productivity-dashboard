@@ -107,13 +107,14 @@ const check = (name, cond, extra = '') => {
 const call = (name, args = {}) => t.executeTool(name, JSON.stringify(args));
 const specNames = t.TOOL_SPECS.map((s) => s.function.name);
 
-// ---- 1. All 17 new functions are advertised ---------------------------
+// ---- 1. All 18 new functions are advertised ---------------------------
 const NEW = [
   'listSubjects', 'listTopics', 'getWeekSchedule',
   'getFocusStats', 'getSubjectProgress', 'getCurrentStatus',
   'setStatus', 'addCalendarEvent', 'addResourceLink', 'createSubject',
   'createTopic', 'markTopicStatus', 'addTopicNote', 'addAssessment',
   'addPTO', 'addOneOffShiftException', 'deleteCalendarEvent',
+  'manage_split_screen',
 ];
 for (const n of NEW) check(`1 spec present: ${n}`, specNames.includes(n));
 check('1 no duplicate spec names', new Set(specNames).size === specNames.length,
@@ -251,6 +252,47 @@ threw = null;
 try { await call('deleteCalendarEvent', { eventId: 'ghost' }); } catch (e) { threw = e.message; }
 check('10 deleting unknown event rejected', !!threw && /No calendar event/.test(threw), threw);
 
+// ---- 13. manage_split_screen queues commands for App ------------------
+// Seed two PDF resources: one with a blob (previewable), one without.
+S.resources.set('pdf1', { id: 'pdf1', subjectId: 'subA', topicId: 'topB', title: 'Calculus Ch.3', blob: new Blob(['x']) });
+S.resources.set('pdf2', { id: 'pdf2', subjectId: 'subA', topicId: null, title: 'Orphan notes' });
+
+r = await call('manage_split_screen', { action: 'open', pane: 'left', viewType: 'pdf', resourceId: 'pdf1' });
+check('13 open queues a left-pane PDF command', r.data.pane === 'left' && r.data.action === 'open');
+check('13 open names the resource in the summary', /Calculus Ch\.3/.test(r.summary), r.summary);
+
+r = await call('manage_split_screen', { action: 'swap' });
+check('13 swap queues without a pane or view', r.data.action === 'swap');
+
+r = await call('manage_split_screen', { action: 'close' });
+check('13 close queues without a pane or view', r.data.action === 'close' && /single pane/.test(r.summary));
+
+threw = null;
+try { await call('manage_split_screen', { action: 'open', pane: 'left', viewType: 'pdf', resourceId: 'ghost' }); } catch (e) { threw = e.message; }
+check('13 unknown resource rejected, never guessed', !!threw && /No resource has id/.test(threw), threw);
+
+threw = null;
+try { await call('manage_split_screen', { action: 'open', pane: 'left', viewType: 'pdf' }); } catch (e) { threw = e.message; }
+check('13 a PDF pane requires a resource', !!threw && /needs a "resourceId"/.test(threw), threw);
+
+threw = null;
+try { await call('manage_split_screen', { action: 'open', pane: 'right' }); } catch (e) { threw = e.message; }
+check('13 an open needs a view or a resource', !!threw && /needs a "viewType"/.test(threw), threw);
+
+r = await call('manage_split_screen', { action: 'open', pane: 'right', viewType: 'notes', resourceId: 'pdf1' });
+check('13 a notes pane derives the topic from its resource', r.data.action === 'open' && /Notes/.test(r.summary), r.summary);
+
+threw = null;
+try { await call('manage_split_screen', { action: 'open', pane: 'right', viewType: 'notes', resourceId: 'pdf2' }); } catch (e) { threw = e.message; }
+check('13 a notes pane without a topic is rejected', !!threw && /needs a topic/.test(threw), threw);
+
+threw = null;
+try { await call('manage_split_screen', { action: 'teleport' }); } catch (e) { threw = e.message; }
+check('13 a bogus action is rejected', !!threw && /must be one of/.test(threw), threw);
+
+const dSplit = t.describeToolCall('manage_split_screen', JSON.stringify({ action: 'open', pane: 'left', viewType: 'pdf' }));
+check('13 the description names the open', /Opening/.test(dSplit), dSplit);
+
 // ---- 11. Confirmation text states what will change ------------------
 const dPTO = t.describeToolCall('addPTO', JSON.stringify({ date: '2026-11-10' }));
 const dDel = t.describeToolCall('deleteCalendarEvent', JSON.stringify({ eventId: 'e1' }));
@@ -263,6 +305,102 @@ check('11 exception states the change', dExc.includes('10:00') && dExc.includes(
 threw = null;
 try { await call('totallyUnknownFn', {}); } catch (e) { threw = e.message; }
 check('12 unknown function rejected', !!threw && /Unknown function/.test(threw), threw);
+
+// ---- 14. The "ABUK" bug: ids must reach the model ------------------------
+// Reported failure: the model passed the FILE NAME as a resource id, the tool
+// threw "No resource has id 'ABUK'", and the chat then stopped dead. The root
+// cause was that searchLibrary never returned an id at all, so "ABUK" was the
+// only string the model had to hand over.
+{
+  const sub = { id: 's-phys', name: 'Physics', color: '#000', description: '', createdAt: '', updatedAt: '' };
+  const top = { id: 't-mech', subjectId: 's-phys', title: 'Mechanics', status: 'studying', notes: 'notes', createdAt: '', updatedAt: '' };
+  S.subjects.set(sub.id, sub);
+  S.topics.set(top.id, top);
+  const abuk = {
+    id: 'r-abuk-1', subjectId: 's-phys', topicId: 't-mech', kind: 'file',
+    title: 'ABUK', fileName: 'ABUK.pdf', mimeType: 'application/pdf',
+    urlOrPath: null, tags: [], dueDate: null, blob: { size: 10 },
+    fileSize: 10, createdAt: '', updatedAt: '',
+  };
+  const pic = {
+    id: 'r-pic-2', subjectId: 's-phys', topicId: 't-mech', kind: 'file',
+    title: 'pic file', fileName: 'pic file.pdf', mimeType: 'application/pdf',
+    urlOrPath: null, tags: [], dueDate: null, blob: { size: 10 },
+    fileSize: 10, createdAt: '', updatedAt: '',
+  };
+  S.resources.set(abuk.id, abuk);
+  S.resources.set(pic.id, pic);
+
+  // 1. What the MODEL receives, not what the UI shows. This is the payload
+  //    appended to history as the tool response.
+  const found = await call('searchLibrary', { query: 'ABUK' });
+  const modelSees = JSON.parse(found.data === undefined ? '{}' : JSON.stringify(found.summary));
+  check('14 searchLibrary returns a flat id-carrying resource list',
+    Array.isArray(found.data?.resources) && found.data.resources.length === 1,
+    JSON.stringify(found.data?.resources));
+  const first = (found.data?.resources ?? [])[0] ?? {};
+  check('14 the resource entry carries a real id, not the title',
+    first.id === 'r-abuk-1', String(first.id));
+  check('14 the entry carries title/type/subject/topic',
+    first.title === 'ABUK' && first.type === 'file' &&
+    first.subject === 'Physics' && first.topic === 'Mechanics',
+    JSON.stringify(first));
+  check('14 the summary tells the model to use the id field',
+    /"id" field/.test(String(found.summary)) || /id/.test(String(found.summary)),
+    String(found.summary));
+  check('14 the summary is not the old subject-count stub',
+    !/Found matches in \d+ subject/.test(String(found.summary)), String(found.summary));
+
+  // 2. The reported failure, replayed verbatim: the model passes the FILE NAME.
+  const byName = await call('manage_split_screen', {
+    action: 'open', pane: 'left', viewType: 'pdf', resourceId: 'ABUK',
+  });
+  check('14 a file name passed as an id now resolves', byName.ok === true, byName.summary);
+  check('14 it resolves to the real resource id',
+    byName.data?.requested?.resourceId === 'r-abuk-1',
+    JSON.stringify(byName.data?.requested));
+
+  // 3. The second half of the user's sentence.
+  const second = await call('manage_split_screen', {
+    action: 'open', pane: 'right', viewType: 'pdf', resourceId: 'pic file',
+  });
+  check('14 both panes of the reported request resolve',
+    byName.ok === true && second.ok === true, `${byName.summary} / ${second.summary}`);
+
+  // 4. An unknown value still errors, and the message says where ids come from.
+  const bogus = await call('manage_split_screen', {
+    action: 'open', pane: 'left', viewType: 'pdf', resourceId: 'zzz-nothing',
+  }).catch((e) => ({ ok: false, summary: e.message }));
+  check('14 a genuinely unknown id still fails', bogus.ok === false, bogus.summary);
+  check('14 the error points at the id field, not the file name',
+    /"id" field/.test(bogus.summary) && /never the file name/.test(bogus.summary),
+    bogus.summary);
+
+  // 5. An ambiguous name returns CANDIDATES with ids rather than a dead end.
+  const twin = { ...pic, id: 'r-pic-3', title: 'pic file', fileName: 'pic file copy.pdf' };
+  S.resources.set(twin.id, twin);
+  const amb = await call('manage_split_screen', {
+    action: 'open', pane: 'left', viewType: 'pdf', resourceId: 'pic file',
+  });
+  check('14 an ambiguous name returns a candidate list, not a bare error',
+    amb.ok === false && amb.data?.error === 'ambiguous_resource', JSON.stringify(amb.data));
+  check('14 the candidates carry their ids so the model can retry',
+    Array.isArray(amb.data?.candidates) && amb.data.candidates.length === 2 &&
+    amb.data.candidates.every((c) => !!c.id),
+    JSON.stringify(amb.data?.candidates));
+  check('14 the summary asks for an id, not a correction',
+    /one of these ids/i.test(String(amb.summary)), amb.summary);
+  S.resources.delete(twin.id);
+
+  // 6. Descriptions steer the model before it ever guesses.
+  const searchSpec = t.TOOL_SPECS.find((s) => s.function.name === 'searchLibrary');
+  const splitSpec = t.TOOL_SPECS.find((s) => s.function.name === 'manage_split_screen');
+  check('14 searchLibrary documents the id field',
+    /"id" field/.test(searchSpec.function.description) && /never the file name/.test(searchSpec.function.description));
+  check('14 manage_split_screen documents the id field',
+    /"id" field/.test(splitSpec.function.description) && /never the file name/.test(splitSpec.function.description));
+}
+
 
 rmSync(outDir, { recursive: true, force: true });
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);

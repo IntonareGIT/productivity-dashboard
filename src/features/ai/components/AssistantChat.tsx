@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bot, Check, SendHorizonal, TriangleAlert } from 'lucide-react';
+import { Bot, Check, SendHorizonal, TriangleAlert, Zap } from 'lucide-react';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
+import { ThoughtBlock } from './ThoughtBlock';
 
 interface AssistantChatProps {
   onOpenSettings: () => void;
@@ -26,6 +27,7 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
   const busy = useAssistantStore((s) => s.busy);
   const view = useAssistantStore((s) => s.view);
   const pending = useAssistantStore((s) => s.pending);
+  const activeTool = useAssistantStore((s) => s.activeTool);
   const configured = useAssistantStore((s) => s.providerReady);
   const setOpen = useAssistantStore((s) => s.setOpen);
   const send = useAssistantStore((s) => s.send);
@@ -83,11 +85,23 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
                   Action{msg.toolName ? ` · ${msg.toolName}` : ''}
                 </p>
               )}
+              {/* Reasoning, when the model produced any, sits ABOVE the answer
+                  inside its own collapsible block. A standard model sends none,
+                  `thought` is undefined, and this renders nothing at all — so
+                  the message is byte-for-byte the normal one. */}
+              {msg.thought && <ThoughtBlock text={msg.thought} />}
               {msg.text}
             </div>
           </div>
         ))}
-        {busy && (
+        {activeTool ? (
+          <div className="flex justify-start">
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent-subtle px-2.5 py-1 text-[11px] font-semibold text-accent-text">
+              <Zap className="w-3 h-3 animate-pulse" aria-hidden="true" />
+              {activeTool.label}
+            </div>
+          </div>
+        ) : busy && (
           <div className="flex justify-start">
             <div className="rounded-2xl rounded-bl-md bg-bg-elevated/60 border border-border px-3 py-2 text-content-tertiary text-xs">
               Working…

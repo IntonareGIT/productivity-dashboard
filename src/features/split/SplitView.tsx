@@ -5,7 +5,7 @@ import { PaneContent } from './PaneContent';
 import { PaneContainer, ico } from './PaneHeader';
 import { ResourceFullScreen, useResourceFullScreen } from './useResourceFullScreen';
 import {
-  clampRatio, isSplit, swapPanes, toggleMaximize, type PaneSlot, type SplitState,
+  clampRatio, isSplit, setActivePane, swapPanes, toggleMaximize, type PaneSlot, type SplitState,
 } from './splitModel';
 
 
@@ -21,6 +21,14 @@ interface SplitViewProps {
 export const SplitView: React.FC<SplitViewProps> = ({
   state, setState, onNavigate, onOpenAssistantSettings, onCloseSplit,
 }) => {
+  // One stable activator whose identity does not change when a DIFFERENT pane
+  // is focused — the index is captured by the call site, so re-focusing never
+  // recreates the callback. Pairing this with `setActivePane`'s no-op on repeat
+  // focus means pointerdown/focus provide zero re-render churn.
+  const activatePane = useCallback(
+    (index: number) => () => setState((s) => setActivePane(s, index)),
+    [setState],
+  );
   // Non-PDF full screen (images) goes through the shared hook. PDFs are handled
   // by the shared PdfViewer itself, so no second viewer is ever mounted.
   const { fullScreenResource, closeFullScreen } = useResourceFullScreen();
@@ -29,7 +37,7 @@ export const SplitView: React.FC<SplitViewProps> = ({
   // separate components, so a `usePdfControls()` call inside each would give
   // them two independent stores — exactly the drift the comment below warns
   // about. Hoisting the hook here makes the state genuinely shared.
-  const { registerPdfControls, pdfControlsFor } = usePdfControls();
+  const { registerPdfControls, pdfControlsFor, registerImageControls, imageControlsFor } = usePdfControls();
   const split = isSplit(state);
 
   return (
@@ -41,8 +49,11 @@ export const SplitView: React.FC<SplitViewProps> = ({
           onNavigate={onNavigate}
           onOpenAssistantSettings={onOpenAssistantSettings}
           onCloseSplit={onCloseSplit}
+          activatePane={activatePane}
           registerPdfControls={registerPdfControls}
           pdfControlsFor={pdfControlsFor}
+          registerImageControls={registerImageControls}
+          imageControlsFor={imageControlsFor}
         />
       )}
 
@@ -55,12 +66,22 @@ export const SplitView: React.FC<SplitViewProps> = ({
           maximized={false}
           setState={setState}
           pdfControls={pdfControlsFor(0, state.panes[0])}
+          imageControls={imageControlsFor(0, state.panes[0])}
+          // A lone pane still reports focus, so the glow marks "you are working
+          // here" for keyboard users. It was previously suppressed on the
+          // grounds that a single full-width pane has nothing to be distinguished
+          // from — but "focus is elsewhere" is exactly what the glow is for, and
+          // suppressing it left the standalone view with no focus feedback at
+          // all. Only ONE pane is ever active, so the split still reads clearly.
+          active={state.activePane === 0}
+          onActivate={activatePane(0)}
         >
           <PaneContent
             slot={state.panes[0]}
             onNavigate={onNavigate}
             onOpenAssistantSettings={onOpenAssistantSettings}
             onRegisterPdfControls={(c) => registerPdfControls(0, c)}
+            onRegisterImageControls={(c) => registerImageControls(0, c)}
           />
         </PaneContainer>
       )}
@@ -82,16 +103,38 @@ export const SplitView: React.FC<SplitViewProps> = ({
  */
 const usePdfControls = () => {
   const [pdfControls, setPdfControls] = useState<Record<number, React.ReactNode>>({});
+  const [imageControls, setImageControls] = useState<Record<number, React.ReactNode>>({});
   const registerPdfControls = useCallback((index: number, node: React.ReactNode) => {
     setPdfControls((prev) => {
-      const has = Boolean(prev[index]);
-      // Bail when nothing changed, or the viewer re-registering every render
-      // would loop: register -> render -> register ...
-      if (has === !node) return prev;
-      const next = { ...prev };
-      if (node) next[index] = node;
-      else delete next[index];
-      return next;
+      const current = prev[index];
+      // Clearing (unmount / no longer a PDF): nothing to do when already empty,
+      // otherwise drop the entry so the header hides the controls again.
+      if (!node) {
+        if (!current) return prev;
+        const next = { ...prev };
+        delete next[index];
+        return next;
+      }
+      // Registering: bail only when it is genuinely the same element, so the
+      // viewer re-registering cannot loop (register -> render -> register), but
+      // a NEW element from a page/zoom change still replaces the old one.
+      if (current === node) return prev;
+      return { ...prev, [index]: node };
+    });
+  }, []);
+  // The image registry is the SAME contract, kept in a separate map so a pane is
+  // never handed another view's controls (a PDF's page nav in an image pane).
+  const registerImageControls = useCallback((index: number, node: React.ReactNode) => {
+    setImageControls((prev) => {
+      const current = prev[index];
+      if (!node) {
+        if (!current) return prev;
+        const next = { ...prev };
+        delete next[index];
+        return next;
+      }
+      if (current === node) return prev;
+      return { ...prev, [index]: node };
     });
   }, []);
   const pdfControlsFor = useCallback(
@@ -100,7 +143,13 @@ const usePdfControls = () => {
       slot.kind === 'pdf' && slot.resourceId ? pdfControls[index] : undefined,
     [pdfControls],
   );
-  return { registerPdfControls, pdfControlsFor };
+  const imageControlsFor = useCallback(
+    (index: number, slot: PaneSlot) =>
+      // Only an image view with a loaded document gets image controls.
+      slot.kind === 'image' && slot.imageId ? imageControls[index] : undefined,
+    [imageControls],
+  );
+  return { registerPdfControls, pdfControlsFor, registerImageControls, imageControlsFor };
 };
 
 type PdfControls = ReturnType<typeof usePdfControls>;
@@ -109,14 +158,19 @@ type PdfControls = ReturnType<typeof usePdfControls>;
 
 interface SplitBodyProps extends Omit<SplitViewProps, 'state'> {
   state: SplitState;
+  /** Same stable activator, so split panes focus without re-creating handlers. */
+  activatePane: (index: number) => () => void;
   /** The ONE shared control registry, owned by `SplitView`. */
   registerPdfControls: PdfControls['registerPdfControls'];
   pdfControlsFor: PdfControls['pdfControlsFor'];
+  /** Same contract, for the shared image viewer. */
+  registerImageControls: PdfControls['registerImageControls'];
+  imageControlsFor: PdfControls['imageControlsFor'];
 }
 
 const SplitBody: React.FC<SplitBodyProps> = ({
-  state, setState, onNavigate, onOpenAssistantSettings, onCloseSplit,
-  registerPdfControls, pdfControlsFor,
+  state, setState, onNavigate, onOpenAssistantSettings, onCloseSplit, activatePane,
+  registerPdfControls, pdfControlsFor, registerImageControls, imageControlsFor,
 }) => {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [stacked, setStacked] = useState(false);
@@ -177,12 +231,16 @@ const SplitBody: React.FC<SplitBodyProps> = ({
             maximized={maximized === index}
             setState={setState}
             pdfControls={pdfControlsFor(index, slot)}
+            imageControls={imageControlsFor(index, slot)}
+            active={isSplit(state) && state.activePane === index}
+            onActivate={activatePane(index)}
           >
             <PaneContent
               slot={slot}
               onNavigate={onNavigate}
               onOpenAssistantSettings={onOpenAssistantSettings}
               onRegisterPdfControls={(c) => registerPdfControls(index, c)}
+              onRegisterImageControls={(c) => registerImageControls(index, c)}
             />
           </PaneContainer>
         )}

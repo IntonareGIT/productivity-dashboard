@@ -201,6 +201,13 @@ export interface ChatMessageRow {
   toolName?: string | null;
   /** Short human summary of a tool result (UI only). */
   display?: string | null;
+  /**
+   * Provider-native reasoning for this turn (UI only; never replayed).
+   *
+   * Not indexed, so adding it needs no Dexie version bump — IndexedDB stores
+   * whole objects and only the listed keys become indexes.
+   */
+  reasoning?: string | null;
   error?: boolean;
   createdAt: string;   // ISO 8601
 }
