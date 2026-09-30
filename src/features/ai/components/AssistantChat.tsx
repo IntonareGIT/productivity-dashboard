@@ -1,7 +1,23 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bot, Check, SendHorizonal, TriangleAlert, Zap } from 'lucide-react';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
 import { ThoughtBlock } from './ThoughtBlock';
+
+/** Roughly six lines at the composer's font size; past this it scrolls. */
+const MAX_COMPOSER_HEIGHT_PX = 132;
+
+/**
+ * True when the primary input is touch rather than a hardware keyboard.
+ *
+ * Checked at keydown time rather than cached at mount, because a tablet with a
+ * folio keyboard can report both. `pointer: coarse` is the reliable signal that
+ * there is no physical Enter key; a touch-capable laptop still has one, so
+ * `maxTouchPoints` alone would wrongly turn Enter into a newline there.
+ */
+function isTouchDevice(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia?.('(pointer: coarse)').matches === true;
+}
 
 interface AssistantChatProps {
   onOpenSettings: () => void;
@@ -36,6 +52,70 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
 
   const [draft, setDraft] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  /**
+   * Grow with the content, up to ~6 lines, then scroll.
+   *
+   * The height is reset to `auto` before measuring, because a textarea will not
+   * shrink back on its own once it has grown. `scrollHeight` is the content
+   * height; clamping it with `maxHeight` + `overflow-y-auto` is what makes the
+   * box scroll instead of continuing to grow forever.
+   */
+  const resize = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, MAX_COMPOSER_HEIGHT_PX)}px`;
+  }, []);
+
+  useEffect(resize, [draft, resize]);
+
+  /**
+   * Send, then keep focus so the next message can be typed straight away.
+   *
+   * Focus is restored after the send because clearing the draft and the store
+   * updating can otherwise leave the caret in the transcript.
+   */
+  const submit = useCallback(() => {
+    const text = draft.trim();
+    if (!text || busy) return;
+    setDraft('');
+    void send(text);
+    // Focus after paint, so it lands on the now-empty, enabled box.
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [draft, busy, send]);
+
+  /**
+   * Enter sends, Shift+Enter inserts a newline.
+   *
+   * Three cases matter and each is easy to get wrong:
+   *
+   * 1. **IME composition.** While composing (a Japanese or Chinese keyboard
+   *    picking a candidate), Enter means "accept this candidate", NOT "send".
+   *    `event.isComposing` is the only reliable signal; `keyCode === 229` is
+   *    the legacy fallback for browsers that report it inconsistently.
+   * 2. **Shift+Enter** always inserts a newline, so we return without
+   *    preventing the default.
+   * 3. **Mobile.** The on-screen keyboard's Enter key reports `Enter` with no
+   *    Shift, which is indistinguishable from a hardware Enter. Treating it as
+   *    "send" is the classic mobile chat bug: you cannot start a new line at
+   *    all. We detect a hardware keyboard and, on touch, Enter inserts a
+   *    newline and the Send button is the way to send.
+   */
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== 'Enter') return;
+    // 1. Never send mid-composition.
+    if (e.nativeEvent.isComposing || (e.nativeEvent as unknown as { keyCode?: number }).keyCode === 229) {
+      return;
+    }
+    // 2. Shift+Enter is a newline: let the textarea insert it.
+    if (e.shiftKey) return;
+    // 3. On a touch device, Enter is a newline; Send is the button.
+    if (isTouchDevice()) return;
+    e.preventDefault();
+    submit();
+  };
 
   useEffect(() => {
     if (open) listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -139,19 +219,24 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          const text = draft.trim();
-          if (!text || busy) return;
-          setDraft('');
-          void send(text);
+          submit();
         }}
-        className="flex items-center gap-2 p-3 border-t border-border/60"
+        className="flex items-end gap-2 p-3 border-t border-border/60"
       >
-        <input
+        {/* A TEXTAREA, not an input: a single-line <input> physically cannot
+            hold a newline, so Shift+Enter had nowhere to put one. The box grows
+            with its content up to ~6 lines and then scrolls. */}
+        <textarea
+          ref={inputRef}
+          rows={1}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={onKeyDown}
           placeholder={configured ? 'Ask or tell me to do something…' : 'Configure a provider first…'}
           disabled={busy || !configured}
-          className="flex-1 min-w-0 bg-bg-elevated/60 border border-border rounded-xl px-3 py-2.5 text-sm text-content-primary outline-none focus:border-accent placeholder:text-content-tertiary disabled:opacity-50"
+          aria-label="Message the assistant"
+          className="flex-1 min-w-0 resize-none overflow-y-auto bg-bg-elevated/60 border border-border rounded-xl px-3 py-2.5 text-sm text-content-primary outline-none focus:border-accent placeholder:text-content-tertiary disabled:opacity-50"
+          style={{ maxHeight: MAX_COMPOSER_HEIGHT_PX }}
         />
         <button
           type="submit"
