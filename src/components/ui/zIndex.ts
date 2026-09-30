@@ -19,6 +19,8 @@ export const Z = {
   nav: 'z-40',
   /** Dropdowns, popovers and menus anchored to a control. */
   popover: 'z-50',
+  /** Click-away / dimming layer BEHIND a dialog. */
+  backdrop: 'z-[60]',
   /** Dialogs: modals, sheets, the command palette, the assistant panel. */
   modal: 'z-[70]',
   /** Toasts. Above dialogs so a save confirmation is never hidden. */

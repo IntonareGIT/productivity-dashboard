@@ -213,6 +213,36 @@ export class ProductivityDB extends Dexie {
       .stores({
         topics: 'id, subjectId, status, createdAt, title',
       });
+
+    /**
+     * v12: event kind and period.
+     *
+     * ADDITIVE ONLY. `eventKind` and `period` are plain, UNINDEXED fields, and
+     * both are optional, so they are simply absent on every existing row and
+     * `undefined` means "no kind" / "no period". Nothing is renamed, no index is
+     * added, and no table key changes.
+     *
+     * The upgrade DOES NOT rewrite rows. The brief forbids overwriting user data,
+     * and there is nothing to rewrite: backfilling `eventKind` would be a guess
+     * about whether an event with a subject was a lecture or a lab, and a wrong
+     * guess is worse than "no kind". Every pre-v12 event therefore keeps looking
+     * exactly as it did.
+     *
+     * `period` is deliberately NOT indexed. Overlap warnings compare it in
+     * memory against the handful of events on one day, which the `date` index
+     * already narrows for us; a separate index would only add write cost.
+     */
+    this.version(12)
+      .stores({
+        // Same string `id` primary key and same index set as v7. Only an
+        // additional index would appear here, and there is none to add.
+        calendarEvents: 'id, date, category, startTime, endTime, subjectId',
+      })
+      .upgrade(async (tx) => {
+        // Explicitly a no-op, and asserted as such so a future edit that starts
+        // writing here has to remove this comment deliberately.
+        void tx;
+      });
   }
 }
 

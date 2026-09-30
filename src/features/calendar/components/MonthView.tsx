@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { addDays, format, isSameMonth, startOfMonth, startOfWeek } from 'date-fns';
-import type { Subject } from '../../../types';
+import type { Assessment, Subject } from '../../../types';
 import type { DayKind } from '../../shifts/shiftLogic';
 import type { Occurrence } from '../recurrence';
 import { CATEGORY_MAP } from '../categories';
@@ -10,10 +10,28 @@ interface MonthViewProps {
   occurrencesByDate: Record<string, Occurrence[]>;
   subjectsById: Record<string, Subject>;
   shiftKindByDate: Record<string, DayKind>;
+  /** Assessments with a chosen date, grouped by date. Derived live. */
+  assessmentsByDate?: Record<string, Assessment[]>;
   today: Date;
   onDayClick: (dateKey: string) => void;
   onEventClick: (occurrence: Occurrence) => void;
+  /** Opens the day panel for a date (the "+x more" chip and a day tap). */
+  onOpenDay: (dateKey: string) => void;
+  onOpenAssessment: (assessment: Assessment) => void;
 }
+
+/** How many event chips fit in a cell before the "+x" takes over. */
+const MAX_CHIPS = 2;
+
+/**
+ * How many dots fit in a mobile cell.
+ *
+ * Mobile shows small dots rather than text chips, so it fits more of them. But
+ * the "+x" must still appear once the day has anything left over, otherwise a
+ * phone has no route into the day panel at all. Three keeps the row to one line
+ * on a 390px screen while leaving the fourth event to the "+x".
+ */
+const MOBILE_DOTS = 3;
 
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -30,9 +48,12 @@ export const MonthView: React.FC<MonthViewProps> = ({
   occurrencesByDate,
   subjectsById,
   shiftKindByDate,
+  assessmentsByDate = {},
   today,
   onDayClick,
   onEventClick,
+  onOpenDay,
+  onOpenAssessment,
 }) => {
   const cells = useMemo(() => {
     const first = startOfMonth(anchor);
@@ -61,15 +82,21 @@ export const MonthView: React.FC<MonthViewProps> = ({
         {cells.map((cell) => {
           const dateKey = format(cell, 'yyyy-MM-dd');
           const occurrences = occurrencesByDate[dateKey] ?? [];
+          const assessments = assessmentsByDate[dateKey] ?? [];
           const inMonth = isSameMonth(cell, anchor);
           const isToday = dateKey === todayKey;
           const kind = shiftKindByDate[dateKey];
-          const visible = occurrences.slice(0, 2);
+          // Assessments are squeezed in only if there is room, so a busy day
+          // still shows its events. An assessment is never hidden entirely: the
+          // "+x" chip always accounts for everything not shown.
+          const showAssessment = assessments.length > 0 ? 1 : 0;
+          const visible = occurrences.slice(0, Math.max(0, MAX_CHIPS - showAssessment));
           const extra = occurrences.length - visible.length;
 
           return (
             <div
               key={dateKey}
+              data-day-cell={dateKey}
               onClick={() => onDayClick(dateKey)}
               role="button"
               tabIndex={0}
@@ -97,8 +124,25 @@ export const MonthView: React.FC<MonthViewProps> = ({
                 )}
               </div>
 
-              {/* Event chips (desktop) */}
+              {/* Chips. Every one of these is a real <button>, so they are
+                  reachable by tap and by keyboard: no hover-only affordance. */}
               <div className="hidden sm:flex flex-col gap-1">
+                {assessments.slice(0, showAssessment).map((a) => {
+                  const subject = subjectsById[a.subjectId];
+                  const color = subject?.color;
+                  return (
+                    <button
+                      key={`a-${a.id}`}
+                      data-month-assessment={a.id}
+                      onClick={(e) => { e.stopPropagation(); onOpenAssessment(a); }}
+                      aria-label={`${a.type}: ${a.name}`}
+                      style={color ? { borderLeftColor: color, borderLeftWidth: '3px' } : undefined}
+                      className="w-full text-left px-1.5 py-0.5 rounded text-[10px] leading-tight font-semibold truncate border border-dashed border-rose-500/50 text-rose-600 dark:text-rose-400 hover:opacity-80 transition-all"
+                    >
+                      {a.type === 'quiz' ? 'Quiz' : a.type === 'exam' ? 'Exam' : a.type === 'project' ? 'Project' : 'Task'}: {a.name}
+                    </button>
+                  );
+                })}
                 {visible.map((occ) => {
                   const evt = occ.event;
                   const meta = CATEGORY_MAP[evt.category];
@@ -108,6 +152,7 @@ export const MonthView: React.FC<MonthViewProps> = ({
                   return (
                     <button
                       key={`${evt.id}-${occ.dateKey}`}
+                      data-month-event={evt.id}
                       onClick={(e) => {
                         e.stopPropagation();
                         onEventClick(occ);
@@ -126,16 +171,36 @@ export const MonthView: React.FC<MonthViewProps> = ({
                     </button>
                   );
                 })}
+                {/* "+x more" is now a BUTTON that opens the day panel, not a
+                    dead label. This is the behaviour the old version lacked. */}
                 {extra > 0 && (
-                  <span className="text-[10px] text-content-tertiary font-medium pl-0.5">
+                  <button
+                    data-month-more={dateKey}
+                    onClick={(e) => { e.stopPropagation(); onOpenDay(dateKey); }}
+                    aria-label={`Show all ${occurrences.length} events on this day`}
+                    className="w-full text-left px-1.5 py-0.5 rounded text-[10px] leading-tight font-semibold text-content-secondary hover:bg-bg-elevated transition-colors"
+                  >
                     +{extra} more
-                  </span>
+                  </button>
                 )}
               </div>
 
-              {/* Compact dots (mobile) */}
+              {/* Compact dots (mobile): same tap targets, smaller. */}
               <div className="flex sm:hidden flex-wrap gap-1 mt-0.5">
-                {occurrences.slice(0, 4).map((occ) => {
+                {assessments.slice(0, showAssessment).map((a) => {
+                  const subject = subjectsById[a.subjectId];
+                  return (
+                    <button
+                      key={`a-${a.id}`}
+                      data-month-assessment={a.id}
+                      onClick={(e) => { e.stopPropagation(); onOpenAssessment(a); }}
+                      aria-label={`${a.type}: ${a.name}`}
+                      className="w-2.5 h-2.5 rounded-sm border border-rose-500"
+                      style={subject?.color ? { backgroundColor: subject.color } : undefined}
+                    />
+                  );
+                })}
+                {occurrences.slice(0, MOBILE_DOTS).map((occ) => {
                   const evt = occ.event;
                   const subject = evt.subjectId ? subjectsById[evt.subjectId] : undefined;
                   const subjectColor = subject?.color;
@@ -143,6 +208,7 @@ export const MonthView: React.FC<MonthViewProps> = ({
                   return (
                     <button
                       key={`${evt.id}-${occ.dateKey}`}
+                      data-month-event={evt.id}
                       onClick={(e) => {
                         e.stopPropagation();
                         onEventClick(occ);
@@ -155,10 +221,19 @@ export const MonthView: React.FC<MonthViewProps> = ({
                     />
                   );
                 })}
-                {occurrences.length > 4 && (
-                  <span className="text-[9px] text-content-tertiary">
-                    +{occurrences.length - 4}
-                  </span>
+                // The mobile row shows fewer dots, so the "+x" appears sooner. The day must
+                // be REACHABLE at every count: with only dots and no "+x", a
+                // phone user has no way to open the full day at all, which is
+                // the exact gap this phase closes.
+                {occurrences.length > MOBILE_DOTS && (
+                  <button
+                    data-month-more={dateKey}
+                    onClick={(e) => { e.stopPropagation(); onOpenDay(dateKey); }}
+                    aria-label={`Show all ${occurrences.length} events on this day`}
+                    className="text-[10px] font-semibold text-content-secondary px-1 min-h-[20px]"
+                  >
+                    +{occurrences.length - MOBILE_DOTS} more
+                  </button>
                 )}
               </div>
             </div>

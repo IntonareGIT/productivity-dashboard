@@ -111,6 +111,16 @@ export interface Assessment {
 
 export type EventCategory = 'class' | 'deadline' | 'personal' | 'work';
 
+/**
+ * What kind of thing an event is, and which teaching period it occupies.
+ *
+ * Both are ADDITIVE and both are optional, so every existing event keeps working
+ * and reads as `undefined`, which means "no kind" and "no period". They sit
+ * next to the existing `subjectId` link rather than replacing it: an event is
+ * still linked to a subject in exactly one way.
+ */
+export type EventKind = 'studying' | 'lecture' | 'section' | 'lab';
+
 /** Recurrence rule stored ONCE on the parent event (occurrences are computed,
  *  never generated). Missing/undefined is treated as 'none'. */
 export type RecurrenceType = 'none' | 'daily' | 'weekly' | 'custom';
@@ -130,6 +140,9 @@ export interface CalendarEvent {
   recurrenceEndDate?: string | null;       // optional inclusive end (YYYY-MM-DD)
   recurrenceCount?: number | null;         // optional: stop after N occurrences
   subjectId?: string | null;               // FK -> subjects.id (null = personal)
+  // --- kind and period (schema v12), additive and optional ---
+  eventKind?: EventKind;                  // undefined = no kind (every pre-v12 event)
+  period?: number;                        // 1..6, only meaningful for lecture/section/lab
   createdAt: string;       // ISO 8601
 }
 

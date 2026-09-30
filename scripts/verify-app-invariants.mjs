@@ -266,15 +266,28 @@ const renderWith = ({ signedIn, currentUserValue }) => {
   // v9 (note titles) came later and IS an intentional schema change, so this
   // guard is pinned to "nothing beyond v9", not to "nothing beyond v8".
   // v11 (rich-text note fields) was added intentionally, so this guard is pinned
-  // to "nothing beyond v11", not to "nothing beyond v8". v11 is additive: the
+  // to "nothing beyond v12", not to "nothing beyond v8". v11 is additive: the
   // notes fields are added to the existing `topics` store with no index change,
   // and its upgrade contains no upgrade function at all (nothing to migrate).
+  // v12 (event kind + period) is additive too, and its upgrade is an explicit
+  // no-op, so it rewrites no rows either.
   const dbSrc = read('src/db/db.ts');
-  check('8 no schema version beyond v11 (rich-text notes) was added',
-    !/this\.version\(1[2-9]\)/.test(dbSrc));
+  check('8 no schema version beyond v12 (event kind + period) was added',
+    !/this\.version\(1[3-9]\)/.test(dbSrc));
   check('8 v11 adds the note fields additively and migrates nothing',
     /this\.version\(11\)[\s\S]{0,200}?topics: 'id, subjectId, status, createdAt, title'/.test(dbSrc)
     && !/this\.version\(11\)[\s\S]{0,400}?\.upgrade\(/.test(dbSrc));
+  // v12 must keep the SAME index set and the same string `id` key, and its
+  // upgrade must not touch any row: backfilling a kind would be a guess about
+  // the user's data, and a wrong guess is worse than "no kind".
+  const v12 = dbSrc.slice(dbSrc.indexOf('this.version(12)'));
+  check('8 v12 keeps calendarEvents keyed by string id with an unchanged index set',
+    /this\.version\(12\)[\s\S]{0,240}?calendarEvents: 'id, date, category, startTime, endTime, subjectId'/.test(v12));
+  check('8 v12 adds no index beyond v7 (eventKind and period stay unindexed)',
+    !/this\.version\(12\)[\s\S]{0,240}?calendarEvents: '[^']*(eventKind|period)/.test(v12));
+  check('8 v12 upgrade rewrites no rows',
+    /this\.version\(12\)[\s\S]{0,600}?\.upgrade\(async \(tx\) => \{[\s\S]{0,300}?void tx;/.test(v12)
+    && !/this\.version\(12\)[\s\S]{0,600}?\.upgrade\([\s\S]{0,400}?\.put\(/.test(v12));
   check('8 no Version.upgrade() on any synced table',
     !/upgrade\s*\(\s*\)\s*\.modify\(\s*async\s*\(\s*t\s*,\s*c\s*\)\s*=>\s*\{[\s\S]*?aiProviders/i
       .test(dbSrc));
