@@ -84,6 +84,15 @@ export const HELP_SECTIONS: HelpSection[] = [
         ],
       },
       {
+        heading: 'Assessments',
+        bullets: [
+          { lead: 'What they are', text: 'An exam, quiz, assignment or project belonging to a subject, with an optional weight as a percentage and a status of upcoming or done.' },
+          { lead: 'The date is optional', text: 'Leave it blank if you do not know when it is. The assessment is still listed in its subject with "No date", and simply does not appear on the calendar.' },
+          { lead: 'Days left', text: 'Each upcoming assessment with a date shows a countdown next to it, in whole calendar days.' },
+          { lead: 'On the calendar', text: 'One with a date appears on that date in the month grid and in the day panel, and tapping it takes you to the subject it belongs to. The calendar reads it live from the assessment, so changing the date moves it immediately and nothing is ever duplicated.' },
+        ],
+      },
+      {
         heading: 'Viewing files',
         bullets: [
           { lead: 'PDF viewer', text: 'Page navigation, zoom, and a full-screen mode. Supports pinch zoom and trackpad zoom.' },
@@ -143,9 +152,16 @@ export const HELP_SECTIONS: HelpSection[] = [
     summary: 'Month and week views for classes, deadlines, work and personal events.',
     bullets: [
       { lead: 'Views', text: "Month and week. The dashboard shows a strip of everything happening today." },
+      { lead: 'A whole day at once', text: 'Tap any day in the month grid to open its full list: every event in time order with its subject, type and period, plus any assessments due that day. From there you can edit, delete or add an event without leaving the calendar. On a computer it opens as a panel on the right; on a phone it opens as a sheet from the bottom. The "+x more" label opens the same thing.' },
+      { lead: 'The month grid', text: 'Each day shows up to two compact event chips and a "+x" chip for the rest, coloured by subject when the event is linked to one.' },
       { lead: 'Categories', text: 'Class, deadline, personal or work — each is colour-coded.' },
       { lead: 'Repeating events', text: 'Daily, weekly, monthly or yearly, with a custom interval. A repeating event is stored once; its occurrences are worked out as needed.' },
       { lead: 'Links to your subjects', text: 'An event can point at a subject or topic, which is how the assistant can talk about what is due when.' },
+      { lead: 'Event types', text: 'When you link an event to a subject you also pick what it is: Studying, Lecture, Section or Lab.' },
+      { lead: 'Periods', text: 'For a Lecture, Section or Lab you can pick period 1 to 6. The start and end times fill themselves in from the fixed timetable (period 1 runs 08:30 to 10:10, period 6 runs 17:40 to 19:20, each 1 hour 40 minutes with a 10 minute break around it). The times lock while a period is set; turn on "Custom time" to set them yourself. Studying and events with no subject use the normal time fields.' },
+      { lead: 'Clash warning', text: 'If a new lecture, section or lab falls in a period already taken that day, you get a warning. Nothing is blocked, because you may be right.' },
+      { lead: 'Assessments on the calendar', text: 'An assessment with a date shows on the calendar as a dashed chip labelled with its type and name, in the colour of its subject. Assessments with no date stay in their subject and do not appear on the calendar.' },
+      { lead: 'Assessments are not copied', text: 'A calendar assessment is worked out live from the assessment itself. Change or clear the date and the calendar follows immediately. Nothing is duplicated and nothing is synced twice.' },
     ],
   },
   {
@@ -203,6 +219,7 @@ export const HELP_SECTIONS: HelpSection[] = [
       { lead: 'Your provider, your key', text: "Settings → AI Providers takes a label, a base URL, an API key and a model name, and it speaks the OpenAI-style /chat/completions format. Any service offering that endpoint works, including Google's Gemini models. One provider is marked as the default; the rest are kept so you can switch." },
       { lead: 'Your data, on request', text: 'The assistant reads your library and calendar when a question needs it, and writes only when you ask it to. Anything destructive — deleting an event, logging time off, changing a shift — asks you to confirm first.' },
       { lead: 'Thinking shown', text: "When a model returns its reasoning, it appears in a collapsible block above the answer rather than being hidden or mixed into the reply." },
+      { lead: 'Writing a message', text: 'The box grows as you type, up to about six lines, then it scrolls so it never swallows the conversation. Enter sends. Shift+Enter starts a new line. On a phone, Enter starts a new line and you tap Send, because a soft keyboard has no reliable way to tell a deliberate send apart from a newline. If an input method is mid-composition, such as while picking a Chinese or Japanese character, Enter will not send.' },
       { lead: 'History', text: 'Conversations are saved so you can go back to them, and can be deleted from Settings → Assistant Chat History.' },
     ],
     groups: [
@@ -214,7 +231,8 @@ export const HELP_SECTIONS: HelpSection[] = [
           { lead: 'Editing your library', text: 'Rename a subject, a topic or a resource; move a resource to another topic; and work with resource groups: list them, create one, rename it, or move a resource into one or back out to no group.' },
           { lead: 'Deleting', text: 'Delete a subject, a topic, a resource or a group. Every one of these shows you a confirmation card first and only runs when you press Confirm; the assistant cannot carry it out on its own. Deleting a subject removes its topics, resources, uploaded files, notes and groups with it. Deleting a group only removes the group: its resources are kept and become ungrouped.' },
           { lead: 'If a name is ambiguous', text: 'You can refer to something by its id or by its name. If a name matches more than one thing, the assistant asks you to pick from a list instead of guessing, and changes nothing until you do.' },
-          { lead: 'Calendar and shifts', text: 'Add a calendar event or delete one, set the work roster for a week, log paid time off, and apply a one-off shift exception.' },
+          { lead: 'Calendar and shifts', text: 'Add a calendar event or delete one (it can set the same subject, event type and period you would pick by hand), set the work roster for a week, log paid time off, and apply a one-off shift exception.' },
+      { lead: 'Asking for an event', text: 'You can say which subject it is, what it is (Studying, Lecture, Section or Lab) and which period, and the times are filled in from the same fixed timetable the app uses. If you leave the period out, you can just give a time instead.' },
           { lead: 'Focus and status', text: 'Start or stop a focus timer, and switch your current status — which also changes the theme.' },
           { lead: 'Split view', text: 'Open, close or swap the split view, and put a specific document into a pane.' },
         ],

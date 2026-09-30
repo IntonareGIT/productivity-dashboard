@@ -1964,3 +1964,132 @@ drift out of sync.
 markup and `lucide-react` imports deleted). What remains is the clock, the
 light/dark toggle, and the profile avatar at every width.
 
+## 5. Calendar update branch (`calendar-update`)
+
+A five-phase improvement pass on the assistant composer, the subject dialog,
+the calendar, event-to-subject linking and assessments. Nothing was reverted.
+All schema changes are **additive only**. `main` was not touched or merged.
+
+### Phase 1 — Assistant composer: Shift+Enter
+
+**Cause of the bug:** the composer was a single-line `<input>` element, and
+its key handler sent on any Enter. An `<input>` cannot hold a newline at all,
+so Shift+Enter had nowhere to insert one.
+
+**Fix:** an auto-growing `<textarea>` that follows its content up to about six
+lines and then scrolls, so a long message cannot swallow the conversation.
+Enter sends; Shift+Enter inserts a newline. The `event.isComposing` check is
+kept, so an IME composition (choosing a CJK character) is never mistaken for
+Enter-to-send. On mobile, Enter inserts a newline and the Send button is the
+way to send, because a soft keyboard gives no reliable signal for a deliberate
+send; a keydown carrying `keyCode === 229` is treated as the soft keyboard, so
+a hardware keyboard still sends. The input keeps focus after sending.
+
+### Phase 2 — One z-index scale, and dialogs through portals
+
+**Cause of the bug:** the subject edit dialog was rendered inside the subject
+view's own stacking context, so the subject panel painted over it. The dialog
+was reachable only by navigating away and back.
+
+**Fix:** a single shared `components/ui/zIndex.ts` scale (`Z.backdrop`,
+`Z.modal`, `Z.menu`, `Z.toast`, and so on), and dialogs render through
+`createPortal` to `document.body`, which lifts them out of any local stacking
+context or `overflow: hidden` container. This works identically in standalone
+view and in a split pane, at every width, because none of those ancestors can
+capture a node that is no longer their descendant. The other dialogs and menus
+were checked and moved onto the same scale.
+
+### Phase 3 — Full day view and query optimization
+
+Replaced "first two events and +x more" as a dead end. Tapping a day now opens
+a **day panel**: a right-hand side panel on desktop and a bottom sheet on
+mobile (one component, so the two layouts cannot drift). It lists **all**
+events of that day in time order with title, time, subject and kind, and
+offers edit, delete and add without leaving the calendar. The "+x more" chip
+is now a real button that opens that same panel.
+
+The month grid shows up to 2 compact event chips in the subject's colour plus
+a "+x" chip, all real `<button>`s so they work by tap and by keyboard, with no
+hover-only affordances.
+
+**Optimization:** live queries fetch only the visible range. `date` is
+indexed, so `between` walks the index; a second filtered read picks up
+recurring series regardless of anchor, because a weekly lecture anchored in
+January still occurs in October. Non-recurring events anchored outside the
+range are never fetched. Per-day grouping and shift tints are memoised on
+their exact inputs, and the range is keyed by a formatted string so a query
+only re-runs when the visible window actually moves. Recurring-event
+expansion is untouched.
+
+### Phase 4 — Events linked to subjects, with kind and period
+
+Reuses the **existing** `subjectId` link on events; no second way to store it.
+The create and edit form gains a Subject dropdown, then a Type dropdown
+(Studying, Lecture, Section, Lab). For Lecture, Section or Lab a Period
+dropdown (1 to 6) appears and fills the start and end times from the fixed
+timetable.
+
+**`PERIODS` lives in one place** — `features/calendar/categories.ts` — and is
+imported by the event form, the day panel, and the AI calendar tools, so the
+three cannot disagree:
+
+| Period | Start | End |
+| --- | --- | --- |
+| 1 | 08:30 | 10:10 |
+| 2 | 10:20 | 12:00 |
+| 3 | 12:10 | 13:50 |
+| 4 | 14:00 | 15:40 |
+| 5 | 15:50 | 17:30 |
+| 6 | 17:40 | 19:20 |
+
+Each period is 1 hour 40 minutes with a 10 minute break before and after. While
+a period is set the time fields show those times and are read-only, with a
+small "Custom time" switch to override. Studying, and events with no subject,
+use the normal time fields and show no period.
+
+**Schema:** `eventKind` (`studying` | `lecture` | `section` | `lab` | none) and
+`period` (1 to 6 | none) were added to `calendarEvents` beside `subjectId`,
+with a Dexie version bump and an upgrade function that only adds fields. No
+row was rewritten. Existing events have neither field and behave exactly as
+before.
+
+A **warning, not a block**, appears when a new lecture, section or lab falls in
+a period already taken that day.
+
+The **AI calendar tools** accept the same `eventKind` and `period`, import the
+same `PERIODS`, and their descriptions and the system prompt were updated to
+match. The assistant's existing behaviour is unchanged when the new fields are
+omitted.
+
+### Phase 5 — Assessments on the calendar
+
+Assessments are **derived live**, never copied into the events table. The month
+grid, week view and day panel all read `assessmentsByDate`, computed from a
+live query on `assessments` and filtered to rows with a chosen date. Changing
+or clearing an assessment's date therefore updates the calendar immediately,
+and nothing is duplicated or synced twice. An assessment with no date does not
+appear on the calendar.
+
+An assessment with a date renders as a visually distinct dashed chip labelled
+with its type and name ("Quiz: Midterm Quiz"), tinted with its subject's
+colour, in both the month grid and the day panel. Tapping it sends the user to
+the subject that owns it.
+
+**Schema:** the assessment `date` became **optional** (additive; the field
+already existed, only its requirement changed). An assessment with no date is
+still listed in its subject, marked "No date", and is simply absent from the
+calendar.
+
+The subject view now also shows upcoming assessments sorted by date with a
+**days left** countdown, computed in whole calendar days rather than 24-hour
+spans, so an assessment on the 30th reads "Today" for the whole of the 30th.
+
+### Verification
+
+`npx tsc -b` clean, `npm run verify` exits 0, `npm run build` succeeds, and
+five real-browser Chromium suites cover the phases: `verify:composer`,
+`verify:dialog`, `verify:calendar`, `verify:period`, and
+`verify:assessments` (6/6, including the derivation test that edits an
+assessment's date and asserts the chip moves rather than duplicates). What
+genuinely cannot be tested without hardware is listed in `PROGRESS.md`.
+

@@ -1,3 +1,90 @@
+# Calendar update: report
+
+**Branch:** `calendar-update` (created from the working branch, pushed). **`main` was NOT touched, merged, or force-pushed.**
+
+**Final state:** `npx tsc -b` clean, `npm run verify` **exits 0**, `npm run build`
+succeeds, and the four real-browser suites below **exit 0** in real Chromium.
+No data was deleted or rewritten. No deployment settings were changed.
+
+## Summary
+
+| Phase | What it asked for | Status | Evidence |
+| --- | --- | --- | --- |
+| 1 | Shift+Enter inserts a newline in the assistant composer | **done** | `<input>` was the cause; now an auto-growing `<textarea>`. `npm run verify:composer` passes in Chromium. |
+| 2 | The subject edit dialog must appear above the subject view | **done** | One shared `zIndex` scale plus portals. `npm run verify:dialog` passes in Chromium, standalone and split. |
+| 3 | Full day view and calendar optimization | **done** | Day panel, 2 compact chips plus "+x", range-scoped live queries. `npm run verify:calendar` passes in Chromium. |
+| 4 | Link events to a subject with a kind and a period | **done** | One shared `PERIODS` constant; additive `eventKind` and `period`. `npm run verify:period` passes in Chromium. |
+| 5 | Assessments on the calendar | **done** | Derived live, never copied. `npm run verify:assessments` passes 6/6 in Chromium. |
+| Docs | PROJECT.md, About/Help, this report | **done** | `verify-about-help` 44/44. |
+
+**Reverted:** nothing. **Could not be tested:** see the honest list below.
+
+### Phase 5: the derivation is the load-bearing part
+
+The month grid, the week view and the day panel all read
+`assessmentsByDate`, which is computed from the live `assessments` table and
+filtered to rows with a date. Nothing is ever written into
+`calendarEvents`, so a changed or cleared date moves the chip immediately and
+nothing is duplicated or synced twice.
+
+The browser test asserts exactly that rather than just "a chip appears": it
+creates an assessment, finds it on its date, then **edits the date** and
+checks the old day now has 0 chips and the new day has 1. That test is the
+only thing that would catch a copy-into-events implementation.
+
+### Schema changes: additive only, one version bump
+
+The new event fields are `eventKind` (`studying` / `lecture` / `section` /
+`lab` / none) and `period` (1 to 6 or none). They were added beside the
+existing `subjectId` link, with a Dexie version bump and an upgrade function
+that only adds fields. No row was rewritten, no index was dropped, and no
+existing data was deleted or overwritten. Existing events have neither field
+and behave exactly as before.
+
+The assessment date became **optional** (additive, nothing rewritten), so an
+assessment with no date is still listed in its subject as "No date" and
+simply does not appear on the calendar.
+
+### What I could NOT test
+
+- **Real touch input.** Chromium emulates taps. It does not reproduce a real
+  finger, a real soft keyboard, or a real iOS/Android date picker. The mobile
+  bottom sheet, the day panel by tap, and the mobile Enter behaviour all need
+  your thumb.
+- **Hardware-keyboard detection on a phone.** The composer treats a keydown
+  with `keyCode === 229` as a soft keyboard and never sends on Enter. The
+  detection logic is verified; that it matches your specific keyboards is not.
+- **Multi-device Dexie Cloud sync** of the two new event fields.
+- **Your real data.** Every test ran against synthetic subjects and events.
+
+### What you must test on your phone
+
+1. Open the assistant. Type a long multi-line message: the box should grow to
+   about six lines and then scroll. Enter sends, Shift+Enter adds a line.
+2. On a phone, tap into the box and press Enter. It should add a line, not
+   send. Tap Send to send. With a Bluetooth or case keyboard, Enter should
+   send.
+3. Open the Calendar and tap a day. The sheet should rise from the bottom,
+   list everything on it, and let you edit, delete and add without leaving.
+4. Create a Lecture event, pick period 3, and confirm the times fill in as
+   12:10 to 13:50 and lock. Turn on "Custom time" and confirm you can
+   override them.
+5. Add an assessment with a date to a subject, then open the Calendar and
+   confirm it appears on that date. Change the date and confirm the chip
+   moves and does not stay behind in the old day.
+6. Open a subject's edit window from both the standalone view and the split
+   pane and confirm it is fully visible and on top of everything.
+
+### Dexie Cloud / Vercel: no manual action needed
+
+Every schema change is additive, so Dexie Cloud replicates the new fields as
+plain row data. There is no new cloud database version to register and no
+migration to run. Nothing needs doing in the Dexie Cloud console.
+
+Vercel needs nothing either: the app is a static SPA with no new environment
+variables. The `calendar-update` branch is pushed, so you can preview it from
+the Vercel branch deploy if you want to check it before merging.
+
 # Overnight work: report
 
 **Branch:** `overnight-features` (pushed). **`main` was NOT touched, merged, or
