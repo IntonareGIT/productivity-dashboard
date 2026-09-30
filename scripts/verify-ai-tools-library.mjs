@@ -250,6 +250,31 @@ check('instructions: the Confirm wording states what is lost for the big deletes
   deleteSpecs.filter((s) => /^delete(Subject|Topic|Resource)$/.test(s.function.name))
     .every((s) => /PERMANENTLY DELETE/.test(lib.describeLibraryToolCall(s.function.name, {}))));
 
+// ============================== Phase 3: the selection-loss regression
+// The size and color bugs had ONE cause: no `preventDefault` on mousedown, so
+// the browser collapsed the textarea selection before `onClick` ran and the
+// wrapper was inserted around zero characters. Guard the fix so it cannot be
+// dropped again by a well-meaning edit.
+const toolbar = readFileSync('src/features/library/components/NoteToolbar.tsx', 'utf8');
+check('p3 every formatting button prevents mousedown default',
+  (toolbar.match(/onMouseDown=\{keepSelection\}/g) || []).length >= 5,
+  `${(toolbar.match(/onMouseDown=\{keepSelection\}/g) || []).length} buttons`);
+check('p3 keepSelection calls preventDefault on mousedown, not on click',
+  /const keepSelection = \(e: React\.MouseEvent\) => e\.preventDefault\(\);/.test(toolbar));
+check('p3 the reason is documented at the fix', /collapses the selection/i.test(toolbar));
+// The render path must still carry color through (it was never the bug).
+const noteFmt = readFileSync('src/features/library/noteFormat.ts', 'utf8');
+check('p3 color is still emitted as a theme token',
+  /export const colorVar = \(c: NoteColor\): string => `var\(--note-c-\$\{c\}\)`/.test(noteFmt));
+check('p3 the sanitizer still allows the palette tokens',
+  /const COLOR_TOKEN = \/\^var\\\(--note-c-/.test(noteFmt));
+const themes = readFileSync('src/styles/themes.css', 'utf8');
+check('p3 every palette hue variable is defined in CSS',
+  ['rose', 'orange', 'amber', 'green', 'teal', 'blue', 'purple', 'gray']
+    .every((h) => themes.includes(`--note-hue-${h}:`)));
+check('p3 the editor still uses a textarea (Phase 3 rewrite NOT attempted)',
+  /<textarea/.test(readFileSync('src/features/library/components/MarkdownNotes.tsx', 'utf8')));
+
 console.log(`\nai-tools-library: ${pass} passed, ${fail} failed`);
 try { rmSync(bundleFile, { force: true }); } catch { /* best effort */ }
 process.exit(fail === 0 ? 0 : 1);

@@ -27,6 +27,22 @@ export interface NoteToolbarApi {
   write: (text: string, selection: Selection) => void;
 }
 
+/**
+ * Keep the textarea selection alive while a toolbar button is pressed.
+ *
+ * This is the root cause of "text color does nothing" and "choosing a size pastes
+ * tag code into the textarea". Pressing a button fires `mousedown` FIRST, which
+ * moves focus out of the textarea and COLLAPSES the selection to a caret. By the
+ * time `onClick` runs, `api.read()` sees start === end, so the wrapper is
+ * inserted around zero characters: the user gets a bare `<span>` tag dumped in
+ * the text with nothing inside it, and for color, nothing visibly coloured.
+ *
+ * Calling `preventDefault` on `mousedown` stops the focus change, so the
+ * selection survives and the wrap wraps the text the user actually selected.
+ * It must be on mousedown; preventing the default of `click` is too late.
+ */
+const keepSelection = (e: React.MouseEvent) => e.preventDefault();
+
 export const NoteToolbar: React.FC<{ api: NoteToolbarApi }> = ({ api }) => {
   const wrap = useCallback((open: string, close: string) => {
     const { text, selection } = api.read();
@@ -65,6 +81,7 @@ export const NoteToolbar: React.FC<{ api: NoteToolbarApi }> = ({ api }) => {
           <button
             key={p.id}
             type="button"
+            onMouseDown={keepSelection}
             onClick={() => wrap(spanTag({ size: p.value }), '</span>')}
             aria-label={`Font size ${p.label}`}
             className={`${btn} text-[11px] font-semibold`}
@@ -84,6 +101,7 @@ export const NoteToolbar: React.FC<{ api: NoteToolbarApi }> = ({ api }) => {
             <button
               key={a.id}
               type="button"
+              onMouseDown={keepSelection}
               onClick={() => alignBlock(a.id)}
               aria-label={`Align ${a.label}`}
               className={`${btn} w-9`}
@@ -100,6 +118,7 @@ export const NoteToolbar: React.FC<{ api: NoteToolbarApi }> = ({ api }) => {
       <span className="relative shrink-0">
         <button
           type="button"
+          onMouseDown={keepSelection}
           onClick={() => setShowColors((v) => !v)}
           aria-label="Text color"
           aria-expanded={showColors}
@@ -129,6 +148,7 @@ export const NoteToolbar: React.FC<{ api: NoteToolbarApi }> = ({ api }) => {
                   <button
                     key={c}
                     type="button"
+                    onMouseDown={keepSelection}
                     onClick={() => { wrap(spanTag({ color: colorVar(c) }), '</span>'); setShowColors(false); }}
                     aria-label={`Color ${c}`}
                     className="min-h-[40px] rounded-lg border border-border hover:border-border-strong transition-colors flex items-center justify-center"
@@ -155,6 +175,7 @@ export const NoteToolbar: React.FC<{ api: NoteToolbarApi }> = ({ api }) => {
       {/* ---- clear all ---- */}
       <button
         type="button"
+        onMouseDown={keepSelection}
         onClick={() => {
           const { text, selection } = api.read();
           const next = clearFormatting(text);

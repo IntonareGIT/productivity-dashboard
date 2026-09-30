@@ -10,7 +10,7 @@ No merge into `main` will be attempted. No deploy commands will be run.
 | 0. PDF viewer crash cleanup | skipped, already complete before this run |
 | 1. Fix "New group" doing nothing | done |
 | 2. AI assistant tools | partly done, core delivered |
-| 3. Notes editor rich text | not started, see report |
+| 3. Notes editor rich text | Step 1 done (colour bug fixed); rewrite NOT attempted |
 
 ## Phase 0: skipped
 
@@ -129,6 +129,165 @@ model's own repeat call cannot perform the action; a declined action is fed back
 to the model as "The user moved on without confirming this action". Any new
 delete tool is added to that set and therefore inherits the guarantee instead of
 relying on the model to behave.
+
+### What was added
+
+New module `src/features/ai/toolsLibrary.ts` with 12 tools, wired into `tools.ts`
+(specs, dispatcher, describe wording, both sets):
+
+- Groups: `listGroups`, `createGroup`, `renameGroup`, `deleteGroup`,
+  `moveResourceToGroup`
+- Subjects: `renameSubject`, `deleteSubject`
+- Topics: `renameTopic`, `deleteTopic`
+- Resources: `renameResource`, `moveResource`, `deleteResource`
+
+`createSubject` and `createTopic` already existed, so they were NOT duplicated, and
+a verify check asserts they are still absent from the new module.
+
+New module `src/features/ai/toolResolve.ts`: id-or-name resolution. An exact id
+wins, then a case-insensitive exact name, then a substring. If more than one row
+matches it returns the candidate list WITH ids instead of guessing. Every
+rejection says "Nothing was changed" so the model does not retry blindly.
+
+### Safety design
+
+The delete guarantee is structural, not a prompt instruction.
+`useAssistantStore` filters names in `CONFIRMATION_TOOL_NAMES` out of the tool
+batch and breaks the loop BEFORE `runTool`, so the model calling a delete twice
+cannot perform it: only `confirmPending()`, driven from the Confirm button,
+executes it. `deleteSubject`, `deleteTopic`, `deleteResource` and `deleteGroup`
+were added to that set through a spread of `LIBRARY_CONFIRM_TOOL_NAMES`, so the
+classification lives next to the handlers and a new delete cannot be added
+without also being gated. No delete tool accepts a `confirmed` boolean, so there
+is no parameter the model could set to skip the gate.
+
+`deleteGroup` is deliberately gated even though it only ungroups: it still
+removes a row the user made. Its description and Confirm wording both state that
+resources are kept, and the result reports `deletedResources: 0`.
+
+### Verified
+
+`scripts/verify-ai-tools-library.mjs`, 54 checks, all passing. The behavioural
+checks run the real repository functions and read the data back:
+
+- every group tool works, by id AND by name
+- `deleteGroup` keeps every resource and reports zero deletions
+- subject delete cascades to topics, resources and groups and leaves other
+  subjects untouched; topic delete removes its resources only
+- `moveResource` clears `groupId`; a cross-subject move is refused, no change
+- an ambiguous name returns both candidates with ids and deletes nothing
+- every delete is gated, the store filters gated calls before executing them,
+  and only `confirmPending` executes them
+
+### Not done in Phase 2
+
+Called out rather than half-built:
+
+- `setNoteTitle`, `createNote`, `renameNote`, `deleteNote` were NOT added. Note
+  content handling is entangled with the Phase 3 editor format change, so these
+  would need rewriting again shortly.
+- The system prompt tool list and the About/Help tool list were NOT updated. The
+  tools are registered and callable, but the prompt does not advertise them, so
+  the model will only reach them if the user names one.
+- The Confirm card shows the description text, not deletion COUNTS yet.
+- Closing a split pane showing a tool-deleted resource was not wired.
+- Turn order and action pills were not re-verified for the new tools; they reuse
+  the existing `runTool` path the Gemini 400 fix already covers.
+
+### Not testable here
+
+No browser or phone is available. The Confirm card, the action pill per call and
+the Confirm/Cancel buttons on a phone are covered by code inspection only. Please
+ask the assistant to delete a group and confirm it asks first, and that Cancel
+changes nothing.
+
+## Also fixed: the two stale verify-resource-preview assertions
+
+Both pre-dated this run, and `npm run verify` now exits 0 for the first time.
+Neither was a real defect:
+
+1. "committed zoom must never be multiplied into the running ratio" was a
+   substring false positive: the banned pattern matched inside the legitimate
+   `gestureStartZoomRef.current * liveScaleRef.current`, and the comment
+   explaining the old bug survived comment stripping. Fixed by anchoring the
+   pattern and filtering comment lines. The invariant it guards is intact.
+2. "the focal point is captured once and never re-taken" used a 300-character
+   window that stopped reaching the assignment after staged-swap aborting was
+   added to the first-tick guard. `focalRef` is still assigned exactly once. The
+   window was widened to 900, with a comment saying why.
+
+No viewer behaviour was changed.
+
+## Phase 3: notes editor
+
+### Step 1, the colour bug: root cause found and fixed
+
+The brief listed four candidate causes. Three were ruled out by testing, and
+the fourth turned out to be none of them:
+
+- NOT stripped by the sanitizer. `sanitizeTag` on a colour span returns
+  `<span style="color:var(--note-c-rose)">` unchanged.
+- NOT rejected by value validation. `COLOR_TOKEN` matches the palette token, and
+  the palette token is exactly what `colorVar` emits.
+- NOT an unresolved CSS variable. All eight `--note-hue-*` variables are defined
+  in `themes.css`, and the eight `--note-c-*` variables resolve in both `:root`
+  and `html.light`.
+- NOT overridden by a higher-specificity theme rule. The rendered output is
+  `<span style="color:var(--note-c-rose)">` inside the note paragraph, verified
+  by running the real `renderNoteHtml` pipeline, and inline style beats a class.
+
+**The actual cause was the selection, not the colour.** No toolbar button had
+`onMouseDown` / `preventDefault`. Pressing a button fires `mousedown` FIRST, which
+moves focus off the textarea and COLLAPSES the selection to a caret. By the time
+`onClick` ran, `api.read()` returned `start === end`, so `wrapSelection` inserted
+the wrapper around ZERO characters.
+
+That explains BOTH reported symptoms with one cause: the user saw a bare `<span>`
+tag dumped into the textarea with nothing inside it (the "size pastes tag code"
+report), and for colour the empty span rendered nothing visible at all (the
+"colour does not work at all" report). Colour and size were never broken in the
+pipeline; both were being applied to an empty selection.
+
+Fix: a shared `keepSelection` handler calling `preventDefault` on `mousedown`,
+added to all five formatting buttons (size x4 via the preset map, alignment x3,
+colour x8 via the palette map, colour opener, and clear formatting). It is on
+`mousedown` deliberately; preventing the default of `click` is too late.
+
+Seven regression checks were added to `verify-ai-tools-library.mjs`, including
+one asserting the editor is still a textarea, so a future reader can tell this
+fix from the rewrite that was not attempted.
+
+### Step 2, the Tiptap rewrite: NOT attempted, on purpose
+
+I stopped rather than half-build this, for these reasons:
+
+1. The bug the brief asked me to fix in Step 1 is now fixed at its root. A
+   Tiptap editor would have hidden the symptom without identifying the cause, and
+   the cause is now documented and guarded by a regression test.
+2. Step 3 requires a content-format migration across every existing note. That is
+   the single highest-risk change in this whole brief ("Notes must never be lost
+   or corrupted"), and it should not be done unattended by an agent that cannot
+   open a browser to check the result on a real note.
+3. It is not a small diff. A custom FontSize extension, a new toolbar, a
+   `contentHtml` field with a format marker, a Dexie version bump, a converter
+   proven to preserve text, and a strict HTML sanitizer on load, all at once,
+   with no way to visually confirm any of it.
+
+Attempting it half-finished would have left notes in a mixed-format state with
+no way to verify recovery, which is strictly worse than the current working
+editor. Rule 4 says revert a phase that cannot be finished safely rather than
+leave the app broken; here the safe action was to not start it.
+
+Also note Step 2 would need `npm install @tiptap/react @tiptap/starter-kit
+@tiptap/extension-text-style @tiptap/extension-color @tiptap/extension-text-align`.
+Tiptap 3.31.3 is available on the registry and no Tiptap package is installed yet.
+
+### What you get today
+
+Selecting text and pressing Size, Colour, Align or Clear formatting now wraps
+the text you actually selected. The tags remain visible in the textarea while
+editing, which is inherent to a markdown textarea and is the honest reason the
+brief wanted a WYSIWYG editor in the first place. The view side is unaffected.
 
 ## Decisions taken without asking
 
