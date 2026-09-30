@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { endOfWeek, format, isBefore, isToday, isWithinInterval, parseISO, startOfWeek } from 'date-fns';
 import { ArrowLeft, BookOpenCheck, CalendarClock, Check, ChevronRight, Columns2, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Pencil, Plus, Search, Timer, Trash2 } from 'lucide-react';
 import { db } from '../../../db/db';
 import { Card } from '../../../components/ui/Card';
+import { toast } from '../../../stores/useToastStore';
 import { MarkdownNotes, NoteTitleInput, NotesEditorBody } from './MarkdownNotes';
 import { TopicModal } from './TopicModal';
 import { ResourceModal } from './ResourceModal';
@@ -173,6 +174,44 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   /** Which group is showing its inline rename box, and which awaits delete confirmation. */
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [deleteGroupId, setDeleteGroupId] = useState<string | null>(null);
+
+  /**
+   * Run a group write and REPORT the failure.
+   *
+   * These used to be `void saveResourceGroup(...)` with no error handling, so a
+   * rejected Dexie write (or a validation throw) vanished and the UI looked
+   * unresponsive. Every group action now awaits and surfaces the reason as a
+   * toast, so "nothing happened" is never a silent state.
+   */
+  const runGroupAction = useCallback(async (
+    what: string,
+    work: () => Promise<unknown>,
+  ): Promise<boolean> => {
+    try {
+      await work();
+      return true;
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      toast('error', `Could not ${what}`, reason);
+      return false;
+    }
+  }, []);
+
+  const createGroup = useCallback(async (name: string) => {
+    const ok = await runGroupAction('create group', () => saveResourceGroup({ subjectId: subject.id, name }));
+    if (ok) toast('success', 'Group created', name);
+  }, [runGroupAction, subject.id]);
+
+  const renameGroup = useCallback(async (groupId: string, name: string) => {
+    const ok = await runGroupAction('rename group', () => renameResourceGroup(groupId, name));
+    if (ok) toast('success', 'Group renamed', name);
+  }, [runGroupAction]);
+
+  const removeGroup = useCallback(async (groupId: string, name: string) => {
+    // Deleting a group UNGROUPS its resources; it never deletes them.
+    const ok = await runGroupAction('delete group', () => deleteResourceGroup(groupId));
+    if (ok) toast('success', 'Group deleted', `${name} was removed. Its resources were kept.`);
+  }, [runGroupAction]);
 
   const sortedGroups = useMemo(
     () => [...groups].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.createdAt.localeCompare(b.createdAt)),
@@ -429,23 +468,25 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
             <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-content-tertiary" />
             <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter resources…" className="w-full bg-bg-elevated border border-border rounded-xl pl-9 pr-3 py-2.5 text-xs text-content-primary outline-none focus:border-accent placeholder:text-content-tertiary" />
           </div>
+          {/* The group controls sit OUTSIDE the "no resources" branch on purpose.
+              Previously they only existed when the topic already had resources,
+              so a new empty topic could not host a group at all. */}
+          <div className="mb-3">
+            <NewGroupButton onCreate={createGroup} />
+          </div>
           {topicResources.length === 0 ? (
             <p className="text-xs text-content-tertiary py-6 text-center">{filter ? 'No resources match.' : 'No resources for this topic yet.'}</p>
           ) : (
             <>
-              <div className="mb-3">
-                <NewGroupButton onCreate={(name) => void saveResourceGroup({ subjectId: subject.id, name })} />
-              </div>
               <div className="space-y-2.5">
                 {/*
-                  Resources are bucketed by their group. A group whose members all
-                  live in another topic does not appear here, so grouping reads as
-                  a folder view of THIS topic without hiding anything. Ungrouped
-                  resources keep their own trailing section.
+                  Resources are bucketed by their group. A group is ALWAYS
+                  rendered, including when it has no resources in this topic:
+                  hiding empty groups is what made "New group" look broken,
+                  because the row was written to Dexie and then never drawn.
                 */}
                 {sortedGroups.map((group) => {
                   const members = topicResources.filter((r) => r.groupId === group.id);
-                  if (members.length === 0) return null;
                   const collapsed = collapsedGroups.has(group.id);
                   return (
                     <div key={group.id} className="rounded-xl border border-border/70 bg-bg-elevated/20 p-2.5">
@@ -472,7 +513,7 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
                         </button>
                         <button
                           onClick={() => (deleteGroupId === group.id
-                            ? void deleteResourceGroup(group.id).then(() => setDeleteGroupId(null))
+                            ? void removeGroup(group.id, group.name).then(() => setDeleteGroupId(null))
                             : setDeleteGroupId(group.id))}
                           aria-label={`Delete group ${group.name}`}
                           className={`p-2 rounded-lg shrink-0 ${deleteGroupId === group.id ? 'bg-rose-600 text-white' : 'text-content-tertiary hover:text-rose-500 hover:bg-rose-500/10'}`}
@@ -486,13 +527,15 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
                             initialName={group.name}
                             placeholder="Group name"
                             submitLabel="Save"
-                            onSubmit={(name) => { void renameResourceGroup(group.id, name); setRenamingGroupId(null); }}
+                            onSubmit={(name) => { void renameGroup(group.id, name); setRenamingGroupId(null); }}
                             onCancel={() => setRenamingGroupId(null)}
                           />
                         </div>
                       ) : collapsed ? null : (
                         <div className="space-y-2.5 mt-2">
-                          {members.map((resource) => (
+                          {members.length === 0 ? (
+                            <p className="text-[11px] text-content-tertiary italic">No resources in this group yet. Use “Move to group” on a resource to add one.</p>
+                          ) : members.map((resource) => (
                             <ResourceRow
                               key={resource.id}
                               resource={resource}

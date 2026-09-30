@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Check, FolderInput, FolderPlus, X } from 'lucide-react';
 import type { ResourceGroup } from '../../../types';
 import { moveResourceToGroup, saveResourceGroup } from '../libraryRepo';
+import { toast } from '../../../stores/useToastStore';
 import { GroupNameEditor } from './ResourceGroups';
 
 /**
@@ -42,17 +43,28 @@ export const MoveToGroupMenu: React.FC<{
   }, [open]);
 
   const choose = async (groupId: string | null) => {
-    await moveResourceToGroup(resourceId, groupId);
-    setOpen(false);
-    onMoved?.();
+    // Surface a failure instead of closing silently: if the write is rejected the
+    // menu must not look like the move happened.
+    try {
+      await moveResourceToGroup(resourceId, groupId);
+      setOpen(false);
+      onMoved?.();
+    } catch (e) {
+      toast('error', 'Could not move resource', e instanceof Error ? e.message : String(e));
+    }
   };
 
   const createAndMove = async (name: string) => {
-    const id = await saveResourceGroup({ subjectId, name });
-    await moveResourceToGroup(resourceId, id);
-    setCreating(false);
-    setOpen(false);
-    onMoved?.();
+    try {
+      const id = await saveResourceGroup({ subjectId, name });
+      await moveResourceToGroup(resourceId, id);
+      toast('success', 'Group created', name);
+      setCreating(false);
+      setOpen(false);
+      onMoved?.();
+    } catch (e) {
+      toast('error', 'Could not create group', e instanceof Error ? e.message : String(e));
+    }
   };
 
   const sorted = [...groups].sort((a, b) => a.name.localeCompare(b.name));

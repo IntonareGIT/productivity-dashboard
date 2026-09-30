@@ -230,7 +230,10 @@ const menu = readFileSync('src/features/library/components/MoveToGroupMenu.tsx',
 const tools = readFileSync('src/features/ai/tools.ts', 'utf8');
 check('UI: "New group" button is rendered', /<NewGroupButton/.test(detail));
 check('UI: groups are collapsible', /toggleGroupCollapsed/.test(detail) && /aria-expanded/.test(detail));
-check('UI: rename and delete are per group', /renameResourceGroup\(group\.id/.test(detail) && /deleteResourceGroup\(group\.id/.test(detail));
+  // Phase 1 routed these through `renameGroup` / `removeGroup` wrappers that
+  // await the write and surface a failure, so assert the handlers now wired
+  // rather than the old direct repository calls.
+  check('UI: rename and delete are per group', /renameGroup\(group\.id/.test(detail) && /removeGroup\(group\.id/.test(detail));
 check('UI: a "Move to group" control is on each resource row', /<MoveToGroupMenu/.test(detail));
 check('UI: the move menu offers "No group"', />\s*No group\s*</.test(menu));
 check('UI: the move menu offers "New group…"', /New group…/.test(menu));
