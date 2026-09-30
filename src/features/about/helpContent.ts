@@ -113,6 +113,7 @@ export const HELP_SECTIONS: HelpSection[] = [
           { lead: 'Font size', text: 'Four presets, applied to the selected text.' },
           { lead: 'Alignment', text: 'Left, centre or right, applied to the selected lines.' },
           { lead: 'Colour', text: 'Eight colours plus a default, chosen to stay readable in both the light and dark themes.' },
+          { lead: 'Select first', text: 'Highlight the words you want to change before pressing a button. If nothing is selected the change applies to the words the caret sits in, or to the current line for alignment.' },
           { lead: 'Clear formatting', text: 'Removes the formatting and keeps the words.' },
           { lead: 'Stored as markdown', text: 'Formatting is saved inside the markdown as a small amount of inline HTML, and only a fixed set of tags is allowed through when a note is displayed. A note with no formatting looks exactly as it always did.' },
         ],
@@ -193,6 +194,9 @@ export const HELP_SECTIONS: HelpSection[] = [
         bullets: [
           { lead: 'Look things up', text: "List your subjects and their topics; see today's work shift, calendar events and focus minutes so far; resolve a work roster for any week; total your focus time for a date range; get a subject's progress; list upcoming deadlines; and search the library by keyword across subjects, topics, notes, resources and assessments." },
           { lead: 'Library', text: "Create a subject, add a topic, append to a topic's notes, attach a link, add an assessment (exam, quiz, assignment or project), mark a topic as not started, studying or confident, or search everything at once." },
+          { lead: 'Editing your library', text: 'Rename a subject, a topic or a resource; move a resource to another topic; and work with resource groups: list them, create one, rename it, or move a resource into one or back out to no group.' },
+          { lead: 'Deleting', text: 'Delete a subject, a topic, a resource or a group. Every one of these shows you a confirmation card first and only runs when you press Confirm; the assistant cannot carry it out on its own. Deleting a subject removes its topics, resources, uploaded files, notes and groups with it. Deleting a group only removes the group: its resources are kept and become ungrouped.' },
+          { lead: 'If a name is ambiguous', text: 'You can refer to something by its id or by its name. If a name matches more than one thing, the assistant asks you to pick from a list instead of guessing, and changes nothing until you do.' },
           { lead: 'Calendar and shifts', text: 'Add a calendar event or delete one, set the work roster for a week, log paid time off, and apply a one-off shift exception.' },
           { lead: 'Focus and status', text: 'Start or stop a focus timer, and switch your current status — which also changes the theme.' },
           { lead: 'Split view', text: 'Open, close or swap the split view, and put a specific document into a pane.' },

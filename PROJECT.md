@@ -147,6 +147,21 @@ standalone Library editor and the split-pane notes view, so the controls cannot
 drift apart. On mobile it is one horizontally scrolling row with 40px targets
 and `overscroll-x-contain`.
 
+**Every formatting button must `preventDefault` on `mousedown`.** This is not
+optional and it is easy to lose in a refactor, because the bug it prevents looks
+like a color bug or a sanitizer bug and is neither. Pressing a button fires
+`mousedown` **first**, which moves focus off the textarea and **collapses the
+selection to a caret**. By the time `onClick` runs, the editor handle reports
+`start === end`, so `wrapSelection` wraps **zero characters**. The user then sees
+a bare `<span>` dumped into the text with nothing inside it (which reads as
+"size pastes tag code into the textarea") and, for color, an empty span that
+renders nothing at all (which reads as "text color does not work at all").
+
+`keepSelection` in `NoteToolbar.tsx` is the single shared handler, and it must be
+on `mousedown`: preventing the default of `click` is already too late. Regression
+checks in `verify-ai-tools-library.mjs` assert it is present on all five
+formatting controls, so it cannot be dropped again unnoticed.
+
 **Out of scope, deliberately:** the AI reply renderer. `AssistantChat.tsx` still
 renders message text as plain `whitespace-pre-wrap` and does not use this
 renderer.
@@ -320,6 +335,30 @@ Invariants, all enforced in `libraryRepo.ts` and pinned by
 `resourceGroups` is metadata, so it **syncs**: it is deliberately absent from
 `UNSYNCED_TABLES` in `cloudConfig.ts`, and the file-blob rules (`BLOB_MODE`,
 `LARGE_BLOB_WARNING_BYTES`) are untouched.
+
+**An empty group must still be rendered.** This is the whole of the "New group
+does nothing" bug, and it is worth stating because the failure mode is so
+misleading: the Dexie write always succeeded. `SubjectDetail.tsx` was doing
+`if (members.length === 0) return null;` per group, so a group the user had just
+created — which by definition has no members yet — was written to the database
+and then never drawn. The list query was live and correctly scoped the whole
+time. A group now always renders, with an inline "No resources in this group
+yet" hint so an empty folder reads as a folder.
+
+Two related defects are fixed alongside it, and both made the symptom
+indistinguishable from "nothing happened":
+
+- The **New group control sat inside the `topicResources.length === 0` ternary**,
+  so a topic with no resources could not host a group at all. It now renders
+  unconditionally.
+- **Every group write was `void someWrite(...)` with no `await` and no `catch`**,
+  so a rejected write vanished. Create, rename, delete and move now run through
+  `runGroupAction`, which toasts `Could not create group: <reason>` (and the
+  rename/delete/move equivalents) instead of failing silently.
+
+`scripts/verify-groups-ui.mjs` drives the real repository functions and reads the
+data back after every action, including that deleting a group keeps its resources
+and that deleting a subject removes its groups.
 
 ### 1.4 `assessments` — exams/quizzes/assignments/projects per subject (v5)
 
@@ -553,10 +592,11 @@ the same assistant: typing a query appends a dynamic
 `Open AI assistant` is a permanent palette command. Selecting either calls
 `useAssistantStore.getState().ask()` / `.setOpen(true)`.
 
-`src/features/ai/tools.ts` and `toolsExtended.ts` expose the callable
-functions. Each performs a **real** Dexie/store operation and returns a
-structured result that is fed back to the model so it can report accurately
-what happened. Shared argument validation lives in `toolRuntime.ts`.
+`src/features/ai/tools.ts`, `toolsExtended.ts` and `toolsLibrary.ts` expose
+the callable functions. Each performs a **real** Dexie/store operation and
+returns a structured result that is fed back to the model so it can report
+accurately what happened. Shared argument validation lives in `toolRuntime.ts`,
+and shared argument resolution in `toolResolve.ts`.
 
 **Lookup — always call these first (read-only)**
 
@@ -591,6 +631,14 @@ what happened. Shared argument validation lives in `toolRuntime.ts`.
 | `addAssessment` | `subjectId`, `type`, `date`, `weight` | `saveAssessment` |
 | `startPomodoroSession` | `durationMinutes` | Starts a real timer |
 | `stopPomodoroSession` | — | Stops the running timer |
+| `listGroups` | `subjectId` | Groups of one subject with ids and resource counts |
+| `createGroup` | `subjectId`, `name` | `saveResourceGroup` |
+| `renameGroup` | `groupId`, `name` | `renameResourceGroup`; resources untouched |
+| `moveResourceToGroup` | `resourceId`, `groupId` | `moveResourceToGroup`; `null` means no group |
+| `renameSubject` | `subjectId`, `name` | `saveSubject` upsert, keeps the id and all children |
+| `renameTopic` | `topicId`, `title` | `setTopicTitle` |
+| `renameResource` | `resourceId`, `title` | `saveResource` |
+| `moveResource` | `resourceId`, `topicId` | `saveResource`; clears `groupId` |
 
 **Writes — require an explicit Confirm button before running**
 
@@ -600,10 +648,24 @@ what happened. Shared argument validation lives in `toolRuntime.ts`.
 | `addPTO` | `date` | The date and that it replaces the current shift |
 | `addOneOffShiftException` | `date`, `startTime`, `hours` | New start/end and that it replaces the shift |
 | `deleteCalendarEvent` | `eventId` | That it is permanent and cannot be undone |
+| `deleteResource` | `resourceId` | PERMANENTLY DELETE, and that the file goes with it |
+| `deleteTopic` | `topicId` | PERMANENTLY DELETE, plus resources and uploaded files |
+| `deleteSubject` | `subjectId` | PERMANENTLY DELETE, plus everything under it |
+| `deleteGroup` | `groupId` | That resources are KEPT and become ungrouped |
 
-`CONFIRMATION_TOOL_NAMES` holds exactly those four. They **pause** in the chat
-UI and require Confirm/Cancel before `executeTool` runs — the assistant never
-applies them on its own, even when the request seems unambiguous.
+The four library deletes are listed in `LIBRARY_CONFIRM_TOOL_NAMES`
+(`toolsLibrary.ts`) and spread into `CONFIRMATION_TOOL_NAMES`, so the
+classification lives beside the handlers and a new delete cannot be added
+without also being gated.
+
+**How the Confirm guarantee actually holds.** It is structural, not a prompt
+instruction. `useAssistantStore` splits the model's tool batch into gated and
+ungated calls, runs the ungated ones, and **breaks out of the loop before
+`runTool`** for anything gated. The call is parked as `pending` and only
+`confirmPending()` — driven by the Confirm button — executes it. So the model
+calling `deleteSubject` twice still deletes nothing; there is no `confirmed`
+boolean parameter it could set to bypass the gate. Declining feeds
+"The user moved on without confirming this action" back to the model.
 
 **ID discipline.** The system prompt instructs the model to call
 `listSubjects` / `listTopics` before any function that needs an id, and never
@@ -612,6 +674,15 @@ a message telling the model to look it up. If a name matches more than one
 subject or topic, the model is instructed to ask the user which one is meant.
 Duplicate `createSubject` / `createTopic` calls are rejected rather than
 silently duplicating.
+
+**Id-or-name resolution (`toolResolve.ts`).** The library tools accept either an
+id or a name, because the model often only has the name from the conversation.
+`resolveByIdOrName` tries, in order: an exact id, a case-insensitive exact name,
+then a case-insensitive substring. If more than one row matches it returns the
+**candidate list with ids** rather than picking one, and the error text tells the
+model to ask the user. Every rejection ends with "Nothing was changed", so the
+model does not retry blindly against the wrong record. A wrong guess is worse
+than an error here, because these tools delete data.
 
 Safety model:
 

@@ -1,7 +1,90 @@
-# Overnight work progress
+# Overnight work: report
 
-Branch: `overnight-features` (based on `3d09007` from `ai-pdf-reading`).
-No merge into `main` will be attempted. No deploy commands will be run.
+**Branch:** `overnight-features` (pushed). **`main` was NOT touched, merged, or
+force-pushed.** Last commit is the final "Phase 3 step 1" commit plus the docs
+commit below; `git log overnight-features -1` for the exact hash.
+
+**Final state:** `npx tsc -b` clean, `npm run verify` **exits 0** (every script
+green, including the two that were failing before this run), `npm run build`
+succeeds. Nothing was deployed and no deployment settings were changed.
+
+| Phase | Status | One-line outcome |
+| --- | --- | --- |
+| 0. PDF viewer crash cleanup | **skipped** | Already complete in `3d09007`; verified zero debug remnants. |
+| 1. "New group" does nothing | **done** | Root cause was a render guard hiding empty groups, not a failed write. |
+| 2. AI assistant tools | **partly done** | 12 library tools + id/name resolver + all deletes behind Confirm. Notes tools and Confirm counts NOT done. |
+| 3. Notes editor rich text | **partly done, deliberately** | Colour/size bug fixed at root. Tiptap rewrite NOT attempted. |
+
+### The three findings worth your attention
+
+1. **"New group" was never a database problem.** The write always succeeded. A
+   render guard (`if (members.length === 0) return null`) hid every new group,
+   because a new group has no members. The button was also unreachable in an
+   empty topic, and all four group writes were `void` with no `catch`, so real
+   failures were invisible too.
+
+2. **The note colour and size bugs were one bug, and it was not colour.** No
+   toolbar button called `preventDefault` on `mousedown`, so the browser
+   collapsed the text selection before `onClick` ran and every wrapper was
+   inserted around **zero characters**. That produced a bare `<span>` in the
+   textarea (the "size pastes tag code" report) and an invisible empty span (the
+   "colour does nothing" report). Colour was provably fine in the sanitizer, the
+   CSS variables and the renderer. One shared handler fixes both.
+
+3. **`npm run verify` now exits 0 for the first time.** The two long-standing
+   `verify-resource-preview` failures were stale assertions, not defects: one
+   matched as a substring inside the legitimate `gestureStartZoomRef`, the other
+   used a regex window too narrow for later code. No viewer behaviour changed.
+
+### What I deliberately did not do
+
+- **Tiptap WYSIWYG rewrite (Phase 3 step 2) and the note content migration
+  (step 3).** These are the highest-risk changes in the brief ("notes must never
+  be lost or corrupted") and they are impossible for me to verify visually: no
+  browser is available in this environment. A half-finished migration would
+  leave notes in a mixed-format state with no way to confirm recovery, which is
+  worse than the working editor you have now. The underlying bug is fixed and
+  guarded by regression tests instead. `PROGRESS.md` records the exact packages
+  and the plan if you want it done with eyes on the screen.
+- **Note AI tools** (`setNoteTitle`, `createNote`, `renameNote`, `deleteNote`),
+  deferred because note content handling is entangled with the editor format
+  change above.
+- **Confirm cards do not yet show deletion counts**, only descriptive text.
+- **A split pane showing a tool-deleted resource is not auto-closed.**
+
+### What you must test on your phone and laptop
+
+1. **New group**: create one in a topic that already has resources, and one in a
+   topic with none. The empty group must appear immediately.
+2. **Note formatting**: select a few words, then press Size, Colour and Align.
+   The text should change immediately and NO bare tag should appear.
+3. **Assistant deletes**: ask it to delete a group / topic / resource / subject.
+   It must show a Confirm card and change nothing until you press Confirm. Then
+   test Cancel and confirm the data is still there.
+4. **Group delete specifically**: delete a group and confirm its resources are
+   still present, just ungrouped.
+5. **Ambiguous names**: if you have two resources with the same name, ask the
+   assistant to delete "that one" and confirm it asks which rather than guessing.
+6. The PDF and image viewers are untouched, but the usual zoom, pinch,
+   fullscreen and split-view checks are still worth repeating.
+
+### Needs your manual action (I could not and did not do these)
+
+- **Dexie Cloud**: confirm auth and sync still work. `dexie-cloud.json` is
+  gitignored and absent from the deployed repo, and I did not touch the cloud
+  database or any credentials.
+- **Vercel**: I did not deploy and did not change settings. `main` is still
+  older than this branch, so **if Vercel is configured to deploy from `main`,
+  merging this branch first is required** or production will not get these fixes.
+- **Merge**: this branch is not merged. Review and merge when ready.
+
+### Not tested at all (no browser or phone in this environment)
+
+Everything is verified by TypeScript, by unit-level scripts that drive the real
+repository functions against an in-memory Dexie, and by reading the code. No
+real touch interaction, no real IndexedDB migration v8 to v9 to v10, no visual
+rendering, and no Dexie Cloud sync was exercised. Treat the "must test" list
+above as genuinely untested, not as smoke-tested.
 
 ## Phase status
 

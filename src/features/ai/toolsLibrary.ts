@@ -384,7 +384,7 @@ export async function executeLibraryTool(
 
 /** Wording for the Confirm card and the transcript. */
 export function describeLibraryToolCall(name: string, args: Args): string {
-  const s = (k: string) => String(args[k] ?? '—');
+  const s = (k: string) => String(args[k] ?? 'not given');
   switch (name) {
     case 'listGroups': return `List the resource groups of ${s('subjectId')}.`;
     case 'createGroup': return `Create a group “${s('name')}” in ${s('subjectId')}.`;
