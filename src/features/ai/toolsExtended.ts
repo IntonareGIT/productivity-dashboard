@@ -1,7 +1,8 @@
 import { endOfMonth, format, startOfMonth, startOfWeek, subDays } from 'date-fns';
 import { db } from '../../db/db';
-import type { Topic } from '../../types';
+import type { EventKind, Topic } from '../../types';
 import { deleteEvent, saveEvent } from '../calendar/eventsRepo';
+import { PERIODS, normalizePeriod, periodByNumber, usesPeriod } from '../calendar/categories';
 import { saveAssessment, saveResource, saveSubject, saveTopic } from '../library/libraryRepo';
 import { DEFAULT_SUBJECT_COLOR, SUBJECT_PALETTE } from '../library/palette';
 import { buildShiftContext, dayEndTime, getWeekDays, resolveDay, toDateKey } from '../shifts/shiftLogic';
@@ -136,7 +137,8 @@ export const EXTENDED_TOOL_SPECS: ToolSpec[] = [
     type: 'function',
     function: {
       name: 'addCalendarEvent',
-      description: 'Create a calendar event.',
+      description:
+        'Create a calendar event. Pass eventKind for a subject-linked event, and period (1-6) for a lecture, section or lab: a period sets the start and end time from the fixed timetable automatically, so do not pass time/endTime alongside it unless the user asked for a different time.',
       parameters: {
         type: 'object',
         properties: {
@@ -151,6 +153,16 @@ export const EXTENDED_TOOL_SPECS: ToolSpec[] = [
             description: 'Recurrence rule (default "none").',
           },
           subjectId: { type: 'string', description: 'Optional subject link.' },
+          eventKind: {
+            type: 'string',
+            enum: ['studying', 'lecture', 'section', 'lab'],
+            description: 'Kind of subject-linked event. Only meaningful with subjectId.',
+          },
+          period: {
+            type: 'integer',
+            enum: PERIODS.map((p) => p.n),
+            description: `Teaching period 1-${PERIODS.length}. Sets the time from the timetable. Only for lecture, section or lab.`,
+          },
         },
         required: ['title', 'date', 'category'],
         additionalProperties: false,
@@ -550,13 +562,46 @@ async function addCalendarEvent(args: Record<string, unknown>): Promise<ToolExec
   let subjectId: string | null = null;
   if (args.subjectId) subjectId = (await requireSubject(String(args.subjectId))).id;
 
-  await saveEvent({ title, date, startTime, endTime, category, recurrenceType, subjectId });
+  // Kind and period reuse the SAME fields and the SAME PERIODS list the form
+  // uses, so the assistant cannot produce a time the UI would not.
+  let eventKind: EventKind | null = null;
+  if (args.eventKind) {
+    eventKind = requireOneOf(
+      args.eventKind,
+      ['studying', 'lecture', 'section', 'lab'] as const,
+      'eventKind'
+    );
+  }
+  const period = normalizePeriod(args.period);
+  // A period on a non-timetabled kind is a contradiction; drop it rather than
+  // silently storing both. An out-of-range value is already null from
+  // normalizePeriod, which is the "no period" the model should have meant.
+  const usablePeriod = usesPeriod(eventKind) ? period : null;
+  const fromPeriod = periodByNumber(usablePeriod);
 
-  const when = startTime ? `${date} at ${startTime}` : date;
+  // Explicit times win: the model was given the timetable in the description
+  // and may have been correcting it. Otherwise a period supplies the times.
+  const finalStart = startTime ?? fromPeriod?.start;
+  const finalEnd = endTime ?? fromPeriod?.end;
+
+  await saveEvent({
+    title, date,
+    startTime: finalStart, endTime: finalEnd,
+    category, recurrenceType, subjectId,
+    eventKind, period: usablePeriod,
+  });
+
+  const kindText = eventKind ? `, ${eventKind}` : '';
+  const periodText = usablePeriod ? `, period ${usablePeriod}` : '';
+  const when = finalStart ? `${date} at ${finalStart}` : date;
   return {
     ok: true,
-    summary: `Added event “${title}” on ${when} (${category}${recurrenceType === 'none' ? '' : `, repeats ${recurrenceType}`}).`,
-    data: { title, date, startTime: startTime ?? null, endTime: endTime ?? null, category, recurrence: recurrenceType, subjectId },
+    summary: `Added event “${title}” on ${when} (${category}${kindText}${periodText}${recurrenceType === 'none' ? '' : `, repeats ${recurrenceType}`}).`,
+    data: {
+      title, date,
+      startTime: finalStart ?? null, endTime: finalEnd ?? null,
+      category, recurrence: recurrenceType, subjectId, eventKind, period: usablePeriod,
+    },
     toast: { kind: 'success', title: 'Event added', description: `${title} · ${when}` },
   };
 }

@@ -13,6 +13,7 @@
     "verify:composer": "node scripts/verify-composer-browser.mjs",
     "verify:dialog": "node scripts/verify-subject-dialog-browser.mjs",
     "verify:calendar": "node scripts/verify-calendar-day-panel-browser.mjs",
+    "verify:period": "node scripts/verify-event-period-browser.mjs",
     "shots": "node scripts/shots-note-editor.mjs"
   },
   "dependencies": {

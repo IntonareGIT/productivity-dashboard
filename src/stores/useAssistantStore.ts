@@ -65,6 +65,8 @@ function systemPrompt(now: Date): string {
     'WRITE FUNCTIONS (run immediately, each raises a visible toast):',
     '- setStatus(status): switch the active status/theme.',
     '- addCalendarEvent(title, date, time, category, recurrence).',
+    '- addCalendarEvent also accepts subjectId, eventKind (studying/lecture/section/lab) and period (1-6). A period sets the time from the fixed timetable, so omit time unless the user wants a different one.',
+    'Timetable periods: 1=08:30-10:10, 2=10:20-12:00, 3=12:10-13:50, 4=14:00-15:40, 5=15:50-17:30, 6=17:40-19:20. Pass `period` and the app applies these; you do not need to compute the times.',
     '- addResourceLink(topicId, title, url).',
     '- createSubject(name).',
     '- createTopic(subjectId, title).',
