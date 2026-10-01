@@ -221,10 +221,17 @@ export const MonthView: React.FC<MonthViewProps> = ({
                     />
                   );
                 })}
-                // The mobile row shows fewer dots, so the "+x" appears sooner. The day must
-                // be REACHABLE at every count: with only dots and no "+x", a
-                // phone user has no way to open the full day at all, which is
-                // the exact gap this phase closes.
+                {/* The mobile row shows fewer dots, so the "+x" appears sooner. The
+                    day must be REACHABLE at every count: with only dots and no
+                    "+x", a phone user has no way to open the full day at all,
+                    which is the exact gap this phase closes.
+
+                    This is a JSX comment, NOT a bare slash-slash line. A bare
+                    slash-slash comment placed directly among JSX children is not
+                    a comment at all: JSX treats it as text and renders it inside
+                    the day cell. Note that a braced comment must not itself
+                    contain braces, or it closes early and the remainder becomes
+                    text again. `verify-jsx-comments.mjs` fails if that returns. */}
                 {occurrences.length > MOBILE_DOTS && (
                   <button
                     data-month-more={dateKey}
