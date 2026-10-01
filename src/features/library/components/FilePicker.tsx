@@ -4,8 +4,9 @@ import { ArrowLeft, FileText, Folder, FolderOpen, Search, X } from 'lucide-react
 import type { Resource } from '../../../types';
 import { Z } from '../../../components/ui/zIndex';
 import {
-  getChildren, getRecentNodes, noteOpened, pathToResource, searchAll,
-  type PickerNode, type PickerNodeKind,
+  getChildren, getRecentNodes, lastLocation, noteOpened, pathToResource,
+  rememberLocation, searchAll,
+  type PickerNode, type PickerWant,
 } from './filePickerData';
 
 export interface FilePickerProps {
@@ -13,8 +14,14 @@ export interface FilePickerProps {
   onClose: () => void;
   /** The file currently open, so the picker can start where it is. */
   currentResource?: Resource | null;
-  /** Filters what is openable: 'group' shows PDFs, 'resource' shows images. */
-  want?: PickerNodeKind;
+  /** Filters what is openable: 'pdf' for the PDF viewer, 'image' for images. */
+  want?: PickerWant;
+  /**
+   * Identifies the calling slot, normally the pane index. Two split panes each
+   * pass their own, so each keeps its own selection AND its own remembered
+   * location: browsing in one pane never moves the other one.
+   */
+  slotKey?: string;
   onPick: (resource: Resource) => void;
 }
 
@@ -34,31 +41,41 @@ export interface FilePickerProps {
  * thumb, and arrows, Enter, Backspace and Escape work from a keyboard.
  */
 export const FilePicker: React.FC<FilePickerProps> = ({
-  open, onClose, currentResource, want = 'group', onPick,
+  open, onClose, currentResource, want = 'pdf', slotKey = 'default', onPick,
 }) => {
   const [path, setPath] = useState<PickerNode[]>([]);
   const [rows, setRows] = useState<PickerNode[]>([]);
+  const [recents, setRecents] = useState<PickerNode[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [cursor, setCursor] = useState(0);
 
-  // Where the picker opens: at the current file, or the root. Re-run whenever
-  // it opens or the current file changes, so it always starts where the user is
-  // actually looking.
+  // Where the picker opens, in the order the brief asks for: the currently open
+  // file's own location first, then the last place this slot was left, then the
+  // root. Re-run whenever it opens or the current file changes.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setQuery('');
+    setRecents(getRecentNodes());
     void (async () => {
-      const start = currentResource ? await pathToResource(currentResource.id) : [];
+      const start = currentResource
+        ? await pathToResource(currentResource.id)
+        : (lastLocation(slotKey) ?? []);
       if (cancelled) return;
       setPath(start);
     })();
-  }, [open, currentResource?.id]);
+  }, [open, currentResource?.id, slotKey]);
 
   const current = path.length > 0 ? path[path.length - 1] : null;
+
+  // Remember the location as soon as it is reached, not only on close, so a
+  // refresh mid-browse still lands somewhere sensible.
+  useEffect(() => {
+    if (open && path.length > 0) rememberLocation(slotKey, path);
+  }, [open, path, slotKey]);
 
   useEffect(() => {
     if (!open) return;
@@ -68,10 +85,7 @@ export const FilePicker: React.FC<FilePickerProps> = ({
       const q = query.trim();
       const list = q
         ? await searchAll(q, want, currentResource?.id ?? null)
-        : (current
-          ? await getChildren(current, want, currentResource?.id ?? null)
-          // At the root with no search, the recent list is what is useful.
-          : getRecentNodes());
+        : await getChildren(current, want, currentResource?.id ?? null);
       if (cancelled) return;
       setRows(list);
       setCursor(0);
@@ -84,6 +98,20 @@ export const FilePicker: React.FC<FilePickerProps> = ({
   useEffect(() => {
     if (open) requestAnimationFrame(() => searchRef.current?.focus());
   }, [open]);
+
+  /**
+   * The rows actually on screen, and where the Recent section ends.
+   *
+   * Step 1 shows the Recent files ABOVE the subjects, rather than replacing
+   * them: the brief asks for a Recent section at the top of step 1, and
+   * subjects are step 1's real content. It only appears at the root and only
+   * when something has been opened, because an empty heading is worse than no
+   * heading. A search suppresses it, because a "Recent" heading in the middle
+   * of search results would be a lie about where these rows came from.
+   */
+  const showRecent = !query.trim() && path.length === 0 && recents.length > 0;
+  const visible = showRecent ? [...recents, ...rows] : rows;
+  const recentCount = showRecent ? recents.length : 0;
 
   const goUp = useCallback(() => setPath((p) => p.slice(0, -1)), []);
   const goTo = useCallback((depth: number) => setPath((p) => p.slice(0, depth + 1)), []);
@@ -101,13 +129,16 @@ export const FilePicker: React.FC<FilePickerProps> = ({
 
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+    // Backspace means "go back" only when it cannot mean "delete a character",
+    // which is exactly when the search box is empty. Swallowing it inside a
+    // text field would make the field impossible to correct.
     if (e.key === 'Backspace' && path.length > 0 && !query) {
       e.preventDefault(); goUp(); return;
     }
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       setCursor((c) => {
-        const next = Math.max(0, Math.min(rows.length - 1, c + (e.key === 'ArrowDown' ? 1 : -1)));
+        const next = Math.max(0, Math.min(visible.length - 1, c + (e.key === 'ArrowDown' ? 1 : -1)));
         rowRefs.current[next]?.scrollIntoView({ block: 'nearest' });
         return next;
       });
@@ -115,10 +146,10 @@ export const FilePicker: React.FC<FilePickerProps> = ({
     }
     if (e.key === 'Enter') {
       e.preventDefault();
-      const row = rows[cursor];
+      const row = visible[cursor];
       if (row) choose(row);
     }
-  }, [rows, cursor, path.length, query, goUp, onClose, choose]);
+  }, [visible, cursor, path.length, query, goUp, onClose, choose]);
 
   const crumbs = useMemo(
     () => [{ id: '', kind: 'subject' as const, name: 'Subjects', childCount: 0, path: 'Subjects' }, ...path],
@@ -188,46 +219,54 @@ return createPortal(
         <div className="flex-1 overflow-y-auto p-1.5">
           {loading ? (
             <p className="text-xs text-content-tertiary p-3">Loading…</p>
-          ) : rows.length === 0 ? (
+          ) : visible.length === 0 ? (
             <p className="text-xs text-content-tertiary p-3">
               {query ? 'Nothing matches that search.' : 'Nothing here yet.'}
             </p>
           ) : (
-            rows.map((node, i) => {
+            visible.map((node, i) => {
               const isFolder = node.kind !== 'resource';
               return (
-                <button
-                  key={`${node.kind}-${node.id}`}
-                  ref={(el) => { rowRefs.current[i] = el; }}
-                  onClick={() => choose(node)}
-                  disabled={Boolean(node.disabledReason)}
-                  aria-current={node.isCurrent ? 'true' : undefined}
-                  data-picker-row={node.id}
-                  data-picker-kind={node.kind}
-                  className={`w-full flex items-center gap-2 px-2.5 min-h-[44px] rounded-lg text-left transition-colors
-                    ${node.disabledReason ? 'opacity-45 cursor-not-allowed' : 'hover:bg-bg-elevated'}
-                    ${node.isCurrent ? 'bg-accent-subtle' : ''}`}
-                >
-                  {isFolder
-                    ? <Folder className="w-4 h-4 text-content-tertiary shrink-0" />
-                    : <FileText className="w-4 h-4 text-content-tertiary shrink-0" />}
-                  <span className="min-w-0 flex-1">
-                    {/* Two files with the same name are only distinguishable by
-                        the path underneath, which is the whole reason this picker
-                        exists. */}
-                    <span className="block text-xs font-medium text-content-primary truncate">{node.name}</span>
-                    {node.path && node.path !== node.name && (
-                      <span className="block text-[10px] text-content-tertiary truncate">{node.path}</span>
-                    )}
-                    {node.disabledReason && (
-                      <span className="block text-[10px] text-content-tertiary">{node.disabledReason}</span>
-                    )}
-                  </span>
-                  {isFolder && node.childCount > 0 && (
-                    <span className="text-[10px] text-content-tertiary shrink-0">{node.childCount}</span>
+                <React.Fragment key={`${node.kind}-${node.id}-${i}`}>
+                  {/* The Recent section heading. Not a button: it labels the rows
+                      under it rather than going anywhere. */}
+                  {i === recentCount && (
+                    <p className="px-2.5 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-content-tertiary">
+                      Recent
+                    </p>
                   )}
-                  {isFolder && <FolderOpen className="w-3.5 h-3.5 text-content-tertiary shrink-0" />}
-                </button>
+                  <button
+                    ref={(el) => { rowRefs.current[i] = el; }}
+                    onClick={() => choose(node)}
+                    disabled={Boolean(node.disabledReason)}
+                    aria-current={node.isCurrent ? 'true' : undefined}
+                    data-picker-row={node.id}
+                    data-picker-kind={node.kind}
+                    className={`w-full flex items-center gap-2 px-2.5 min-h-[44px] rounded-lg text-left transition-colors
+                      ${node.disabledReason ? 'opacity-45 cursor-not-allowed' : 'hover:bg-bg-elevated'}
+                      ${node.isCurrent ? 'bg-accent-subtle' : ''}`}
+                  >
+                    {isFolder
+                      ? <Folder className="w-4 h-4 text-content-tertiary shrink-0" />
+                      : <FileText className="w-4 h-4 text-content-tertiary shrink-0" />}
+                    <span className="min-w-0 flex-1">
+                      {/* Two files with the same name are only distinguishable by
+                          the path underneath, which is the whole reason this picker
+                          exists. */}
+                      <span className="block text-xs font-medium text-content-primary truncate">{node.name}</span>
+                      {node.path && node.path !== node.name && (
+                        <span className="block text-[10px] text-content-tertiary truncate">{node.path}</span>
+                      )}
+                      {node.disabledReason && (
+                        <span className="block text-[10px] text-content-tertiary">{node.disabledReason}</span>
+                      )}
+                    </span>
+                    {isFolder && node.childCount > 0 && (
+                      <span className="text-[10px] text-content-tertiary shrink-0">{node.childCount}</span>
+                    )}
+                    {isFolder && <FolderOpen className="w-3.5 h-3.5 text-content-tertiary shrink-0" />}
+                  </button>
+                </React.Fragment>
               );
             })
           )}

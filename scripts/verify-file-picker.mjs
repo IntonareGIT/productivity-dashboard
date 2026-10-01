@@ -108,7 +108,10 @@ if (readFileSync(outFile, 'utf8').includes('ProductivityDB')) {
 rmSync(outDir, { recursive: true, force: true });
 
 const P = await import(`file://${outFile.replace(/\\/g, '/')}`);
-const { getChildren, searchAll, pathToResource, noteOpened, getRecentNodes } = P;
+const {
+  getChildren, searchAll, pathToResource, noteOpened, getRecentNodes,
+  lastLocation, rememberLocation, labelForResource,
+} = P;
 
 let pass = 0;
 let fail = 0;
@@ -120,7 +123,7 @@ const node = (id, kind, name) => ({ id, kind, name, childCount: 0, path: name })
 const names = (rows) => rows.map((r) => r.name).join(',');
 
 /* ============ 1. step 1 shows the subjects ============ */
-const root = await getChildren(null, 'group');
+const root = await getChildren(null, 'pdf');
 check('step 1 lists every subject',
   names(root) === 'Physics,Thermodynamics', names(root));
 check('each subject reports how many folders and files it holds',
@@ -128,14 +131,21 @@ check('each subject reports how many folders and files it holds',
   root.map((s) => `${s.name}:${s.childCount}`).join(' '));
 
 /* ============ 2. a subject WITH groups and ungrouped files ============ */
-const thermo = await getChildren(node('s1', 'subject', 'Thermodynamics'), 'group');
+const thermo = await getChildren(node('s1', 'subject', 'Thermodynamics'), 'pdf');
 // This subject has one group AND several ungrouped files (1-introduction,
-// diagram, remote-only, loose-file), which is the mixed case: both must show.
+// remote-only, loose-file), which is the mixed case: both must show. The image
+// "diagram" is ALSO ungrouped here and must NOT show, because the PDF viewer
+// cannot open it and a row that cannot open is noise, not an option.
 const thermoGroups = thermo.filter((r) => r.kind === 'group');
 const thermoFiles = thermo.filter((r) => r.kind === 'resource');
 check('a subject with groups shows those groups AND its ungrouped files together',
-  thermoGroups.length === 1 && thermoFiles.length === 4,
+  thermoGroups.length === 1 && thermoFiles.length === 3,
   `groups: ${names(thermoGroups)} files: ${names(thermoFiles)}`);
+check('the PDF view does not list an image it cannot open',
+  !thermoFiles.some((r) => r.id === 'i1'), names(thermoFiles));
+check('the image viewer DOES list that same image, from the same folder level',
+  (await getChildren(node('s1', 'subject', 'Thermodynamics'), 'image'))
+    .some((r) => r.id === 'i1'));
 check('groups are listed before files, so the way down comes first',
   thermo[0].kind === 'group');
 check('an ungrouped file carries its full path',
@@ -143,24 +153,24 @@ check('an ungrouped file carries its full path',
   thermoFiles.find((r) => r.id === 'r5')?.path);
 
 /* ============ 3. a subject whose only content is one group ============ */
-const physics = await getChildren(node('s2', 'subject', 'Physics'), 'group');
+const physics = await getChildren(node('s2', 'subject', 'Physics'), 'pdf');
 check('a subject shows its group', names(physics) === 'Intro', names(physics));
-const inIntro = await getChildren(physics[0], 'group');
+const inIntro = await getChildren(physics[0], 'pdf');
 check('the file inside that group shows',
   names(inIntro) === '1-introduction', names(inIntro));
 check('a subject with no groups at all shows only its files',
-  (await getChildren({ ...node('s3', 'subject', 'Empty'), childCount: 0 }, 'group')).length === 0);
+  (await getChildren({ ...node('s3', 'subject', 'Empty'), childCount: 0 }, 'pdf')).length === 0);
 
 /* ============ 4. the four-level drill-down ============ */
-const l1 = await getChildren(node('s1', 'subject', 'Thermodynamics'), 'group');
-const l2 = await getChildren(l1[0], 'group');
-const l3 = await getChildren(l2[0], 'group');
-const l4 = await getChildren(l3[0], 'group');
+const l1 = await getChildren(node('s1', 'subject', 'Thermodynamics'), 'pdf');
+const l2 = await getChildren(l1[0], 'pdf');
+const l3 = await getChildren(l2[0], 'pdf');
+const l4 = await getChildren(l3[0], 'pdf');
 check('level 1 shows the first folder', l1[0].name === 'Lectures');
 check('level 2 drills one deeper', l2[0].name === 'Week 1');
 check('level 3 drills one deeper', l3[0].name === 'Slides');
 check('level 4 drills one deeper', l4[0].name === 'Handouts');
-const at4 = await getChildren(l4[0], 'group');
+const at4 = await getChildren(l4[0], 'pdf');
 check('a file appears at the bottom of a four-level folder chain',
   at4.some((r) => r.id === 'r3'), names(at4));
 check('the deep file shows the whole path',
@@ -169,20 +179,20 @@ check('the deep file shows the whole path',
 
 /* ============ 5. natural sorting ============ */
 const weekFolder = l2[0];
-const inWeek = await getChildren(weekFolder, 'group');
+const inWeek = await getChildren(weekFolder, 'pdf');
 check('names sort NATURALLY, so Week 2 precedes Week 10',
   names(inWeek.filter((r) => r.kind === 'resource')) === 'Week 2,Week 10',
   names(inWeek.filter((r) => r.kind === 'resource')));
 
 /* ============ 6. a file not on this device ============ */
-const loose = await getChildren(node('s1', 'subject', 'Thermodynamics'), 'group', 'r4');
+const loose = await getChildren(node('s1', 'subject', 'Thermodynamics'), 'pdf', 'r4');
 void loose;
-const s1files = (await getChildren(node('s1', 'subject', 'Thermodynamics'), 'group'));
+const s1files = (await getChildren(node('s1', 'subject', 'Thermodynamics'), 'pdf'));
 const remote = s1files.find((r) => r.id === 'r4');
 check('a file with no blob is shown', !!remote || true, 'it lives in the folder list');
 // Put a blob-less file directly in the subject so it is on this level.
 globalThis.__S.resources.get('r5').blob = null;
-const withRemote = await getChildren(node('s1', 'subject', 'Thermodynamics'), 'group');
+const withRemote = await getChildren(node('s1', 'subject', 'Thermodynamics'), 'pdf');
 const remoteRow = withRemote.find((r) => r.id === 'r5');
 check('a file whose bytes are not on this device is shown dimmed',
   remoteRow?.disabledReason === 'File not available on this device',
@@ -194,7 +204,7 @@ check('a file WITH bytes is not disabled',
 globalThis.__S.resources.get('r5').blob = { size: 1, type: 'application/pdf' };
 
 /* ============ 7. search across EVERY subject and group ============ */
-const hits = await searchAll('1-introduction', 'group');
+const hits = await searchAll('1-introduction', 'pdf');
 check('search finds both same-named files', hits.filter((h) => h.kind === 'resource').length === 2,
   names(hits));
 const paths = hits.filter((h) => h.kind === 'resource').map((h) => h.path).sort();
@@ -202,12 +212,12 @@ check('each hit shows a DISTINCT full path',
   paths[0] === 'Physics / Intro' && paths[1] === 'Thermodynamics', paths.join('  |  '));
 check('the paths are what tell the two apart', new Set(paths).size === 2);
 check('a search miss returns nothing rather than everything',
-  (await searchAll('zzzz-nope', 'group')).length === 0);
+  (await searchAll('zzzz-nope', 'pdf')).length === 0);
 check('an empty query returns nothing, so the caller can restore its view',
-  (await searchAll('   ', 'group')).length === 0);
+  (await searchAll('   ', 'pdf')).length === 0);
 
 /* ============ 8. search finds nested groups too ============ */
-const gHits = await searchAll('Week', 'group');
+const gHits = await searchAll('Week', 'pdf');
 check('search reaches groups at depth', gHits.some((g) => g.kind === 'group'), names(gHits));
 
 /* ============ 8. start at the current file's location ============ */
@@ -217,7 +227,7 @@ check('the path to a deeply nested file lists subject then every folder',
   pathToDeep.map((p) => p.name).join(','));
 check('the last element of that path is the file folder, so the picker opens THERE',
   pathToDeep[pathToDeep.length - 1].id === 'g4');
-const atCurrent = await getChildren(pathToDeep[pathToDeep.length - 1], 'group', 'r3');
+const atCurrent = await getChildren(pathToDeep[pathToDeep.length - 1], 'pdf', 'r3');
 check('the current file is highlighted when the picker opens on it',
   atCurrent.some((r) => r.id === 'r3' && r.isCurrent === true));
 check('other files at that level are not marked current',
@@ -247,18 +257,132 @@ check('after opening seven files only the last five are remembered',
   getRecentNodes().length === 5, `${getRecentNodes().length}`);
 check('the recent list shows a path for each entry',
   getRecentNodes().every((r) => typeof r.path === 'string' && r.path.length > 0));
+// A Recent row has to be TAPPABLE. Storing only the id and name (which is what
+// the first version did) made the section five dead labels, because there was
+// no resource to hand back to the caller.
+check('a recent row carries the resource, so tapping it can open the file',
+  getRecentNodes().every((r) => !!r.resource && r.kind === 'resource'));
 
 /* ============ 10. per-viewer filtering ============ */
-const asPdf = await getChildren(node('s1', 'subject', 'Thermodynamics'), 'group');
+const asPdf = await getChildren(node('s1', 'subject', 'Thermodynamics'), 'pdf');
 check('the PDF view lists PDF rows', asPdf.some((r) => r.id === 'r1'));
-const imageHits = await searchAll('diagram', 'resource');
+const imageHits = await searchAll('diagram', 'image');
 check('the image view finds the image', imageHits.some((h) => h.id === 'i1'), names(imageHits));
-check('the image view hides a PDF', !(await searchAll('1-introduction', 'resource'))
+check('the image view hides a PDF', !(await searchAll('1-introduction', 'image'))
   .some((h) => h.id === 'r1'));
 check('the PDF view hides the image',
-  !(await searchAll('diagram', 'group')).some((h) => h.id === 'i1'));
+  !(await searchAll('diagram', 'pdf')).some((h) => h.id === 'i1'));
 
-/* ============ 11. the component is a thin renderer over this data ============ */
+/* ============ 11. a blob-less file of the RIGHT type is still listed ============ */
+// The distinction the two rules make: WRONG type is hidden, RIGHT type with no
+// bytes is shown dimmed. Hiding a synced file would be worse than showing it,
+// because the user would conclude the file does not exist at all.
+const remoteOnly = await getChildren(node('s1', 'subject', 'Thermodynamics'), 'pdf');
+const remoteRow2 = remoteOnly.find((r) => r.id === 'r4');
+check('a file synced from another device is still listed, not hidden',
+  !!remoteRow2, names(remoteOnly));
+check('and it is dimmed with the reason it cannot be opened',
+  remoteRow2?.disabledReason === 'File not available on this device',
+  remoteRow2?.disabledReason ?? 'not listed');
+check('search omits it rather than offering a row that cannot open',
+  !(await searchAll('remote-only', 'pdf')).some((h) => h.id === 'r4'));
+
+/* ============ 12. search covers subjects as well as groups and files ============ */
+const subjectHits = await searchAll('Thermo', 'pdf');
+check('a search matches a SUBJECT name, not only files and folders',
+  subjectHits.some((h) => h.kind === 'subject' && h.id === 's1'), names(subjectHits));
+// 'e' deliberately matches all three kinds at once, which is the only way to
+// assert the ORDER rather than just that each kind is present. A query that
+// hits one kind alone cannot tell files-first from subjects-first.
+const mixedKinds = (await searchAll('e', 'pdf')).map((h) => h.kind);
+check('files sort before folders, and folders before subjects',
+  mixedKinds.length > 0 && mixedKinds[0] === 'resource'
+  && mixedKinds[mixedKinds.length - 1] === 'subject'
+  && mixedKinds.indexOf('group') > mixedKinds.indexOf('resource')
+  && mixedKinds.lastIndexOf('group') < mixedKinds.lastIndexOf('subject'),
+  mixedKinds.join(','));
+
+/* ============ 13. counts per node ============ */
+// The badge has to describe what a tap reveals. Counting only the direct files
+// would report "0" for a folder whose files are all two levels down, which
+// reads as broken.
+// "Lectures" holds ONE subgroup and no files of its own, so a correct count is
+// 1. A count that ignored subgroups would say 0, which is what made the first
+// version of this wrong.
+const lecturesRow = (await getChildren(node('s1', 'subject', 'Thermodynamics'), 'pdf'))
+  .find((r) => r.id === 'g1');
+check('a folder counts its subgroups even when it holds no files itself',
+  lecturesRow.childCount === 1, `Lectures: ${lecturesRow.childCount}`);
+// "Week 1" holds one subgroup (Slides) AND two files directly, so 3.
+const weekRow = (await getChildren(node('g1', 'group', 'Lectures'), 'pdf'))
+  .find((r) => r.id === 'g2');
+check('a folder counts subgroups AND its own files together',
+  weekRow.childCount === 3, `Week 1: ${weekRow.childCount} (1 subgroup + 2 files)`);
+check('a file counts nothing, so its badge is never shown',
+  weekRow.childCount > 0 && (await getChildren(weekRow, 'pdf'))
+    .filter((r) => r.kind === 'resource').every((r) => r.childCount === 0));
+// The subject badge counts the same way: its top-level folders plus its own
+// ungrouped files, and nothing from deeper down. Thermodynamics has one folder
+// (Lectures) and three ungrouped files the PDF viewer can list (1-introduction,
+// remote-only and loose-file); the ungrouped image is excluded because the PDF
+// viewer cannot open it.
+const thermoRow = root.find((s) => s.id === 's1');
+check('a subject counts its top-level folders plus its ungrouped files',
+  thermoRow.childCount === 4, `Thermodynamics: ${thermoRow.childCount} (1 folder + 3 files)`);
+check('a subject count follows the viewer, so the image viewer sees a different one',
+  (await getChildren(null, 'image')).find((s) => s.id === 's1')?.childCount === 3,
+  `Thermodynamics images: ${(await getChildren(null, 'image')).find((s) => s.id === 's1')?.childCount} (1 folder + the image + the blob-less row)`);
+
+/* ============ 14. the saved order wins over the name ============ */
+// Groups carry a manual `order`. The brief asks for natural sorting "and the
+// saved order if one exists", so a reordered group must appear in its new place
+// rather than snapping back to alphabetical.
+globalThis.__S.resourceGroups.get('g2').order = 99;
+globalThis.__S.resourceGroups.get('g3').order = 0;
+globalThis.__S.resourceGroups.get('g4').order = 1;
+const ordered = await getChildren(node('g1', 'group', 'Lectures'), 'pdf');
+const orderedNames = ordered.filter((r) => r.kind === 'group').map((r) => r.name);
+check('with a saved order, folders follow the order the user set',
+  orderedNames[0] === 'Week 1', orderedNames.join(','));
+globalThis.__S.resourceGroups.get('g2').order = 0;
+globalThis.__S.resourceGroups.get('g3').order = 0;
+globalThis.__S.resourceGroups.get('g4').order = 0;
+
+/* ============ 15. each pane remembers its own place ============ */
+// Two split panes browse independently. A single global "last location" would
+// mean browsing in pane 1 silently moves pane 2, which is exactly the coupling
+// the brief rules out.
+check('a slot with no history has no remembered location', lastLocation('pane-1') === null);
+rememberLocation('pane-1', [
+  { id: 's1', kind: 'subject', name: 'Thermodynamics', childCount: 0, path: 'Thermodynamics' },
+  { id: 'g1', kind: 'group', name: 'Lectures', childCount: 0, path: 'Lectures', group: {} },
+]);
+rememberLocation('pane-2', [
+  { id: 's2', kind: 'subject', name: 'Physics', childCount: 0, path: 'Physics' },
+]);
+check('the remembered path comes back for the slot that set it',
+  lastLocation('pane-1')?.map((p) => p.name).join(',') === 'Thermodynamics,Lectures');
+check('the OTHER pane keeps its own, so panes never move each other',
+  lastLocation('pane-2')?.map((p) => p.name).join(',') === 'Physics');
+check('remembering does not hand back the caller its own mutable array', (() => {
+  const a = lastLocation('pane-1');
+  a.push({ id: 'x', kind: 'subject', name: 'x', childCount: 0, path: 'x' });
+  return lastLocation('pane-1').length === 2;
+})());
+rememberLocation('pane-3', []);
+check('the root is not a place worth returning to, so it is not remembered',
+  lastLocation('pane-3') === null);
+
+/* ============ 16. the file label carries its path ============ */
+const label = await labelForResource('r3');
+check('a file can be labelled with its title AND its full path',
+  label.title === 'deep-notes'
+  && label.path === 'Thermodynamics / Lectures / Week 1 / Slides / Handouts',
+  `${label.title} :: ${label.path}`);
+check('an unknown file yields no label rather than throwing',
+  (await labelForResource('nope')) === null);
+
+/* ============ 17. the component is a thin renderer over this data ============ */
 const dataSrc = readFileSync('src/features/library/components/filePickerData.ts', 'utf8');
 const compSrc = readFileSync('src/features/library/components/FilePicker.tsx', 'utf8');
 check('the data layer queries the tables', /db\.subjects\.toArray/.test(dataSrc)
@@ -276,6 +400,20 @@ check('keyboard: arrows, Enter, Backspace and Escape are handled',
   && /'Enter'/.test(compSrc) && /'Backspace'/.test(compSrc) && /'Escape'/.test(compSrc));
 check('every row shows the file name with its path beneath',
   /node\.path && node\.path !== node\.name/.test(compSrc));
+check('the Recent section is rendered above the subjects, as a heading',
+  /i === recentCount/.test(compSrc) && />\s*Recent\s*</.test(compSrc));
+check('the Recent section is suppressed while searching, where it would mislead',
+  /!query\.trim\(\) && path\.length === 0/.test(compSrc));
+check('the component takes a slotKey so two panes keep separate state',
+  /slotKey/.test(compSrc) && /lastLocation\(slotKey\)/.test(compSrc));
+check('the remembered location is written from the component too',
+  /rememberLocation\(slotKey/.test(compSrc));
+check('the picker falls back to the remembered location when nothing is open',
+  /lastLocation\(slotKey\) \?\? \[\]/.test(compSrc));
+check('a dimmed row is genuinely disabled, not just styled that way',
+  /disabled=\{Boolean\(node\.disabledReason\)\}/.test(compSrc));
+check('the current open file is marked for the row renderer',
+  /aria-current=\{node\.isCurrent/.test(compSrc));
 
 console.log(`\nfile-picker: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
