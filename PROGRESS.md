@@ -1,6 +1,78 @@
-# Notes: default titles from the subject, and notes in the file picker
+# Fix: the AI chat dies with 400 INVALID_ARGUMENT
 
-## Step 1 diagnosis: the 400 INVALID_ARGUMENT
+**Branch:** `history-fix` (from `nested-groups-picker`). **`main` was NOT
+touched, merged, or force-pushed.** Working tree was clean at the start, so
+there was nothing to checkpoint.
+
+## Summary
+
+| Step | What it asked for | Status | Evidence |
+| --- | --- | --- | --- |
+| 1 | Diagnose, enumerate every history-mutating step, reproduce cases (a)-(h) | **done** | `verify:history` reproduces 7 of 9 cases broken BEFORE the fix; findings written to PROGRESS.md before any code changed. |
+| 2 | One `normalizeHistoryForProvider` every request goes through | **done** | Called once in `chatCompletion`, so main path, retries, fallback and tool rounds are covered by construction. |
+| 3 | Trim at turn boundaries | **done** | `trimToWindow`. Valid at every one of ~90 cut positions. |
+| 4 | Never save a broken sequence | **done** | `repairStoredSession()` on every turn exit. |
+| 5 | Repair existing chats on load | **done** | `selectSession` repairs; nothing is deleted. |
+| 6 | One-shot safety net for the 400 | **done** | `isTurnOrder400` + `simplifyHistoryForRetry`, fires at most once. |
+| 7 | Verify scripts for (a)-(h) and the extras | **done** | `verify:history` 30/30, wired into `npm run verify`. |
+| Docs | PROJECT.md history rules, this file | **done** | - |
+
+`tsc -b` 0, `npm run verify` clean, `npm run build` clean after every step.
+
+## Step 1: the cause
+
+The full enumeration and the reproduction table are above this section, written
+before any code changed. In short: **`closeDanglingCalls()` appended a synthetic
+response immediately after the assistant call**, so a parallel tool call whose
+sibling already had a stored response was emitted as `[c2, c1]`. Gemini rejects
+that, and because the rows are stored, every later message in that chat failed.
+
+**I could not inspect your actual broken chat.** It lives in your browser's
+IndexedDB, not in this repository, and there is no browser here. PROGRESS.md
+includes a DevTools snippet that logs role and call ids only, never content.
+
+## Three bugs my own fix introduced, and how each was caught
+
+Worth recording, because all three passed a "is it valid" check that was too
+weak to notice:
+
+1. **I pushed the tool responses BEFORE the call.** Caught by the first run of
+   the new tests.
+2. **The orphan filter deleted every response after the first.** It tested only
+   the immediately preceding message, but in `call(c1,c2)` answered by
+   `resp(c1), resp(c2)` the second response's predecessor is the first response,
+   which carries no calls. Caught by case (i).
+3. **My ORACLE had the same bug as my code.** It also checked only the previous
+   message, so it agreed with the broken output. Fixed by walking back over the
+   whole run of tool rows. An oracle that shares the assumption it is checking
+   verifies nothing.
+
+## What I could not test against the real Gemini API
+
+**Nothing here was tested against a live provider.** No API key and no browser
+are available in this environment. Specifically unverified:
+
+1. That Gemini really does accept every sequence my validator calls valid. The
+   validator encodes the rules from the error message and from the OpenAI
+   shape; the provider is the only authority on the full set.
+2. That the safety net's plain-text summary is good enough for the model to
+   continue usefully after losing the tool structure.
+3. That the exact wording of the 400 is stable enough for `isTurnOrder400` to
+   keep matching. It matches several phrasings of the same sentence, but a
+   provider that reworded it would silently stop triggering the net.
+4. Whether `repairStoredSession` handles a real interrupted turn the way the
+   fixtures do.
+
+**What I must test:**
+1. Open the previously broken chat and send a plain "hi". It should work.
+2. Press Stop mid tool-round, then send another message.
+3. Open a Confirm card and press Stop, then send another message.
+4. Check the console for `[ai] repaired conversation history` lines.
+5. Confirm no message is ever duplicated or lost after a repair.
+
+---
+
+## Step 1 diagnosis (written BEFORE any code was changed)
 
 **Where the request messages are built.** `chatRepo.buildTranscript(rows, 20)` reads
 stored rows, then `aiClient.toWire()` serializes them. Both are reached from

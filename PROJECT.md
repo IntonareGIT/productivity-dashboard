@@ -853,16 +853,33 @@ Two related invariants the same loop depends on:
      new message while a confirmation is open resolves the pending call as
      declined first; and a turn mixing gated and ungated calls now executes the
      ungated ones before pausing, instead of `break`ing past all of them.
-  3. `buildTranscript()` ends with `closeDanglingCalls()`, a payload-only
-     backstop for rows written by an older build or restored from a backup.
-     Any unanswered id gets a synthetic response saying the action did not run,
-     so the model can recover on its own. It never writes to the database, so
-     it cannot invent history.
-- History is trimmed with `buildTranscript()`, never a bare `slice(-N)`, which
-  could cut between a `tool_calls` message and the results answering it. The
-  window walks back to the parent turn, and orphaned tool *results* (whose
-  parent fell outside the window) are dropped, since an unpaired
-  `tool_call_id` is also rejected.
+3. `normalizeHistoryForProvider()` (`historyNormalizer.ts`) is the ONE place
+   that decides the turn order, and every request goes through it: the main
+   path, each retry, the fallback model and every tool round. It guarantees the
+   sequence is `user -> model call -> function response -> model answer`, that
+   calls are answered in CALL ORDER, that an unanswered call gets a synthetic
+   response, that an orphan response is dropped, that there are no empty or
+   same-role-in-a-row turns, and that the request both starts and ends
+   correctly. It works on a COPY and logs what it repaired.
+4. The session is repaired AT THE SOURCE too. `repairStoredSession()` runs when
+   a turn ends by any route (success, Stop, error, retries exhausted) and when a
+   chat is opened, so an unanswered call is answered in the database rather than
+   patched on every request. Nothing is ever deleted.
+5. As a last resort, a 400 whose MESSAGE names turn order is retried ONCE with
+   the system prompt, the last user message and a plain-text summary of the
+   earlier turns. It is matched on the message, not the status, so a 400 for a
+   missing `thought_signature` or a bad model name is never thrown away.
+- History is trimmed by `trimToWindow()` at TURN BOUNDARIES, never a bare
+  `slice(-N)`. The cut is walked back until the window starts on a user turn, so
+  it can never open on a model turn nor split a `tool_calls` message from the
+  results answering it. The window may come out SHORTER than the limit, which is
+  the correct trade: a refused request returns no answer at all.
+- **The bug this fixed.** `closeDanglingCalls()` appended a synthetic response
+  immediately after the call, so a parallel call whose sibling already had a
+  stored response went out as `[c2, c1]`. Gemini rejects that with
+  `INVALID_ARGUMENT: Please ensure that function call turn comes immediately
+  after a user turn or after a function response turn`, and because those rows
+  are stored, every later message in that chat failed too.
 
 Regression coverage: `node scripts/verify-thought-signature.mjs` drives the real
 `chatCompletion()` against a mock Gemini endpoint that returns HTTP 400 on an
