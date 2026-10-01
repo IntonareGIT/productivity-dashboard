@@ -21,6 +21,7 @@
     "verify:calendartools": "node scripts/verify-calendar-tools.mjs",
     "verify:nestedgroups": "node scripts/verify-nested-groups.mjs",
     "verify:nestedgroupsai": "node scripts/verify-nested-group-tools.mjs",
+    "verify:filepicker": "node scripts/verify-file-picker.mjs",
     "shots": "node scripts/shots-note-editor.mjs"
   },
   "dependencies": {
