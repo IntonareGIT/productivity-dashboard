@@ -1,5 +1,75 @@
 # Notes: default titles from the subject, and notes in the file picker
 
+## Step 1 diagnosis: the 400 INVALID_ARGUMENT
+
+**Where the request messages are built.** `chatRepo.buildTranscript(rows, 20)` reads
+stored rows, then `aiClient.toWire()` serializes them. Both are reached from
+`useAssistantStore.send()` (and `confirmPending()`), which calls
+`chatCompletion()`. **Nothing normalizes the turn order.**
+
+### Every step that can change the history before it is sent
+
+1. **`buildTranscript` last-N window** (`CONTEXT_WINDOW = 20`). It walks back only
+   when a tool result in the tail has a parent **earlier** than the window.
+2. **`closeDanglingCalls`** adds a synthetic response for an unanswered call.
+3. **`capToolResult`** truncates a long tool result. Content only, never order.
+4. **`toWire`** passes an assistant tool call through from `raw` verbatim, to keep
+   Gemini's `thought_signature`. Shape only, never order.
+5. **Stop** persists a synthetic "stopped" tool row only when a Confirm card is
+   open. A Stop in the middle of an ungated tool round writes nothing.
+6. **Error / retries exhausted** writes no message at all.
+7. **`send` retry** (`isRetry`) correctly skips re-writing the user message.
+8. **Confirm flows** — confirm, cancel and Stop-with-pending all write a tool row.
+9. **Model switching** starts a fresh session, so no cross-provider replay.
+10. **No base64 stripping exists** in this path. I searched for it and found none.
+
+### Reproduced: which cases are invalid TODAY
+
+`node scripts/verify-history-normalizer.mjs` builds each case and checks it
+against an oracle that enforces the provider's rules.
+
+| Case | Valid today? | Why |
+| --- | --- | --- |
+| (a) window starts on a tool call | **BROKEN** | Starts with an assistant turn; the call follows "nothing". |
+| (b) call with no result (stopped) | ok | `closeDanglingCalls` covers this one. |
+| (c) result with no preceding call | **BROKEN** | Orphan result dropped, leaving two user turns in a row. |
+| (d) two assistant turns in a row | **BROKEN** | Sent as-is. |
+| (e) empty assistant message | **BROKEN** | Sent as-is. |
+| (f) partial reply between call and result | **BROKEN** | The result no longer follows its call. |
+| (g) Confirm pending, result later | ok | Stored later as a tool row. |
+| (h) duplicate user message | **BROKEN** | Two user turns in a row. |
+| (i) parallel calls, second stopped | **BROKEN** | Responses emitted as `[c2, c1]`. |
+
+### The cause in your case
+
+**(i), with (a) as the amplifier.** The reported symptom is a plain "hi" failing,
+which rules out anything tool-specific *in that request*. The likeliest cause is
+**(i)**: a turn with two parallel tool calls where only the first was answered
+(stop, error, or retries exhausted). `closeDanglingCalls` appends the synthetic
+response for the second call **immediately after the assistant turn**, while the
+loop continues and appends the *real* first response afterwards. The wire order
+becomes `call(c1,c2), response(c2), response(c1)`. Gemini rejects that with
+exactly your message, and because the poisoned rows are in the database, **every
+later message fails too** - which is why "hi" now fails.
+
+Note (b) is handled but (i) is not, because `closeDanglingCalls` only scans
+*consecutive* tool turns and only ever appends, never inserts before an existing
+response.
+
+### Checking your actual broken chat
+
+I cannot: the chat history lives in your browser's IndexedDB, not in this repo,
+and there is no browser here. **Please run this in DevTools on the broken chat**,
+which logs roles and ids only, never content:
+
+```js
+const rows = await db.chatMessages.where('sessionId').equals(sessionId).toArray();
+rows.sort((a,b)=>a.createdAt.localeCompare(b.createdAt)).forEach((m,i)=>
+  console.log(i, m.role, m.toolCallIds ?? m.toolCallId ?? ''));
+```
+
+Look for an assistant row whose `toolCallIds` has more than one entry, followed by
+fewer `tool` rows than it asked for. If you find one, (i) is confirmed.
 **Branch:** `nested-groups-picker`. **`main` was NOT touched, merged, or
 force-pushed.** Working tree was clean at the start, so there was nothing to
 checkpoint.
