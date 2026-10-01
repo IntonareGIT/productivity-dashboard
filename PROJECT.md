@@ -325,8 +325,9 @@ export interface ResourceGroup {
   id: string;              // UUID primary key
   subjectId: string;       // FK -> subjects.id
   name: string;            // User-given group name
-  order: number;           // Manual ordering within a subject
+  order: number;           // Manual ordering among SIBLINGS (v14: reused, not a new field)
   createdAt: string;       // ISO 8601
+  parentGroupId?: string | null; // v14: FK -> resourceGroups.id. null/absent = top level.
 }
 ```
 
@@ -335,20 +336,50 @@ hierarchy. It is deliberately *not* a child of `topics`: a grouped resource
 keeps its own `topicId`, so notes, split-with-notes and `deleteTopicCascade`
 are unaffected, and grouping *across* topics ("every past paper") works.
 
-Invariants, all enforced in `libraryRepo.ts` and pinned by
-`scripts/verify-resource-groups.mjs`:
+#### 1.3.1.1 Nesting (v14)
 
-- A group belongs to exactly one subject; it is never re-homed.
-- Only a resource **of that same subject** may join it — checked in
-  `moveResourceToGroup`, `moveResourcesToGroup` and `saveResource`.
-- A resource is in **at most one** group, or none.
-- **Deleting a group ungroups its members and never deletes them.** Losing a
-  folder must not lose the work in it.
-- Changing a resource's subject clears its `groupId`.
-- Deleting a subject deletes its groups (`deleteSubjectCascade`).
-- The v10 upgrade only *normalises*: it clears a `groupId` that points at a
-  missing group or a group of another subject, and drops groups whose subject
-  is gone. Existing resources simply have no `groupId` and stay ungrouped.
+`parentGroupId` makes the lane itself a tree. A group sits either at a subject's
+top level or inside exactly one other group of that same subject, up to
+`MAX_GROUP_DEPTH = 5` levels.
+
+**Every rule lives in one module, `src/features/library/groupTree.ts`**, and is
+shared by the Library UI, the repository and the AI tools, so the three can never
+disagree about what is legal. It is pure: no Dexie, no React. The repository
+validates through it, so a rule cannot be enforced in the UI but skipped by the
+assistant.
+
+Invariants, pinned by `scripts/verify-nested-groups.mjs` (91 checks):
+
+- A group belongs to exactly one subject and is never re-homed.
+- A parent must belong to **the same subject** as its child. The parent is
+  resolved from the whole table, so a cross-subject id is reported as such
+  rather than as a missing parent.
+- **No cycles.** A group can never become its own ancestor, via a chain of any
+  length.
+- **Depth is capped at 5.** The check accounts for the height of a whole
+  *subtree* being moved, not just the moved group's own level.
+- A name must be **unique among siblings only**. The same name in two different
+  branches is allowed, which is why every tool and picker result carries a full
+  path rather than a bare name.
+- **Deleting a group deletes only the group.** Its child groups and its
+  resources move **up one level** to where it was, at any depth. The confirmation
+  states both counts before the user commits. Losing a folder must not lose the
+  work in it, nor the subfolders.
+- Deleting a subject removes its groups at **every** depth.
+- A resource subject change clears a now-invalid `groupId`.
+
+The v14 upgrade is **additive and normalising**: it clears an impossible
+`parentGroupId` (a parent that is gone, in another subject, self-referential, or
+already in a cycle) and writes an explicit `null` where the field was absent. It
+never rewrites a name, an order or a subject, and never deletes a row, so a
+repaired group surfaces at the top level rather than vanishing. It adds **no
+index**, because a subject's whole group set is small and read together.
+
+**`resourceGroups` syncs unchanged.** The new field is ordinary row metadata and
+needs no Dexie Cloud action of any kind: no new database, no console change, no
+migration script. Existing rows simply have no `parentGroupId`, which already
+means top level, and existing group ids stay valid everywhere they are
+referenced.
 
 `resourceGroups` is metadata, so it **syncs**: it is deliberately absent from
 `UNSYNCED_TABLES` in `cloudConfig.ts`, and the file-blob rules (`BLOB_MODE`,
@@ -1528,6 +1559,50 @@ panes at once with completely independent state. The assistant pane mounts the
 shared `AssistantChat` (same history, same tools); the notes pane mounts the
 shared `MarkdownNotes` and writes through the same `updateTopicNotes()`.
 
+### 1.3.3 The drill-down file picker (v14, data layer + component)
+
+**Why it exists.** A flat list of file names stops working the moment files are
+called `1-introduction.pdf`. With subjects, nested groups and several lecture
+series, that name repeats, and a `<select>` of titles cannot say which one is
+which. So the picker drills: **subject, then groups at any depth, then files**,
+and every row shows its full path.
+
+**Two files, one concern each.** `filePickerData.ts` owns every rule and never
+touches React; `FilePicker.tsx` renders and holds no query. That split is what
+makes the rules testable without a DOM, and it is asserted directly
+(`verify-file-picker` fails if the component ever calls `db.`).
+
+- `getChildren(node, want, currentId)` — one level of children. A subject shows
+  its top-level groups **and** its ungrouped files together, so a subject with
+  no folders goes straight to its files. A group shows its subgroups and the
+  resources directly inside it. An empty list is a real answer, not a failure.
+- `searchAll(query, want)` — every subject and group at once, each hit carrying
+  its full path.
+- `pathToResource(id)` — the breadcrumb from the subject down to a file,
+  **including the file's own group**, so the picker opens where the user is.
+- `getRecentNodes()` / `noteOpened()` — the last five files, newest first.
+
+Decisions worth stating:
+
+- **Navigation is one array, the path from the root.** Not a variable per level.
+  Any depth therefore works with the same code, and Back is "drop the last
+  element". Adding a sixth level would need no new state.
+- **Natural sort, everywhere.** `Week 2` precedes `Week 10`.
+- **A file whose bytes are not on this device is shown, dimmed, with the literal
+  reason "File not available on this device."** File blobs are not synced (see
+  1.13), so such a row is real. Hiding it would make files silently disappear
+  depending on which device you are on; showing it plainly explains itself.
+- **Per-viewer filtering** via `want`: `'group'` lists PDFs, `'resource'` lists
+  images, and each hides what its viewer cannot render.
+- **Rendered in a portal** on the shared `Z` scale, so no scrolling pane or card
+  can clip it. Bottom sheet on a phone, centred dialog on a desktop. Rows are
+  44px; arrows, Enter, Backspace and Escape work.
+
+**Not yet wired into any selector.** `PaneHeader`'s document dropdown is still
+the flat `<select>`, because that one control multiplexes PDFs, images *and*
+notes and the picker models subject → group → file. See PROGRESS.md for the
+concrete next step and the reasoning.
+
 ---
 
 ## 2. Folder Structure
@@ -1700,6 +1775,17 @@ shared `MarkdownNotes` and writes through the same `updateTopicNotes()`.
 
 ## 4. Phase Log
 
+- **Nested groups + file picker (v14):** `resourceGroups.parentGroupId` makes
+  groups a tree, five levels deep. All the rules live in one pure module,
+  `library/groupTree.ts`, shared by the Library tree, the repository and the AI
+  tools, so the three cannot disagree. `GroupTree.tsx` renders the indented
+  Library tree; the group's "move" control offers only valid destinations, so an
+  illegal move cannot be reached. Deleting a group keeps its subgroups and
+  resources, moving them up one level. The AI gained `moveGroup`, path-aware
+  resolution and paths on every result. `filePickerData.ts` +
+  `FilePicker.tsx` provide the drill-down picker, not yet swapped into the
+  selectors. Verified by `verify-nestedgroups` (91), `verify-nestedgroupsai`
+  (61) and `verify-filepicker` (49).
 - **Phase 1 — Shell + Dashboard:** scaffold (Vite + Tailwind + Dexie + PWA),
   app shell (sidebar/top bar/bottom nav), theme system (4 themes × light/dark,
   status mapping), routing to page stubs, bento Dashboard (today strip,

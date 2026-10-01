@@ -7,11 +7,81 @@ was NOT touched, merged, or force-pushed.**
 
 | Phase | What it asked for | Status | Evidence |
 | --- | --- | --- | --- |
-| 1 | Nested groups (data and Library UI) | **done** | `npm run verify:nestedgroups` 91/91. |
-| 2 | AI tools updated for nesting | see below | |
-| 3 | Drill-down file picker | see below | |
+| 1 | Nested groups, data + Library UI | **done** | `verify:nestedgroups` 91/91, `tsc -b`, `build`, full `verify` all clean. |
+| 2 | AI group tools updated for nesting | **done** | `verify:nestedgroupsai` 61/61. |
+| 3 | Drill-down file picker | **data layer + component done; NOT yet swapped into the selectors** | `verify:filepicker` 49/49. See "What is not done". |
 
-**Reverted:** nothing. **Partly done:** nothing.
+**Reverted:** nothing. **Partly done:** Phase 3, and only in the sense listed below.
+
+## What is NOT done, and why
+
+**The picker is not wired into any selector yet.** It is built and tested, but
+`PaneHeader`'s document dropdown is still the old flat `<select>`. I stopped
+there deliberately rather than ship a half-swap:
+
+- That one control multiplexes **PDFs, images AND notes** in a single
+  `<select>` with three optgroups. The picker models
+  `subject -> group -> file`, which is what the brief specified, so adopting it
+  there means teaching the picker about `topic` as a fourth node kind first.
+  Doing that blind, with no browser to click in, is exactly how a working
+  selector becomes a broken one.
+- Swapping it also invalidates real assertions in `verify-split-view.mjs` that
+  pin the current `<select>` markup. I would rather leave those passing and
+  honest than have them "updated" to match a change I could not actually test.
+
+**Next step, concretely:** add a `topic` node kind to `filePickerData.ts`,
+render the notes optgroup as real rows, then replace the `<select>` in
+`PaneHeader` with `<FilePicker want="group" | "resource">` plus a separate notes
+path. Update `verify-split-view.mjs` in the same commit.
+
+**Nothing was browser-tested.** No Playwright, no manual pass. The UI claims
+below are read from the source and asserted statically, not observed.
+
+### The other resource selectors, still flat
+
+Audited, left alone on purpose, because swapping them needs browser testing:
+
+| Where | State |
+| --- | --- |
+| `MoveToGroupMenu` | **Updated to a tree.** Indents by depth, built from the shared `buildGroupTree`. |
+| `ResourceModal` group `<select>` | Still flat. A simple one-level list, so it is not broken, only less clear at depth. |
+| `PaneHeader` document `<select>` | Still flat. See above. |
+| `ResourceViewer` | Still flat. |
+| AI `searchLibrary` | **Updated.** Results now carry `groupId`, `groupPath` (id + name per level) and `groupPathString`. |
+
+## Bugs the new tests caught (and I fixed)
+
+These are worth calling out, because each was found by a test rather than by
+reading the code:
+
+1. **A cross-subject parent was reported as a missing one.** `saveResourceGroup`
+   only read the subject's own groups, so a parent id from another subject was
+   invisible and the user was told "that parent group no longer exists". The
+   parent is now resolved from the whole table, so the message is correct.
+2. **The AI reported the same thing.** `moveGroup` resolved its destination
+   against the subject's slice, so a cross-subject move came back as "no group
+   matches <id>". The full list is passed now, and the error names the real
+   cause.
+3. **The picker opened one level too high.** `pathToResource` listed the
+   ancestors of a file's group but not the group itself, so the current file was
+   never on screen and its highlight had nothing to mark.
+4. **`tsc -b` reported nothing but `npm run build` failed.** The incremental
+   build info was stale. I now use `tsc -b --force`, and the Phase 3 commit was
+   amended after the build caught a real type error.
+
+## Two decisions worth confirming
+
+- **`MAX_GROUP_DEPTH = 5`** is my reading of "5 levels deep". If you meant five
+  levels *below* the subject, that is `MAX_GROUP_DEPTH = 6` and one line in
+  `groupTree.ts`.
+- **The v14 upgrade normalises, it does not migrate.** It clears an impossible
+  `parentGroupId` (a parent that is gone, in another subject, self-referential,
+  or already part of a cycle) and writes an explicit `null` where the field was
+  absent. It never rewrites a name, an order or a subject, and never deletes.
+  So a repaired group surfaces at the top level rather than vanishing. If you
+  would rather it did nothing at all, a no-op `void tx;` upgrade is correct
+  here, because a missing `parentGroupId` already means "top level".
+
 
 ### Dexie Cloud: does the new field need any manual action?
 
