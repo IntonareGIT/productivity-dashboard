@@ -30,6 +30,9 @@ export interface EventInput {
   // kind + period (v12, additive)
   eventKind?: EventKind | null;
   period?: number | null;
+  // Bulk series grouping (v13, additive). Set by createRecurringEvents so a
+  // whole series can be listed and deleted together.
+  seriesId?: string | null;
 }
 
 /** Editing/deleting a series asks which part is affected. */
@@ -70,26 +73,39 @@ function normalize(input: EventInput): NormalizedFields {
     // than persisted: the field stays honest about what it represents.
     eventKind: input.eventKind ?? null,
     period: usesPeriod(input.eventKind) ? normalizePeriod(input.period) : null,
+    // normalize() builds an EXPLICIT field list, so anything not named here is
+    // silently dropped on write. seriesId had to be added or a bulk series was
+    // created with no grouping and could never be deleted as a unit.
+    seriesId: input.seriesId ?? null,
   };
 }
 
 /** Create or update a calendar event (rule stored once on the parent row). */
-export async function saveEvent(input: EventInput): Promise<void> {
+/**
+ * Insert or update one event. Returns the row's id.
+ *
+ * The id is returned because the assistant's tools have to report the
+ * `{ kind, id, name }` of what they created, and a freshly created event has no
+ * id the caller could otherwise know. Updates return the id they were given.
+ */
+export async function saveEvent(input: EventInput): Promise<string> {
   const fields = normalize(input);
 
   if (input.id) {
     const existing = await db.calendarEvents.get(input.id);
     if (existing) {
       await db.calendarEvents.put({ ...existing, ...fields });
-      return;
+      return existing.id;
     }
   }
 
+  const id = newId();
   await db.calendarEvents.put({
-    id: newId(),
+    id,
     ...fields,
     createdAt: new Date().toISOString(),
   });
+  return id;
 }
 
 export async function deleteEvent(id: string): Promise<void> {

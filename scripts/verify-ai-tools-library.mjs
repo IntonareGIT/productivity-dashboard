@@ -135,8 +135,28 @@ check('gate: the store filters gated calls out BEFORE running them',
 // inside the gated branch — not how much code happens to sit above it.
 check('gate: the store breaks out of the loop when a call is gated',
   /const gated = result\.toolCalls\.filter[\s\S]{0,4000}?\n\s*break;/.test(storeSrc));
+// Strengthened, not just widened. The property that matters is: the only place
+// that EXECUTES a tool the model asked for is `confirmPending`. `confirmPending`
+// now routes the Phase 4 calendar tools through `executeCalendarToolConfirmed`
+// before falling back to `executeTool`, so the old 900-char window no longer
+// reached. This asserts both call sites sit inside `confirmPending`, and that no
+// other function in the store can execute a tool directly.
+const confirmStart = storeSrc.indexOf('confirmPending: async');
+const confirmEnd = storeSrc.indexOf('cancelPending: async');
+const confirmBody = storeSrc.slice(confirmStart, confirmEnd);
+const outsideConfirm = storeSrc.slice(0, confirmStart) + storeSrc.slice(confirmEnd);
+// The only place that executes a GATED tool is `confirmPending`. `runTool` also
+// calls `executeTool`, but that is the ungated path: the store splits gated
+// calls out of the loop before they ever reach it, which the check above proves.
+// So the meaningful assertion is that `confirmPending` holds both call sites,
+// and that exactly ONE other call site exists, inside `runTool`.
 check('gate: only confirmPending executes the pending action',
-  /confirmPending:[\s\S]{0,900}?executeTool/.test(storeSrc));
+  /executeTool\(/.test(confirmBody)
+  && /executeCalendarToolConfirmed\(/.test(confirmBody));
+check('gate: the ungated path is the only other executor, and it is runTool',
+  (outsideConfirm.match(/executeTool\(/g) || []).length === 1
+  && /const exec = await executeTool\(call\.name, call\.arguments\)/.test(storeSrc),
+  'exactly one other call site, inside runTool');
 check('gate: declining feeds back that nothing happened',
   /The user moved on without confirming this action/.test(storeSrc));
 check('gate: every delete tool description tells the model to ask first',

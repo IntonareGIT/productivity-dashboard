@@ -79,6 +79,43 @@ export function usesPeriod(kind: EventKind | undefined | null): boolean {
 }
 
 /**
+ * The day the app considers the start of the week.
+ *
+ * Declared ONCE here and reused by the calendar page, the shifts page and the
+ * assistant tools. It was previously repeated as `weekStartsOn: 1` and a
+ * hand-rolled "Monday" calculation in several files, which is exactly how a
+ * tool ends up disagreeing with the UI about which week it means.
+ */
+export const WEEK_STARTS_ON = 1 as const; // 1 = Monday
+
+/** A single teaching-period span, used to detect overlaps and free slots. */
+export interface TimeSpan {
+  start: string;
+  end: string;
+}
+
+/** Minutes since midnight for an "HH:mm" string, or null if unparseable. */
+export function toMinutes(hhmm: string | null | undefined): number | null {
+  if (!hhmm) return null;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+/** True when two spans share any time. Touching ends do NOT count as overlap. */
+export function spansOverlap(a: TimeSpan, b: TimeSpan): boolean {
+  const as = toMinutes(a.start);
+  const ae = toMinutes(a.end);
+  const bs = toMinutes(b.start);
+  const be = toMinutes(b.end);
+  if (as == null || ae == null || bs == null || be == null) return false;
+  return as < be && bs < ae;
+}
+
+/**
  * The six teaching periods, in ONE place.
  *
  * Every consumer — the event form, the calendar chips, the day panel and the

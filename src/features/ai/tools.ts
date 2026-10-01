@@ -33,6 +33,13 @@ import {
   executeLibraryTool,
 } from './toolsLibrary';
 import { topicPlainText } from '../library/libraryRepo';
+import {
+  CALENDAR_CONFIRM_TOOL_NAMES,
+  CALENDAR_TOOL_NAMES,
+  CALENDAR_TOOL_SPECS,
+  describeCalendarToolCall,
+  executeCalendarTool,
+} from './toolsCalendar';
 import { isAmbiguous, resolveItem } from './toolResolve';
 import type { ToolSpec } from './types';
 
@@ -68,6 +75,10 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   // Phase 2 library tools. Spread from one source of truth so a new tool
   // cannot be added without also being classified.
   ...LIBRARY_TOOL_NAMES,
+  // Phase 4 calendar writes. createEvent, updateEvent, moveEvent,
+  // setEventSubject, createAssessment, updateAssessment and
+  // createRecurringEvents all change stored rows.
+  ...CALENDAR_TOOL_NAMES.filter((n) => !/^(get|list|find)/.test(n)),
 ]);
 
 /** Destructive / schedule-affecting tools requiring explicit user confirmation. */
@@ -80,6 +91,9 @@ export const CONFIRMATION_TOOL_NAMES: ReadonlySet<string> = new Set([
   // only ungroups, because it still removes a row the user made, so it asks
   // first. A second model call CANNOT perform it; only Confirm can.
   ...LIBRARY_CONFIRM_TOOL_NAMES,
+  // Phase 4: the three calendar deletes, plus createRecurringEvents because it
+  // can create up to 60 events and the user must see the list first.
+  ...CALENDAR_CONFIRM_TOOL_NAMES,
 ]);
 
 export const TOOL_SPECS: ToolSpec[] = [
@@ -207,6 +221,10 @@ export const TOOL_SPECS: ToolSpec[] = [
   },
   ...EXTENDED_TOOL_SPECS,
   ...LIBRARY_TOOL_SPECS,
+  // Phase 4: the calendar tools for the current calendar (subjects, kinds,
+  // periods, day panel, assessments). Spread from one list so a new calendar
+  // tool cannot be added without being registered for the model too.
+  ...CALENDAR_TOOL_SPECS,
 ];
 
 /* ---------------- Read-only functions ---------------- */
@@ -706,6 +724,7 @@ export function describeToolCall(name: string, argsJson: string): string {
       });
     default:
       if (LIBRARY_TOOL_NAMES.has(name)) return describeLibraryToolCall(name, args);
+      if (CALENDAR_TOOL_NAMES.includes(name)) return describeCalendarToolCall(name, argsJson);
       return describeExtendedToolCall(name, args);
   }
 }
@@ -741,6 +760,9 @@ export async function executeTool(name: string, argsJson: string): Promise<ToolE
     case 'manage_split_screen':
       return manageSplitScreen(args);
     default: {
+      // The calendar tools for the CURRENT calendar (Phase 4) are checked
+      // before the older modules, so the new names always win.
+      if (CALENDAR_TOOL_NAMES.includes(name)) return executeCalendarTool(name, args);
       // Library write / delete functions live in toolsLibrary.ts.
       const library = await executeLibraryTool(name, args);
       if (library) return library;

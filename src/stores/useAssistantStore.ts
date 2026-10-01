@@ -21,6 +21,13 @@ import {
   describeToolCall,
   executeTool,
 } from '../features/ai/tools';
+import {
+  executeCalendarToolConfirmed,
+  calendarPromptSection,
+  CALENDAR_TOOL_NAMES,
+} from '../features/ai/toolsCalendar';
+import { dateContext } from '../features/calendar/dateRules';
+import { WEEK_STARTS_ON } from '../features/calendar/categories';
 import type { AssistantViewMessage } from '../features/ai/chatRepo';
 import { describeDeleteCounts } from '../features/ai/toolsLibrary';
 import type { ChatMessage, ToolSpec } from '../features/ai/types';
@@ -132,6 +139,10 @@ function systemPrompt(now: Date): string {
     'BEFORE CALLING ANY DELETE TOOL: state plainly what it will remove and ask the user to confirm. Calling it twice does NOT perform it; only the user pressing Confirm does. If the user declines or moves on, do not retry; tell them nothing was changed.',
     '',
     'offDays uses 0=Sunday..6=Saturday. Topic status is one of not_started / studying / confident. Assessment type is one of exam / quiz / assignment / project. Event category is one of class / deadline / personal / work. Every function returns a short structured result; read it and report accurately what actually happened, including when it failed. Keep replies short and specific.',
+    // Today's date, the timezone and the week start, so the model can turn
+    // "tomorrow" or "next Sunday" into the exact YYYY-MM-DD the tools require.
+    dateContext(now, WEEK_STARTS_ON),
+    calendarPromptSection(),
   ].join('\n');
 }
 
@@ -704,10 +715,16 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         const sessionId = get().sessionId;
         if (!sessionId) return;
 
-        const exec = await executeTool(pending.name, pending.argsText);
+        // Confirmed. `createRecurringEvents` is the one tool whose confirmed
+        // run differs from its first run: the first previews and creates
+        // nothing, so it must be re-invoked in its confirmed form. Every other
+        // gated tool runs exactly as it did to produce the card.
+        const exec = CALENDAR_TOOL_NAMES.includes(pending.name)
+          ? await executeCalendarToolConfirmed(pending.name, safeParseArgs(pending.argsText))
+          : await executeTool(pending.name, pending.argsText);
         const toolMsg: ChatMessage = {
           role: 'tool',
-          content: JSON.stringify({ ok: true, result: exec.data }),
+          content: capToolResult(JSON.stringify({ ok: true, result: exec.data })),
           toolCallId: pending.callId,
           name: pending.name,
           display: exec.summary,
