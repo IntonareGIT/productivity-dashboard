@@ -154,10 +154,30 @@ const cases = {
   '(i) parallel calls, second one stopped': () => [user('hi'), call(['c1', 'c2']), result('c1'), user('again')],
 };
 
-console.log('=== which cases produce an invalid sequence TODAY ===');
-const broken = [];
-for (const [name, make] of Object.entries(cases)) {
-  const v = isValidProviderHistory(run(make()));
+console.log('');
+
+/* ---------- the 400 safety net ---------- */
+{
+  const src = readFileSync('src/features/ai/aiClient.ts', 'utf8');
+  // Matching on the status alone would also catch a missing thought_signature,
+  // a bad model name and a malformed argument. Resending a stripped conversation
+  // for any of those would throw away context that made them valid.
+  check('the safety net matches the MESSAGE, not just the 400 status',
+    /isTurnOrder400/.test(src) && /function call turn/i.test(src));
+  check('the net is guarded so it can fire at most once',
+    /!repairedConversation/.test(src) && /repairedConversation = true/.test(src));
+  check('the net reports that the conversation was repaired',
+    /conversationRepaired: true/.test(src) && /conversationRepaired\?/.test(src));
+  check('a failed simplified retry falls through to the original error',
+    /The simplified retry failed too/.test(src));
+  check('the net rebuilds the body from a simplified history',
+    /buildBodyFrom\(simplified/.test(src));
+  check('the simplified history keeps the system prompt and the last user turn',
+    /m\.role === 'system'/.test(src) && /lastUser/.test(src));
+  check('tool exchanges become plain text, not tool_calls again',
+    /Tool \$\{m\.name \?\? 'unknown'\} returned/.test(src));
+}
+
 /* ---------- every case must come out valid ---------- */
 for (const [name, make] of Object.entries(cases)) {
   const v = isValidProviderHistory(run(make()));
@@ -237,12 +257,6 @@ for (const [name, make] of Object.entries(cases)) {
   check('normalizing does not mutate the caller array', JSON.stringify(original) === snapshot);
 }
 
-console.log(`\nhistory-normalizer: ${pass} passed, ${fail} failed`);
-process.exit(fail === 0 ? 0 : 1);
-  if (!v.ok) broken.push(name);
-  console.log(`${v.ok ? 'ok  ' : 'BAD '} ${name}${v.ok ? '' : ` :: ${v.problems.join('; ')}`}`);
-}
-console.log('');
 
 check('the oracle rejects a deliberately broken history',
   isValidProviderHistory([{ role: 'assistant', content: 'x' }]).ok === false);
@@ -250,6 +264,16 @@ check('the oracle rejects a deliberately broken history',
 // request either. The oracle is right to reject it.
 check('the oracle accepts a well-formed request history',
   isValidProviderHistory(run([user('hi'), asst('hello'), user('and now?')])).ok === true);
+
+/* ---------- a plain exchange is left completely alone ---------- */
+check('a well-formed history is passed through unchanged',
+  isValidProviderHistory(run([user('hi'), asst('hello'), user('more')])).ok === true);
+{
+  const clean = [user('hi'), asst('hello'), user('more')];
+  const r = N.normalizeHistoryForProvider(P.buildTranscript(clean, 20), 'gemini').report;
+  check('nothing is reported as repaired when nothing was wrong', r.repaired === false,
+    r.fixes.join('; '));
+}
 
 console.log(`\nhistory-normalizer: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

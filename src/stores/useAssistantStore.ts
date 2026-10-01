@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { format } from 'date-fns';
 import { chatCompletion, friendlyError } from '../features/ai/aiClient';
 import { getDefaultProvider, providerIsReady } from '../features/ai/aiProviderRepo';
+import { NOT_EXECUTED } from '../features/ai/historyNormalizer';
 import {
   DEFAULT_TITLE,
   appendMessage,
@@ -346,6 +347,56 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
   }
 
   /**
+   * Leave the session in a state a provider will accept.
+   *
+   * A turn can end at four awkward places: the user pressed Stop, the request
+   * threw, every retry was exhausted, or the round budget ran out. Any of them can
+   * leave an assistant `tool_calls` row with no `tool` row answering it, and that
+   * row is permanent: it poisons every later request in the chat.
+   *
+   * So the session is REPAIRED AT THE SOURCE rather than only on the way out. The
+   * request-time normalizer is still the backstop for rows written by older builds
+   * or restored from a backup, but a chat that is already stored wrong should not
+   * have to be repaired on every single request.
+   *
+   * Nothing is deleted: an unanswered call gets a stored response saying the
+   * action did not run.
+   */
+  async function repairStoredSession(sessionId: string): Promise<void> {
+    const rows = await listMessages(sessionId);
+    const unanswered: { callId: string; name: string }[] = [];
+    const answered = new Set<string>();
+
+    for (let i = 0; i < rows.length; i += 1) {
+      const r = rows[i];
+      if (r.role === 'tool' && r.toolCallId) answered.add(r.toolCallId);
+      if (r.role !== 'assistant' || !r.toolCallIds?.length) continue;
+      // Only the consecutive tool rows directly after count as answers.
+      for (let j = i + 1; j < rows.length && rows[j].role === 'tool'; j += 1) {
+        if (rows[j].toolCallId) answered.add(rows[j].toolCallId);
+      }
+      for (const id of r.toolCallIds) {
+        if (!answered.has(id)) {
+          const calls = (r.raw?.tool_calls ?? []) as {
+            id: string; function?: { name?: string };
+          }[];
+          const call = calls.find((c) => c.id === id);
+          unanswered.push({ callId: id, name: call?.function?.name ?? r.toolName ?? '' });
+        }
+      }
+    }
+    for (const u of unanswered) {
+      await appendMessage(sessionId, {
+        role: 'tool',
+        content: JSON.stringify({ ok: false, error: NOT_EXECUTED }),
+        toolCallId: u.callId,
+        name: u.name,
+        display: 'Not executed or interrupted.',
+      });
+    }
+  }
+
+  /**
    * One provider request, with the retry status wired to the UI.
    *
    * Every request in a turn goes through here, which is what makes the retry
@@ -448,6 +499,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     },
 
     selectSession: async (id) => {
+      // Step 5: an OLD chat, written by a build that could save a broken
+      // sequence, is repaired on load rather than deleted. The user keeps every
+      // message; the chat simply becomes usable again.
+      await repairStoredSession(id).catch(() => {});
       const rows = await listMessages(id);
       set({ sessionId: id, view: rows.length ? toViewMessages(rows) : WELCOME, pending: null });
     },
@@ -652,6 +707,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
           reportFailure(err);
         }
       } finally {
+        // Whatever happened, the stored history is left valid. This runs on the
+        // success path too, where it is a cheap no-op, and on Stop, error and
+        // retry-exhaustion, where it is what stops the chat becoming unusable.
+        if (get().sessionId) await repairStoredSession(get().sessionId as string).catch(() => {});
         // The controller is released here and ONLY here, so `stop` can never
         // abort a turn that has already finished and left a stale controller
         // behind that a later turn would trip over.

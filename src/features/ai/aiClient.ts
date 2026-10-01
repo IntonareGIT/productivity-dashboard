@@ -196,6 +196,13 @@ export interface ChatCompletionResult {
    * "Answered by fallback model <name>" only when it is true.
    */
   answeredByFallback?: string;
+  /**
+   * True when this answer only arrived after the turn-order safety net rebuilt a
+   * conversation the provider had already rejected. The UI shows a short "the
+   * conversation was repaired" note so the user is not left wondering why the
+   * assistant suddenly forgot earlier detail.
+   */
+  conversationRepaired?: boolean;
 }
 
 interface WireMessage {
@@ -395,6 +402,64 @@ async function attemptCompletion(
   return res;
 }
 
+/**
+ * Does this 400 say the TURN ORDER is wrong, as opposed to any other 400?
+ *
+ * Matching on the status alone would be far too broad: the app also sees 400 for
+ * a missing thought_signature, a bad model name and a malformed argument, and
+ * throwing all of those away and resending a stripped conversation would lose the
+ * context that made them valid. So the message is matched, and only this one
+ * family triggers the safety net.
+ */
+export function isTurnOrder400(text: string): boolean {
+  return /invalid_argument/i.test(text)
+    && /function call turn|function call turn comes immediately|comes immediately after a user turn/i.test(text);
+}
+
+/**
+ * A deliberately impoverished conversation, for the last-ditch retry.
+ *
+ * Keeps the system prompt and the LAST user message, and reduces every other
+ * turn to one short line of plain text. Tool exchanges become
+ * "Tool X returned: ...", so the model still knows what it already did without
+ * being handed any `tool_calls` structure to get the order wrong again.
+ *
+ * This is intentionally lossy. It only runs once, and only when the provider has
+ * already refused a request we believed was valid, so trading context for a
+ * working answer is clearly the better deal.
+ */
+export function simplifyHistoryForRetry(messages: ChatMessage[]): ChatMessage[] {
+  const system = messages.filter((m) => m.role === 'system');
+  const body = messages.filter((m) => m.role !== 'system');
+  const lastUser = [...body].reverse().find((m) => m.role === 'user');
+  const lines: ChatMessage[] = [];
+  const pendingCalls: string[] = [];
+
+  for (const m of body) {
+    if (m === lastUser) continue;
+    if (m.role === 'tool') {
+      const text = String(m.content ?? '').slice(0, 200);
+      lines.push({
+        role: 'assistant',
+        content: `Tool ${m.name ?? 'unknown'} returned: ${text}`,
+      });
+    } else if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length) {
+      pendingCalls.push(m.toolCalls.map((c) => c.name).join(', '));
+    } else if (m.role === 'assistant' && m.content) {
+      lines.push({ role: 'assistant', content: m.content.slice(0, 500) });
+    }
+  }
+  // Collapse the many small lines into a few, so the retry is genuinely short.
+  const summary = lines.map((l) => l.content).join('\n').slice(0, 1500);
+  const out: ChatMessage[] = [...system];
+  if (summary.trim()) {
+    out.push({ role: 'assistant', content: `Earlier in this conversation:\n${summary}` });
+  }
+  if (lastUser) out.push(lastUser);
+  void pendingCalls;
+  return out;
+}
+
 export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatCompletionResult> {
   const { provider, tools, temperature = 0.2, maxTokens = 4096 } = opts;
   const { signal, onRetry, fallbackModel } = opts;
@@ -410,20 +475,29 @@ export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatC
   // A thinking model draws its reasoning from the SAME `max_tokens` budget as
   // the answer, so a tight cap is spent on thinking and the reply comes back
   // empty or truncated. The budget has to cover both.
-  const buildBody = (model: string) =>
+  const buildBodyFrom = (msgs: ChatMessage[], model: string) =>
     JSON.stringify({
       model,
-      messages: toWire(messages),
+      messages: toWire(msgs),
       tools: tools && tools.length > 0 ? tools : undefined,
       tool_choice: tools && tools.length > 0 ? 'auto' : undefined,
       temperature,
       max_tokens: maxTokens,
     });
 
+  // The buildBody above is the normal path; this is the same body built from an
+  // arbitrary message list, used only by the turn-order safety net.
+  const buildBody = (model: string) => buildBodyFrom(messages, model);
+
   // Retry the REQUEST, never the turn. The transcript, the stored session rows
   // and any tool results already recorded are untouched by this loop, so a
   // retry can never re-run a create, rename or delete, and can never send the
   // user message twice.
+  //
+  // The turn-order safety net runs ONCE, before the retry loop, and only for the
+  // one 400 that means the sequence was wrong. It is a last resort, not a
+  // strategy: everything upstream should already have produced a valid history.
+  let repairedConversation = false;
   let lastError: AiRequestError | null = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
     let res: Response;
@@ -431,6 +505,24 @@ export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatC
       res = await attemptCompletion(provider, buildBody(provider.modelName), signal);
     } catch (e) {
       const err = e instanceof AiRequestError ? e : new AiRequestError(String(e));
+
+      // ---- the safety net, at most once per call
+      if (
+        !repairedConversation && !err.retryable
+        && err.status === 400 && isTurnOrder400(err.message)
+      ) {
+        repairedConversation = true;
+        const simplified = simplifyHistoryForRetry(messages);
+        try {
+          const retry = await attemptCompletion(provider, buildBodyFrom(simplified, provider.modelName), signal);
+          const payload = await retry.json();
+          return { ...readCompletion(payload), conversationRepaired: true };
+        } catch {
+          // The simplified retry failed too. Fall through and report the
+          // ORIGINAL error, which is the one that describes the real problem.
+        }
+      }
+
       // Stopped, or a status that will never succeed: surface it now.
       if (!err.retryable) throw err;
       lastError = err;
