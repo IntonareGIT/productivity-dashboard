@@ -32,13 +32,16 @@ any new feature and keep it updated whenever the schema evolves.
 ## 1. Dexie.js Database Schema
 
 Database name: `ProductivityDashboardDB`
-Current version: `7`
+Current version: `15`
 (v3 replaced `shiftConfig` with `weeklySchedules`; v4 added the `subjectId`
 index on `calendarEvents`; v5 adds topic-based library: `topics`,
 `assessments`, topic-level `resources` with file blobs, and
 `subjectId`/`topicId` links on `pomodoroSessions`; v6 adds `aiProviders`,
 the configurable AI provider table backing the global assistant; v7 adds
-`chatSessions` / `chatMessages` for persistent assistant chat history)
+`chatSessions` / `chatMessages` for persistent assistant chat history;
+v8-v13 are additive; v14 adds `resourceGroups.parentGroupId` for nested
+groups; **v15 changes no schema at all** and only re-labels note titles the
+app itself generated, so a note is called "<Subject>'s Notes")
 Source: `src/db/db.ts` (interfaces in `src/types/index.ts`)
 
 ```typescript
@@ -384,6 +387,62 @@ referenced.
 `resourceGroups` is metadata, so it **syncs**: it is deliberately absent from
 `UNSYNCED_TABLES` in `cloudConfig.ts`, and the file-blob rules (`BLOB_MODE`,
 `LARGE_BLOB_WARNING_BYTES`) are untouched.
+
+#### 1.3.1.2 Note titles (v15)
+
+**A note's default title is `<Subject name>'s Notes`.** Exactly that, including
+the awkward possessive: "Thermodynamics's Notes". It is deliberate and not
+"fixed" to "Thermodynamics Notes", because every screen that shows the title is
+showing the string the user was told to expect.
+
+**One function owns the rule.** `getDefaultNoteTitle(subject)` in
+`src/db/noteTitle.ts` is pure and takes the subject, not an id, so the UI, the AI
+tools and the migration all call the same function and cannot drift:
+
+- `getDefaultNoteTitle(subject)` → `"<Subject>'s Notes"`, falling back to the
+  old generic constant only when the subject cannot be found.
+- `uniqueDefaultNoteTitle(base, taken)` → the first free variant: the bare
+  default, then `" 2"`, `" 3"`. It fills the **gap** rather than running past it,
+  and compares case-insensitively.
+- `generatedNoteTitleNumber(title, subjectName)` → `1` for the bare default, `N`
+  for `"... N"`, `null` for anything the user typed. This is what decides whether
+  a title may be rewritten.
+- `noteTitleForNumber(subjectName, n)` → the same title for a given number.
+
+Called from `ensureDefaultTopic` (the auto-created note), `saveSubject`'s rename,
+`setTopicTitle`'s empty-title fallback, `TopicModal`'s blank title, the AI's
+`createNote`, and the v15 upgrade.
+
+**Numbering exists because duplicates are useless.** A note list and the picker
+both show titles side by side with nothing else to distinguish them, which is the
+same problem the file picker solves with paths.
+
+**A generated title follows its subject; a typed one never moves.** Rather than
+adding an `isGenerated` field (which would be a schema change for something
+derivable), the check is textual: a title equal to the old subject's default, or
+that default plus a number, is ours. `renameGeneratedNoteTitles` rewrites those
+and returns `null` for everything else. **The rename and the title update share
+one `db.transaction('rw', [db.subjects, db.topics])`**, so there is never a
+moment where the subject has been renamed and the note has not. The NUMBER is
+carried across rather than recomputed, so `"X's Notes 2"` becomes `"Y's Notes 2"`
+and cannot collide with an existing sibling.
+
+**The v15 upgrade changes no schema at all.** No table, field or index is added;
+`.stores()` re-declares `topics` verbatim because Dexie requires the version to
+exist. It re-labels only titles the app itself generated — empty, the legacy
+`'General'` placeholder, or the old `'Untitled note'` default — and the predicate
+is deliberately SEPARATE from v9's `needsTitleBackfill`, because v9's rule was
+broader and reusing it would touch notes v9 deliberately left alone. Numbering is
+per subject and respects real user titles. **Every write is `{ ...t, title }`**,
+so `notes`, `contentHtml` and `contentFormat` ride across byte-for-byte. Running
+it twice writes nothing, which matters because Dexie Cloud can replay a schema
+upgrade on a synced device.
+
+**No Dexie Cloud action is needed.** v15 adds no field, so there is nothing for
+the cloud schema to learn: no new database, no console command, no migration
+script. Existing notes simply gain a better title the first time the app opens.
+A device that has already synced will replay the upgrade locally and the
+resulting titles sync back as ordinary row updates.
 
 **An empty group must still be rendered.** This is the whole of the "New group
 does nothing" bug, and it is worth stating because the failure mode is so
@@ -1618,6 +1677,54 @@ Decisions worth stating:
 - **Where it opens**, in order: the currently open file's own folder, then the
   last place that pane was left, then the root.
 
+**Notes live in the same tree, under their subject.** `'note'` is a node kind
+alongside `subject`, `group` and `resource`. `getChildren(subject)` returns the
+subject's child groups, its ungrouped resources AND its notes together.
+
+- **A note is never inside a group.** A group holds resources only, so a note
+  always sits directly under its subject. This is a data fact, not a display
+  convenience, and the tests assert a group never lists a note.
+- **A note belongs to a subject, and optionally to a topic.** Topics do not nest,
+  so a note has no parent topic; when one was created "inside a topic" it is
+  still listed under the subject, which is the folder a person browses by. Its
+  path is therefore the subject name, and `pathOfNote()` is what computes it.
+- **Two notes with the same title are told apart by their subject.** That is the
+  same failure the picker already solved for duplicate file names.
+- Notes get their own **note icon**, never the file glyph, so a note and a
+  document of the same name are never confused.
+
+**Row order within a level is: folders, then notes, then files.** Chosen and
+fixed: a folder is something you go INTO, so it comes first; a note is material
+belonging to the subject itself, while a file is an attachment, so the note sits
+between them. Within a kind, natural sort (`Week 2` before `Week 10`), except
+groups, where a saved `order` wins when one exists. Search uses the same
+hierarchy: files, then notes, then groups, then subjects.
+
+**`kinds` says what the caller can OPEN; `want` narrows the files.** They answer
+different questions and both are needed:
+
+| Selector | `kinds` | `want` | Result |
+| --- | --- | --- | --- |
+| PDF viewer | `['resource']` | `'pdf'` | PDFs only, never a note |
+| Image viewer | `['resource']` | `'image'` | Images only, never a note |
+| Split pane open menu | `['resource', 'note']` | viewer-dependent | Files AND notes |
+
+`DEFAULT_KINDS` is `['resource']`, so a caller that forgets the prop behaves the
+way it did before notes existed: a viewer is never handed a note it cannot open.
+The prop also filters the **Recent** list, so a PDF viewer does not list a note
+merely because the user opened one in the other pane.
+
+**Search covers note TITLES only, never note content.** A search that reached into
+a note's body would return a note whose title says nothing about the word that
+matched, and the row would be indistinguishable from a file.
+
+**"Start where I am" works for a note too.** `pathToTopic(id)` gives the one-
+element path (the subject), so a notes pane opens on the open note's subject and
+highlights it, exactly as a PDF pane opens on its folder. `labelForNote(id)`
+gives the header the same `{ title, path }` shape a file gets, so the pane header
+shows "Thermodynamics's Notes" over "Thermodynamics" and truncates on a narrow
+split half like any other row.
+
 **Wired into `PaneHeader`.** The document `<select>` is gone; the file button now
 opens the picker and shows the current file's name **with its path**, truncated
 so it survives a narrow split half. A chosen file switches the pane to the
@@ -1626,9 +1733,23 @@ with, so the pane cannot try to render something the picker withheld. Each pane
 passes `slotKey={`pane-${index}`}`, so the two panes browse and remember
 independently.
 
-**Notes still use their own dropdown.** A topic is not a file and does not live
-in a group, so it is not a picker node kind. Deliberate, and reported rather
-than forced.
+**The flat notes `<select>` is gone too.** The same button now offers notes as
+well as files (`kinds={['resource', 'note']}`), and choosing a note goes through
+the same `select()` the view dropdown uses, so it is the same state change as
+choosing Notes there. It used to be a global dropdown of every note's title in
+the app, which is exactly the flat-list problem this picker exists to fix.
+
+**Selectors that can open a note, and what happened to each**
+
+| Where | State |
+| --- | --- |
+| `PaneHeader` notes dropdown | **Swapped.** Removed; notes come from the picker. |
+| `PaneHeader` document control | **Swapped** in Phase 3; now also offers notes. |
+| PDF and image selectors | Unchanged. `kinds={['resource']}`, so they can never offer a note. |
+| `SubjectDetail` (Library) | Left alone. Opens notes from its own per-subject topic grid, which is already scoped; a global picker there would be a different job. |
+| AI `searchLibrary` | **Updated.** Notes now carry `path` (the subject name) in both the flat `topics` list and the bucketed view, so two same-titled notes are distinguishable to the model. |
+| AI `manage_split_screen` | **Updated.** A notes pane can be opened from a note id or title directly, resolved through the shared `resolveItem` with `kind: 'note'`, returning candidates on ambiguity. Previously a note was only reachable by borrowing a resource's topic, so the note itself was not addressable. The original resource-derived path still works. |
+
 
 ---
 

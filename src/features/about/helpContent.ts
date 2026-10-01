@@ -99,12 +99,13 @@ export const HELP_SECTIONS: HelpSection[] = [
         heading: 'Choosing a file',
         bullets: [
           { lead: 'It follows the tree, not a flat list', text: 'The file button in a viewer or split pane opens a picker that starts at your subjects, then your folders, then your files, to any depth. Two files can share a name like "1-introduction" and still be told apart, because every row shows its full path underneath the name.' },
+          { lead: 'Notes are in there too', text: "In split view the same button also lists that subject's notes, under the subject and above its files, each with a note icon so a note is never confused with a document of the same name. The PDF and image viewers list only files. Folders hold files only, so a note always sits directly under its subject." },
           { lead: 'Getting back', text: 'A breadcrumb along the top shows where you are, and every part of it is tappable, so you can jump straight back to a subject from four folders down. Back, the left arrow and the Backspace key all step up one level.' },
-          { lead: 'Finding things fast', text: 'The search box looks through every subject and folder at once and lists each hit with its full path, so two files of the same name are distinguishable. Clearing the box returns you exactly where you were.' },
-          { lead: 'It opens where you are', text: 'The picker opens at the folder of the file you already have open and highlights it. With nothing open, it returns to the last place you browsed. A Recent section at the top of the first screen lists the last five files you opened, with their paths.' },
+          { lead: 'Finding things fast', text: 'The search box looks through every subject and folder at once and lists each hit with its full path, so two files of the same name are distinguishable. It searches note titles but never note content, so a hit is always something you named. Clearing the box returns you exactly where you were.' },
+          { lead: 'It opens where you are', text: 'The picker opens at the folder of the file or note you already have open and highlights it. With nothing open, it returns to the last place you browsed. A Recent section at the top of the first screen lists the last five things you opened, files and notes alike, with their paths.' },
           { lead: 'Only openable files', text: 'The PDF viewer offers PDFs and the image viewer offers images, so you are never handed something the viewer cannot show. A file whose contents are stored on another device is listed but greyed out, saying "File not available on this device".' },
           { lead: 'On a keyboard', text: 'Arrow keys move, Enter opens, Backspace goes back and Escape closes. On a phone it opens as a sheet from the bottom of the screen.' },
-          { lead: 'Two panes are separate', text: 'In split view each pane keeps its own file and its own place in the tree, so browsing in one never moves the other.' },
+          { lead: 'Two panes are separate', text: 'In split view each pane keeps its own file or note and its own place in the tree, so browsing in one never moves the other.' },
         ],
       },
       {
@@ -122,6 +123,23 @@ export const HELP_SECTIONS: HelpSection[] = [
     title: 'Notes',
     summary: 'Rich-text notes attached to a topic, editable in two places.',
     groups: [
+      {
+        heading: 'Naming a note',
+        bullets: [
+          { lead: 'The title comes from the subject', text: "A new note is called \"Thermodynamics's Notes\" for a subject called Thermodynamics. You do not have to type a title, and the app will not leave one blank." },
+          { lead: 'A second note gets a number', text: "The next one is \"Thermodynamics's Notes 2\", then 3, and so on. Two notes with identical names in one list are as hard to tell apart as two files with the same name, so the app numbers them for you." },
+          { lead: 'Rename it any time', text: "Type your own title above the text and it is saved as you type. Once you have typed a title the app never changes it again, including when you rename the subject." },
+          { lead: 'Renaming a subject', text: "A note still carrying the generated title follows the subject, so renaming Thermodynamics to Physics makes it \"Physics's Notes\". The number is carried across too, and a note you titled yourself is left exactly as you typed it." },
+          { lead: 'What already existed', text: "Notes that were still carrying an old placeholder name, or none at all, are renamed once to the new form the first time you open the app. Notes you had already titled are untouched, and the text of every note is never changed." },
+        ],
+      },
+      {
+        heading: 'Finding a note',
+        bullets: [
+          { lead: 'In the split view picker', text: "The file button lists your subject's notes as well as its files, so a note is reachable the same way a PDF is. Each note is listed under its subject with its title and the subject name underneath." },
+          { lead: 'By the assistant', text: "Ask for a note by name. The assistant can create one with no title at all, rename one, and open one in a split pane, using the same rules you get in the app." },
+        ],
+      },
       {
         heading: 'Writing',
         bullets: [
@@ -246,7 +264,7 @@ export const HELP_SECTIONS: HelpSection[] = [
         heading: 'What it can do (the tools it has)',
         bullets: [
           { lead: 'Look things up', text: "List your subjects and their topics; see today's work shift, calendar events and focus minutes so far; resolve a work roster for any week; total your focus time for a date range; get a subject's progress; list upcoming deadlines; and search the library by keyword across subjects, topics, notes, resources and assessments." },
-          { lead: 'Library', text: "Create a subject, add a topic, append to a topic's notes, attach a link, add an assessment (exam, quiz, assignment or project), mark a topic as not started, studying or confident, or search everything at once." },
+          { lead: 'Library', text: "Create a subject, add a topic, append to a topic's notes, attach a link, add an assessment (exam, quiz, assignment or project), mark a topic as not started, studying or confident, or search everything at once. createNote with no title names the note after its subject, exactly as one you create in the app would be named." },
           { lead: 'Nested groups', text: 'Groups can sit inside other groups, up to five levels deep, so a file can be found by subject, then folder, then subfolder, then file. createGroup takes an optional parentGroupId, listGroups returns the whole tree with each group depth, parent and full path, and moveGroup moves a group with everything inside it. A group name only has to be unique among its siblings, so the same name can exist in two branches; when that happens the assistant shows you the candidates with their paths and asks which one rather than guessing. A group can never be moved inside itself or one of its own subgroups.' },
           { lead: 'Editing your library', text: 'Rename a subject, a topic or a resource; move a resource to another topic; and work with resource groups: list them, create one, rename it, move one into another, or move a resource into a group or back out to no group.' },
           { lead: 'Deleting', text: 'Delete a subject, a topic, a resource or a group. Every one of these shows you a confirmation card first and only runs when you press Confirm; the assistant cannot carry it out on its own. Deleting a subject removes its topics, resources, uploaded files, notes and every group at every depth. Deleting a group removes only that group: its subgroups and resources are kept and move up one level, and the card says how many of each will move.' },

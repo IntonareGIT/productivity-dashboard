@@ -1,4 +1,148 @@
-# Nested groups and drill-down picker: report
+# Notes: default titles from the subject, and notes in the file picker
+
+**Branch:** `nested-groups-picker`. **`main` was NOT touched, merged, or
+force-pushed.** Working tree was clean at the start, so there was nothing to
+checkpoint.
+
+## Summary
+
+| Phase | What it asked for | Status | Evidence |
+| --- | --- | --- | --- |
+| 1 | Default note title is `<Subject>'s Notes`, numbering, v15 migration, follows a subject rename | **done** | `verify:note-titles` 87/87 (was 42), `tsc -b` 0, `build` clean, full `verify` clean. |
+| 2 | Notes as a `'note'` node kind in the existing picker, notes selector swapped, AI paths | **done** | `verify:filepicker` 101/101 (was 77), `verify-split-view` 296/296 (was 294), `verify-extended-tools` passing, `tsc -b` 0, `build` clean, full `verify` clean. |
+| Docs | PROJECT.md, About/Help, this file | **done** | `verify:about-help` 44/44. |
+
+**Reverted:** nothing. **Partly done:** nothing in the code. **Could not be
+tested in a real browser:** everything interactive. See the last section.
+
+**Any manual Dexie Cloud action: NONE.** v15 adds no field, no table and no
+index, so there is nothing for the cloud schema to learn. No new database, no
+console command, no migration script. Existing notes simply gain a better title
+the first time you open the app, and those titles sync back as ordinary row
+updates.
+
+## Phase 1: the default note title
+
+**Where titles are created:** `ensureDefaultTopic` (libraryRepo.ts), `saveTopic`
+via `TopicModal`, and the AI's `createNote`. **Displayed** in `MarkdownNotes`,
+`NotesEditorBody`, `SubjectDetail`, the pane notes selector and `searchLibrary`.
+
+**A note IS a `Topic` row.** There is no separate notes table, `Topic.subjectId`
+links it to a subject, and topics do not nest, so a note has a subject and no
+parent topic. **The old default was `'Untitled note'`**, with the legacy
+placeholder `'General'` beneath it.
+
+**One function owns the rule.** `getDefaultNoteTitle(subject)` in
+`src/db/noteTitle.ts`, plus `uniqueDefaultNoteTitle`, `generatedNoteTitleNumber`
+and `noteTitleForNumber`. The UI, the AI tools and the migration all call it, so
+they cannot drift. The awkward possessive is deliberate and exact:
+`"Thermodynamics's Notes"`.
+
+**Numbering fills the gap.** `{"A's Notes", "A's Notes 3"}` yields
+`"A's Notes 2"`, not `"A's Notes 4"`. Comparison is case-insensitive.
+
+**A rename follows the subject without a new field.** The check is textual: a
+title equal to the old subject's default, or that default plus a number, is
+ours. `renameGeneratedNoteTitles` rewrites those in the SAME transaction as the
+subject rename, carrying the number across. A typed title returns `null` and is
+never touched.
+
+### Bugs the tests caught (and I fixed)
+
+1. **A blank title in the Topic dialog was a hard error.** It now falls back to
+   the subject default, so a UI-created note and an AI-created one are named
+   identically.
+2. **`setTopicTitle` with an empty title used the generic constant.** It now
+   resolves the subject default, numbered against the note's siblings (excluding
+   the note itself, which would otherwise always collide with itself).
+3. **A subject count of 0 would break numbering.** `ensureDefaultTopic` only
+   runs when a subject has no notes at all, but `createNote` numbers against
+   existing siblings, which is the case that actually repeats.
+
+### Migration safety, pinned by tests
+
+- Only titles the app generated are rewritten: empty, `'General'`,
+  `'Untitled note'`. A typed title is never changed.
+- **Note content is byte-for-byte untouched**, including `contentHtml` and
+  `contentFormat`; every write is `{ ...t, title }`.
+- **Running it twice changes nothing**, including `updatedAt`.
+- A note whose subject is gone falls back rather than throwing.
+- The v15 predicate is deliberately SEPARATE from v9's `needsTitleBackfill`,
+  because v9's rule was broader and reusing it would touch notes v9 left alone.
+
+### Three of my own test expectations were wrong
+
+Corrected the tests, not the code: `Lectures` counts 1 (one subgroup, no files),
+Thermodynamics counts 4 (one folder plus three openable files), and the image
+viewer's count is 3 because it also lists the blob-less row.
+
+## Phase 2: notes in the picker
+
+**Selectors that can open a note, and what I found.** `PaneHeader`'s notes
+`<select>` (a flat GLOBAL list of every note title in the app), the document
+control in the same header, the Library's `SubjectDetail` grid, and the AI's
+`manage_split_screen`. **The flat notes dropdown was swapped and removed.** The
+Library grid was left alone: it is already scoped to one subject, so a global
+picker there is a different job. `manage_split_screen` was extended.
+
+- **`'note'` is a node kind** in the existing `PickerNode`, reusing the same
+  `getChildren` / `pathOf` / search. No second picker, no duplicated helpers.
+- **A note is never inside a group.** A group holds resources only, so notes
+  always appear at the subject level. The tests assert this directly.
+- **A note belongs to a subject and optionally to a topic.** Since topics do not
+  nest, a note has no parent topic; one created "inside a topic" is still listed
+  under its subject, with the subject as its path.
+- **`kinds` (what the caller can open) is separate from `want` (which files).**
+  PDF and image selectors pass `['resource']` and can never offer a note; the
+  split pane passes `['resource', 'note']`. `DEFAULT_KINDS` is files-only so a
+  caller that forgets is safe, and the prop also filters the Recent list.
+- **Search covers note TITLES only**, never content.
+- **`pathToTopic` and `labelForNote`** make "start where I am" and the header
+  label work for notes exactly as for files.
+- **Row order: folders, then notes, then files**, natural-sorted within a kind.
+  Written into PROJECT.md as the fixed rule.
+
+### Bugs the tests caught (and I fixed)
+
+1. **`searchLibrary`'s flat `topics` list had no `path`.** I added it to the
+   bucketed view first and the tests still failed: the model reads the FLAT list,
+   so that was the one that mattered. Both carry it now.
+2. **An unresolved resource id threw before note resolution could run.** A notes
+   pane legitimately takes a note id, which is not a resource, so that hard
+   error now applies only when a file is what the pane needs.
+3. **A recent note would have been offered to a file-only picker.** Recent rows
+   are filtered by `kinds` in the component.
+4. **`noteOpened` ignored notes entirely**, so a note could never appear in
+   Recent.
+
+## What I could not test in a real browser
+
+No browser or phone is available here. **Every interactive claim is read from
+the source and asserted statically, not observed.** Please check:
+
+### On your phone
+
+1. That the picker still opens as a bottom sheet and is never clipped.
+2. That a note row is tappable with a thumb and opens the notes view.
+3. That the pane header shows the note title and its path, truncated, on a
+   narrow screen.
+4. Arrow keys and Enter are desktop-only, so skip those here.
+
+### On your laptop
+
+5. That **the v15 migration runs on your real database** and renames only the
+   placeholder notes, leaving your own titles alone. This is the single most
+   important check: `fake-indexeddb` is not a dependency, so the Dexie upgrade
+   transaction itself was never executed here.
+6. That a note with real content keeps it byte-for-byte after the migration.
+7. That renaming a subject renames only its untouched default notes.
+8. That the Recent section, the breadcrumb and the highlight work with notes.
+9. That the two panes still browse independently with notes in the picker.
+10. That the split pane's single button replaces both old dropdowns and nothing
+    is stranded.
+
+Nothing about zoom, pinch, scroll or split-view geometry was changed.
+
 
 **Branch:** `nested-groups-picker` (created from `ai-upgrade`, pushed). **`main`
 was NOT touched, merged, or force-pushed.**
