@@ -1,16 +1,138 @@
 # AI upgrade: report
 
-**Branch:** `ai-upgrade` (created from `calendar-update`, pushed). **`main` was NOT
-touched, merged, or force-pushed.**
+**Branch:** `ai-upgrade` (created from `calendar-update`, pushed). **`main` was
+NOT touched, merged, or force-pushed.**
 
 ## Summary
 
 | Phase | What it asked for | Status | Evidence |
 | --- | --- | --- | --- |
-| 1 | Retry on transient provider errors | **done** | `npm run verify:retry` passes, 47 checks. |
-| 2 | Stop responding button | **done** | `npm run verify:stop` passes, 43 checks. |
-| 3 | One reliable way to identify items | see below | |
-| 4 | Calendar tools for the new calendar | see below | |
+| 1 | Retry on transient provider errors | **done** | `npm run verify:retry` 47/47. |
+| 2 | Stop responding button | **done** | `npm run verify:stop` 43/43. |
+| 3 | One reliable way to identify items | **done** | `npm run verify:resolve` 56/56. |
+| 4 | Calendar tools for the new calendar | **done** | `npm run verify:calendartools` 95/95. |
+
+**Reverted:** nothing. **Partly done:** nothing. All schema changes additive
+(v13). No user data deleted or overwritten.
+
+**Could NOT be tested, stated plainly:**
+
+- **The real Gemini API.** No key was available, so nothing here was tested
+  against a live provider. Every check drives the real code against a MOCKED
+  `fetch`. The retry policy, the abort path and the 400 handling are verified as
+  logic; whether Gemini's real 503 bodies and real overload behaviour match is
+  not.
+- **Real touch input and a real soft keyboard.** Chromium emulates taps. The
+  Stop button and Escape are verified in the DOM, but pressing them with a real
+  thumb is not.
+- **Multi-device Dexie Cloud sync** of the new `fallbackModel` and `seriesId`.
+- **Your real data.** Every test ran against synthetic subjects and events.
+
+**What you must test on your phone and laptop:**
+
+1. Send a message while the model is busy. Watch for the "Model is busy,
+   retrying (2/4)..." line, and confirm the answer still arrives with no
+   duplicated message and no action run twice.
+2. Send a long multi-tool request (for example "move my lecture to Thursday"),
+   then press Stop mid-way. Nothing more should happen, and the partial answer
+   should be kept and marked Stopped.
+3. Press Stop while a delete confirmation card is open. The card should vanish
+   and nothing should be deleted.
+4. Send a message, press Stop, then immediately send another. The second should
+   work with no error about a missing tool response.
+5. Open a delete confirmation card, press Stop, and check nothing was deleted.
+6. Ask "what do I have tomorrow" and "when am I free on Tuesday". Then ask for
+   "add my lecture every week on Monday period 1": you should get a preview and
+   a Confirm card, and nothing should be created until you press Confirm.
+7. Ask the assistant to change an assessment's date, then open the Calendar and
+   confirm the item moved and was not duplicated.
+8. With a fallback model filled in in Settings, confirm the chat says
+   "Answered by fallback model <name>" when it ever triggers.
+
+**Manual action needed:** none for Dexie Cloud or Vercel. v13 is additive (two
+unindexed optional fields, upgrade a no-op), so there is no new cloud database
+version to register. The app is a static SPA with no new environment variables.
+
+## Phase 1, step 1: the request point and the request count
+
+**There is exactly ONE place a provider request is made for every provider:**
+`chatCompletion()` in `src/features/ai/aiClient.ts`. It was a single bare
+`fetch` with no retry, no abort and no timeout, which is why an overloaded
+provider broke conversations mid-session.
+
+**One user message costs 1 request if the model answers at once, up to 6 if it
+keeps calling tools**: the turn loop is `for (round = 0; round <=
+MAX_TOOL_ROUNDS)` with `MAX_TOOL_ROUNDS = 4`, plus one final no-tools "wrap up"
+request when the budget runs out. Every one of those was a separate
+`chatCompletion` call, so any of them could be the one that failed.
+
+All retry logic now lives inside that one function.
+
+### What the retry does and does not do
+
+4 retries for 429/500/502/503/504 and network failures, at roughly 1s, 2s, 4s,
+8s plus up to 500ms of jitter, honouring `Retry-After`. 400, 401, 403 and 404
+are shown immediately. A 429 whose text says the daily quota is spent is NOT
+retried, because no wait fixes it.
+
+The loop re-sends a **byte-identical body**: it never touches the transcript,
+the stored rows or any tool result. That is what makes the guarantee hold that a
+retry cannot re-run a create, rename or delete, and cannot send the user message
+twice. The test asserts all three request bodies are the same string.
+
+### Load reduction, measured
+
+A 200-row `searchLibrary` result went from 24434 to 4083 characters once tool
+results are capped at `MAX_TOOL_RESULT_CHARS` (4000) with a `[truncated]` marker.
+History is limited to `CONTEXT_WINDOW` (20) messages. The request-per-message
+logging the brief asked for was added, measured, and then removed.
+
+## Phase 2: what Stop actually cancels
+
+One `AbortController` per user turn. Aborting it does three things at once: it
+aborts the in-flight fetch, it rejects the backoff wait so no further retry is
+issued, and the loop re-checks the signal before the next round so no new tool
+call starts. A tool already running is left to finish, because aborting a
+database write halfway is worse than finishing it.
+
+A pending Confirm card is **cancelled** as if the user had pressed Cancel, and a
+synthetic tool response is written so the next turn stays well-formed: an
+unanswered `tool_call` makes Gemini reject the following request with HTTP 400.
+
+## Phase 3, step 1: the diagnosis, before any code changed
+
+**There were THREE different lookup implementations, which is the root of the
+reported bug.**
+
+- `toolsExtended.ts`: id-only, via `db.subjects.get(key)` / `db.topics.get(key)`
+  in `requireSubject()` and `requireTopic()`. A NAME could never work. The file's
+  own header comment claims "when an argument references an entity by name we
+  resolve it to an id and fail loudly on ambiguity", which was not true of the
+  code.
+- `toolsLibrary.ts`: `resolveByIdOrName`, id then name then substring. Used by
+  all 15 note and group tools.
+- `tools.ts` `manage_split_screen`: a third hand-rolled copy of the same idea.
+
+**What the search returned.** `searchLibrary` returned, per subject bucket,
+`{ subject: <NAME>, topics: [{id, title, ...}], resources: [{id, title, ...}],
+assessments: [{name, type, date}] }`. Two concrete defects: the subject bucket
+had **no `subjectId` at all**, so a subject id could not be obtained from a
+search; and assessments had **no `id`**, and no tool could act on an assessment
+anyway because no `updateAssessment` or `deleteAssessment` existed. The ids that
+WERE returned are the exact Dexie primary keys, not truncated and not display
+indexes.
+
+## Phase 4: the two latent bugs the new tests found
+
+1. **`saveEvent` and `saveAssessment` normalize a whole row.** The update tools
+   were passing only the changed fields, which threw on the first required field
+   they omitted. They now merge onto the existing row.
+2. **`normalize()` in eventsRepo builds an explicit field list**, so anything
+   not named is silently dropped on write. `seriesId` was being dropped, which
+   meant a bulk series had no grouping and could never be deleted as a unit.
+
+Both were real defects that only a test exercising the write path would catch.
+
 
 ## Phase 3, step 1: the diagnosis, before any code changed
 

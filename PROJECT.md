@@ -1964,6 +1964,113 @@ drift out of sync.
 markup and `lucide-react` imports deleted). What remains is the clock, the
 light/dark toggle, and the profile avatar at every width.
 
+## 6. AI upgrade branch (`ai-upgrade`)
+
+Four phases: resilience against provider errors, a Stop button, one way to
+identify items, and calendar tools for the new calendar. All schema changes are
+additive (v13). `main` was not touched or merged. Nothing was reverted.
+
+### The single request point
+
+`chatCompletion()` in `src/features/ai/aiClient.ts` is the ONLY place a provider
+request is made, for every provider. One user message costs **1 request if the
+model answers at once, up to 6 if it keeps calling tools**: the turn loop runs
+`for (round = 0; round <= MAX_TOOL_ROUNDS)` with `MAX_TOOL_ROUNDS = 4`, plus one
+final no-tools "wrap up" request when the budget runs out. All retry logic lives
+in that one function, so no caller can get a turn that neither retries nor can be
+stopped.
+
+### Phase 1: retry, backoff, optional fallback model
+
+Up to 4 retries for 429, 500, 502, 503, 504 and network failures, at roughly
+1s, 2s, 4s, 8s plus up to 500ms of jitter, honouring `Retry-After` when present.
+400, 401, 403 and 404 are shown immediately. A 429 whose text says the daily
+quota is spent is NOT retried, because no wait can fix it.
+
+The retry re-sends a **byte-identical request body**. The loop never touches the
+transcript, the stored rows or any tool result, so a retry can never re-run a
+create, rename or delete, and can never send the user message twice. A tool that
+has already run is not repeated.
+
+`friendlyError()` turns any failure into plain language ("The model is
+overloaded right now. Try again in a minute or switch model in Settings") with
+the raw error kept behind a Details toggle, plus a Retry button that re-sends
+without duplicating the user message. The store clears `busy` in a `finally`, so
+the input can never be left disabled.
+
+An **optional** `aiProviders.fallbackModel` (v13, off by default) is tried once
+after the primary exhausts its retries, and the chat says which model replied.
+
+To reduce load, each tool result sent to the model is capped at 4000 characters
+with a `[truncated]` marker, and history is limited to the last 20 messages. A
+200-row search result drops from 24434 to 4083 characters.
+
+### Phase 2: the Stop responding button
+
+One `AbortController` per user turn. Stop aborts the in-flight fetch, rejects
+the backoff wait so no further retry is issued, and is re-checked before each
+round so no new tool call starts. A tool already running is left to finish,
+because aborting a database write halfway is worse than finishing it.
+
+A pending Confirm card is **cancelled** as if the user had pressed Cancel, and a
+synthetic tool response is recorded so the next turn stays well-formed: an
+unanswered `tool_call` makes Gemini reject the following request with HTTP 400.
+
+The composer stays enabled while working, so the next message can be typed;
+Enter does not send until the turn ends. Escape stops, scoped to the chat input.
+
+### Phase 3: one resolver for every tool
+
+There were **three** different lookup implementations: id-only `db.get()` in
+`toolsExtended.ts`, `resolveByIdOrName` in `toolsLibrary.ts`, and a third
+hand-rolled copy in the split-screen tool. All now route through one
+`resolveItem({ kind, ref, rows, nameOf, label, kind, scope })`, with `kind`
+mapping to exactly one table through `ITEM_KINDS`, so an id of one kind can never
+resolve as another.
+
+Order is exact id, then exact case-insensitive name, then a UNIQUE partial
+match. Several matches return candidates with ids; no match returns a message
+naming what was searched plus the closest names.
+
+`searchLibrary` was also fixed to return what the model needs in order to chain
+a call: the subject bucket had only a NAME and no `subjectId` at all, and
+assessments carried no `id` whatsoever, so there was no way to act on one.
+
+### Phase 4: calendar tools
+
+New `toolsCalendar.ts` with 17 tools, all using the Phase 3 resolver and all
+returning `{ kind, id, name }` of what they touched. Read: `getDayAgenda`,
+`listEvents`, `getWeekTimetable`, `findFreeSlots`, `listPeriods`,
+`listAssessments`, `getUpcoming`. Write: `createEvent`, `updateEvent`,
+`moveEvent`, `setEventSubject`, `deleteEvent`, `createAssessment`,
+`updateAssessment`, `deleteAssessment`, `createRecurringEvents`,
+`deleteEventSeries`.
+
+Period times always come from the shared `PERIODS` constant, never from the
+model, so the form and the assistant cannot disagree. A period on a non-teaching
+kind is rejected. A clash in a taken period is a WARNING, and the event is still
+created. `createRecurringEvents` returns a preview and creates NOTHING until
+`confirmPending` re-invokes it in its confirmed form, capped at 60 events, all
+sharing one `seriesId` so the series can be deleted as a unit.
+
+`WEEK_STARTS_ON` is now declared once in `categories.ts` and shared by the
+calendar, the shifts page and the tools. `dateRules.ts` holds the ISO
+validation and the date context injected into the system prompt on every
+request, so the model can turn "tomorrow" into an exact date.
+
+Two latent bugs were found and fixed by these tests: `saveEvent` and
+`saveAssessment` normalize a whole row, so the update tools had to merge onto
+the existing row; and `normalize()` builds an explicit field list, so `seriesId`
+was being silently dropped on write.
+
+### Verification
+
+`npx tsc -b` clean, `npm run verify` exits 0, `npm run build` succeeds, and four
+new suites pass: `verify:retry` (47), `verify:stop` (43), `verify:resolve` (56)
+and `verify:calendartools` (95). The store-level Stop suite drives the REAL
+store against a Dexie stub, so it covers the shipping turn loop rather than a
+copy of it.
+
 ## 5. Calendar update branch (`calendar-update`)
 
 A five-phase improvement pass on the assistant composer, the subject dialog,
