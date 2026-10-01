@@ -9,65 +9,108 @@ was NOT touched, merged, or force-pushed.**
 | --- | --- | --- | --- |
 | 1 | Nested groups, data + Library UI | **done** | `verify:nestedgroups` 91/91, `tsc -b`, `build`, full `verify` all clean. |
 | 2 | AI group tools updated for nesting | **done** | `verify:nestedgroupsai` 61/61. |
-| 3 | Drill-down file picker | **data layer + component done; NOT yet swapped into the selectors** | `verify:filepicker` 49/49. See "What is not done". |
+| 3 | Drill-down file picker | **done, and now swapped into the viewer selectors** | `verify:filepicker` 77/77, `verify-split-view` 294/294, `tsc -b`, `build`, full `verify` all clean. |
 
-**Reverted:** nothing. **Partly done:** Phase 3, and only in the sense listed below.
+**Reverted:** nothing. **Partly done:** nothing in the code. **Not
+browser-tested:** every UI claim below. See "What I could not test in a browser".
 
-## What is NOT done, and why
+## Why Phase 3 looked unfinished last time
 
-**The picker is not wired into any selector yet.** It is built and tested, but
-`PaneHeader`'s document dropdown is still the old flat `<select>`. I stopped
-there deliberately rather than ship a half-swap:
+It was **not reached, and nothing failed or was reverted.** Commit `59f9399`
+shipped the data layer, the portal component and their tests, and the run then
+stopped on purpose before the swap. The reason, recorded in the previous version
+of this file, was that `PaneHeader`'s document `<select>` multiplexed PDFs,
+images *and* notes in one control, while the picker models
+`subject -> group -> file`. Adopting it there would have meant inventing a
+`topic` node kind, and `verify-split-view.mjs` pinned the old markup.
 
-- That one control multiplexes **PDFs, images AND notes** in a single
-  `<select>` with three optgroups. The picker models
-  `subject -> group -> file`, which is what the brief specified, so adopting it
-  there means teaching the picker about `topic` as a fourth node kind first.
-  Doing that blind, with no browser to click in, is exactly how a working
-  selector becomes a broken one.
-- Swapping it also invalidates real assertions in `verify-split-view.mjs` that
-  pin the current `<select>` markup. I would rather leave those passing and
-  honest than have them "updated" to match a change I could not actually test.
+**That cause is now fixed.** Rather than teach the tree about notes, the file
+part became the picker and the notes dropdown stayed a dropdown. A topic is not
+a file and does not live in a group, so a fourth node kind would have been a
+lie about the data. `verify-split-view.mjs` was rewritten in the same commit as
+the swap: each assertion keeps the property it was protecting and checks it
+against the picker now.
 
-**Next step, concretely:** add a `topic` node kind to `filePickerData.ts`,
-render the notes optgroup as real rows, then replace the `<select>` in
-`PaneHeader` with `<FilePicker want="group" | "resource">` plus a separate notes
-path. Update `verify-split-view.mjs` in the same commit.
+### Bugs this round's tests caught (and I fixed)
 
-**Nothing was browser-tested.** No Playwright, no manual pass. The UI claims
-below are read from the source and asserted statically, not observed.
+1. **The Recent section was five dead labels.** `noteOpened` stored only the id,
+   name and path, so tapping a recent row had no `resource` to hand back. It
+   stores the whole node now.
+2. **Recent REPLACED step 1 instead of heading it.** The old component made the
+   recent list the entire root list, so with nothing opened you saw a Recent
+   heading and no subjects at all. It is now a section above the subjects, and
+   it hides during a search, where the heading would be a lie.
+3. **Group badges undercounted.** A group counted only its direct files, so a
+   folder holding only subgroups read "0". It counts both now, and the test
+   pins a folder with no files of its own reporting 1.
+4. **Subject badges counted files the viewer cannot open.** Now filtered by
+   `want`, so the PDF and image views report different, correct numbers.
+5. **Search missed subject names.** It searched groups and files only.
+6. **Search offered rows that cannot open.** A blob-less file was excluded from
+   the list but could appear in search. Search now applies the stricter rule.
+7. **A synced file was labelled "Not a PDF".** The blob check ran after the type
+   check, but a synced row has no MIME to judge. The order is now reversed, so
+   the message names the real problem.
+8. **The dropdown rendered the literal text `Select file\u2026`.** JSX does not
+   interpret a `\uXXXX` escape in text, so the escape reached the screen.
+   Replaced with a real ellipsis.
 
-### The other resource selectors, still flat
+### Three of my own test expectations were wrong, not the code
 
-Audited, left alone on purpose, because swapping them needs browser testing:
+Worth stating plainly, because I changed the test rather than the behaviour:
+the `Lectures` badge is 1 (one subgroup, no files of its own, not 2); the
+subject badge is 4 (one folder plus three openable ungrouped files, not 2); and
+the image viewer's is 3, because it also lists the blob-less row. Each was
+checked against the fixture before being corrected.
+
+## The picker
+
+- **One array is the navigation state**, the path from the root. No per-level
+  variable, so any depth works with the same code and Back is "drop the last
+  element". A four-level tree and a nine-level tree run the same code.
+- **The tree rules are reused, not re-implemented.** `getChildGroups`,
+  `getAncestors`, `getDescendants`, `pathOf` and `parentOf` all come from
+  `src/features/library/groupTree.ts`, the same module the Library tree and the
+  AI tools read.
+- **The data lives in one file.** `filePickerData.ts` queries the tables;
+  `FilePicker.tsx` queries none (asserted: the test fails if the component ever
+  calls `db.`).
+- **Two different hiding rules, on purpose.** A file of the wrong type is
+  dropped; a file of the right type with no bytes is listed dimmed. Search
+  applies the stricter rule.
+- **Per-pane state.** Each pane passes its own `slotKey`, so browsing in one
+  never moves the other.
+
+### The other resource selectors, still not swapped
+
+Found and reported rather than forced:
 
 | Where | State |
 | --- | --- |
-| `MoveToGroupMenu` | **Updated to a tree.** Indents by depth, built from the shared `buildGroupTree`. |
-| `ResourceModal` group `<select>` | Still flat. A simple one-level list, so it is not broken, only less clear at depth. |
-| `PaneHeader` document `<select>` | Still flat. See above. |
-| `ResourceViewer` | Still flat. |
-| AI `searchLibrary` | **Updated.** Results now carry `groupId`, `groupPath` (id + name per level) and `groupPathString`. |
+| `PaneHeader` document control | **Swapped.** Now the picker, with the file name and path on the button. |
+| `PaneHeader` notes dropdown | Left alone. A topic is not a file; see above. |
+| `MoveToGroupMenu` | Left alone. Already a tree, from the shared `buildGroupTree`. |
+| `ResourceModal` group `<select>` | Left alone. A one-level list, so it is unclear at depth but not broken. |
+| `LibraryPage` global search | Left alone. A different job: it finds anything, not a file to open, and it already shows subjects. |
+| AI `searchLibrary` | Left alone. Already carries `groupId` and `groupPath` from Phase 2. |
+| AI attachments | **Do not exist.** There is no attach-a-file feature in the assistant; nothing to swap. |
 
-## Bugs the new tests caught (and I fixed)
+## What I could not test in a browser
 
-These are worth calling out, because each was found by a test rather than by
-reading the code:
+No browser or phone is available here. **Every interactive claim is read from
+the source and asserted statically, not observed.** Specifically, please check:
 
-1. **A cross-subject parent was reported as a missing one.** `saveResourceGroup`
-   only read the subject's own groups, so a parent id from another subject was
-   invisible and the user was told "that parent group no longer exists". The
-   parent is now resolved from the whole table, so the message is correct.
-2. **The AI reported the same thing.** `moveGroup` resolved its destination
-   against the subject's slice, so a cross-subject move came back as "no group
-   matches <id>". The full list is passed now, and the error names the real
-   cause.
-3. **The picker opened one level too high.** `pathToResource` listed the
-   ancestors of a file's group but not the group itself, so the current file was
-   never on screen and its highlight had nothing to mark.
-4. **`tsc -b` reported nothing but `npm run build` failed.** The incremental
-   build info was stale. I now use `tsc -b --force`, and the Phase 3 commit was
-   amended after the build caught a real type error.
+1. That the picker opens as a popover on desktop and a bottom sheet on a phone,
+   and is never clipped by a pane or the horizontally scrolling toolbar.
+2. Arrow keys, Enter, Backspace and Escape, and that typing filters the search.
+3. That the picker opens at the current file's folder and highlights that file.
+4. That Recent appears at the top of step 1 after opening a few files, and that
+   tapping a row opens it.
+5. That two panes browse independently and each remembers its own place.
+6. That the header button truncates cleanly on a narrow split half.
+7. The exact truncation point of a long path in the breadcrumb.
+
+Nothing about zoom, pinch, scroll or split-view behaviour was changed.
 
 ## Two decisions worth confirming
 

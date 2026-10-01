@@ -96,6 +96,18 @@ export const HELP_SECTIONS: HelpSection[] = [
         ],
       },
       {
+        heading: 'Choosing a file',
+        bullets: [
+          { lead: 'It follows the tree, not a flat list', text: 'The file button in a viewer or split pane opens a picker that starts at your subjects, then your folders, then your files, to any depth. Two files can share a name like "1-introduction" and still be told apart, because every row shows its full path underneath the name.' },
+          { lead: 'Getting back', text: 'A breadcrumb along the top shows where you are, and every part of it is tappable, so you can jump straight back to a subject from four folders down. Back, the left arrow and the Backspace key all step up one level.' },
+          { lead: 'Finding things fast', text: 'The search box looks through every subject and folder at once and lists each hit with its full path, so two files of the same name are distinguishable. Clearing the box returns you exactly where you were.' },
+          { lead: 'It opens where you are', text: 'The picker opens at the folder of the file you already have open and highlights it. With nothing open, it returns to the last place you browsed. A Recent section at the top of the first screen lists the last five files you opened, with their paths.' },
+          { lead: 'Only openable files', text: 'The PDF viewer offers PDFs and the image viewer offers images, so you are never handed something the viewer cannot show. A file whose contents are stored on another device is listed but greyed out, saying "File not available on this device".' },
+          { lead: 'On a keyboard', text: 'Arrow keys move, Enter opens, Backspace goes back and Escape closes. On a phone it opens as a sheet from the bottom of the screen.' },
+          { lead: 'Two panes are separate', text: 'In split view each pane keeps its own file and its own place in the tree, so browsing in one never moves the other.' },
+        ],
+      },
+      {
         heading: 'Viewing files',
         bullets: [
           { lead: 'PDF viewer', text: 'Page navigation, zoom, and a full-screen mode. Supports pinch zoom and trackpad zoom.' },

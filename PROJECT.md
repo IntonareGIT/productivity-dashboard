@@ -1559,7 +1559,7 @@ panes at once with completely independent state. The assistant pane mounts the
 shared `AssistantChat` (same history, same tools); the notes pane mounts the
 shared `MarkdownNotes` and writes through the same `updateTopicNotes()`.
 
-### 1.3.3 The drill-down file picker (v14, data layer + component)
+### 1.3.3 The drill-down file picker (v14)
 
 **Why it exists.** A flat list of file names stops working the moment files are
 called `1-introduction.pdf`. With subjects, nested groups and several lecture
@@ -1568,40 +1568,67 @@ which. So the picker drills: **subject, then groups at any depth, then files**,
 and every row shows its full path.
 
 **Two files, one concern each.** `filePickerData.ts` owns every rule and never
-touches React; `FilePicker.tsx` renders and holds no query. That split is what
+touches React; `FilePicker.tsx` renders and queries no table. That split is what
 makes the rules testable without a DOM, and it is asserted directly
 (`verify-file-picker` fails if the component ever calls `db.`).
 
-- `getChildren(node, want, currentId)` — one level of children. A subject shows
-  its top-level groups **and** its ungrouped files together, so a subject with
-  no folders goes straight to its files. A group shows its subgroups and the
-  resources directly inside it. An empty list is a real answer, not a failure.
-- `searchAll(query, want)` — every subject and group at once, each hit carrying
-  its full path.
+- `getChildren(node, want, currentId)` — one level of children. `node` is `null`
+  for the root, which is the subject list. A subject shows its top-level groups
+  **and** its ungrouped files together, so a subject with no folders goes
+  straight to its files. A group shows its subgroups and the resources directly
+  inside it. An empty list is a real answer, not a failure.
+- `searchAll(query, want)` — every subject, group and file at once, each hit
+  carrying its full path.
 - `pathToResource(id)` — the breadcrumb from the subject down to a file,
   **including the file's own group**, so the picker opens where the user is.
-- `getRecentNodes()` / `noteOpened()` — the last five files, newest first.
+- `lastLocation(slotKey)` / `rememberLocation(slotKey, path)` — where each pane
+  was left. Keyed per pane, not global.
+- `labelForResource(id)` — the title **and** path, for the header button.
+- `getRecentNodes()` / `noteOpened()` — the last five files, newest first,
+  storing the resource so a row is tappable rather than a dead label.
 
 Decisions worth stating:
 
 - **Navigation is one array, the path from the root.** Not a variable per level.
   Any depth therefore works with the same code, and Back is "drop the last
   element". Adding a sixth level would need no new state.
-- **Natural sort, everywhere.** `Week 2` precedes `Week 10`.
+- **The tree rules are NOT re-implemented here.** Parents, depths and paths come
+  from the shared `groupTree` module (`getChildGroups`, `getAncestors`,
+  `getDescendants`, `pathOf`, `parentOf`), the same one the Library tree and the
+  AI tools read. The picker cannot drift from either of them.
+- **Natural sort everywhere, but a saved `order` wins when one exists.** A group
+  the user reordered appears in its new place rather than snapping back to
+  alphabetical.
 - **A file whose bytes are not on this device is shown, dimmed, with the literal
   reason "File not available on this device."** File blobs are not synced (see
   1.13), so such a row is real. Hiding it would make files silently disappear
-  depending on which device you are on; showing it plainly explains itself.
-- **Per-viewer filtering** via `want`: `'group'` lists PDFs, `'resource'` lists
-  images, and each hides what its viewer cannot render.
+  depending on which device you are on; showing it plainly explains itself. The
+  blob check runs *before* the type check, because a synced row has no MIME to
+  judge and would otherwise be mislabelled "Not a PDF".
+- **Per-viewer filtering** via `want`: `'pdf'` lists PDFs, `'image'` lists
+  images. Two different rules, on purpose: a file of the **wrong type** is
+  dropped entirely (the PDF viewer listing every PNG would bury the PDFs in rows
+  that cannot open), while a file of the **right type with no bytes** is listed
+  dimmed. Search applies the stricter rule, so a search never returns a row that
+  cannot open.
 - **Rendered in a portal** on the shared `Z` scale, so no scrolling pane or card
   can clip it. Bottom sheet on a phone, centred dialog on a desktop. Rows are
-  44px; arrows, Enter, Backspace and Escape work.
+  44px; arrows, Enter, Backspace and Escape work. Backspace is "go back" only
+  when the search box is empty, so it can still delete a character.
+- **Where it opens**, in order: the currently open file's own folder, then the
+  last place that pane was left, then the root.
 
-**Not yet wired into any selector.** `PaneHeader`'s document dropdown is still
-the flat `<select>`, because that one control multiplexes PDFs, images *and*
-notes and the picker models subject → group → file. See PROGRESS.md for the
-concrete next step and the reasoning.
+**Wired into `PaneHeader`.** The document `<select>` is gone; the file button now
+opens the picker and shows the current file's name **with its path**, truncated
+so it survives a narrow split half. A chosen file switches the pane to the
+matching view, using the same `previewKindFor` detector the picker filtered
+with, so the pane cannot try to render something the picker withheld. Each pane
+passes `slotKey={`pane-${index}`}`, so the two panes browse and remember
+independently.
+
+**Notes still use their own dropdown.** A topic is not a file and does not live
+in a group, so it is not a picker node kind. Deliberate, and reported rather
+than forced.
 
 ---
 
