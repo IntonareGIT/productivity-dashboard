@@ -17,6 +17,7 @@
     "verify:assessments": "node scripts/verify-assessments-calendar-browser.mjs",
     "verify:retry": "node scripts/verify-retry-resilience.mjs",
     "verify:stop": "node scripts/verify-stop-responding.mjs",
+    "verify:resolve": "node scripts/verify-item-resolution.mjs",
     "shots": "node scripts/shots-note-editor.mjs"
   },
   "dependencies": {

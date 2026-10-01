@@ -1,3 +1,85 @@
+# AI upgrade: report
+
+**Branch:** `ai-upgrade` (created from `calendar-update`, pushed). **`main` was NOT
+touched, merged, or force-pushed.**
+
+## Summary
+
+| Phase | What it asked for | Status | Evidence |
+| --- | --- | --- | --- |
+| 1 | Retry on transient provider errors | **done** | `npm run verify:retry` passes, 47 checks. |
+| 2 | Stop responding button | **done** | `npm run verify:stop` passes, 43 checks. |
+| 3 | One reliable way to identify items | see below | |
+| 4 | Calendar tools for the new calendar | see below | |
+
+## Phase 3, step 1: the diagnosis, before any code changed
+
+**There is exactly ONE place a provider request is made for every provider:**
+`chatCompletion()` in `src/features/ai/aiClient.ts`, reached through
+`buildChatCompletionsUrl(provider.baseUrl)`. Before this work it was a single
+bare `fetch` with no retry, no abort and no timeout.
+
+**Requests per user message:** the store's turn loop is
+`for (round = 0; round <= MAX_TOOL_ROUNDS)` with `MAX_TOOL_ROUNDS = 4`, so one
+user message produces **1 request if the model answers immediately, up to 6 if it
+keeps calling tools** (5 tool rounds plus a final no-tools "wrap up" request when
+the round budget runs out). Each of those was previously a separate
+`chatCompletion` call, which is exactly why an overloaded provider could break a
+conversation mid-chain.
+
+### Every tool that takes an item reference, and how it looks the item up
+
+Two INCOMPATIBLE conventions exist today. This is the root of the reported bug.
+
+**Group A, `toolsExtended.ts` (18 tools): ID ONLY, via a raw `db.get()`.**
+`requireSubject()` (line 326) and `requireTopic()` (line 337) do
+`db.subjects.get(key)` / `db.topics.get(key)` and throw
+`No subject has id "X". Call listSubjects()...` when it misses. A NAME passed here
+can NEVER work. Tools affected: `listTopics`, `getSubjectProgress`,
+`addCalendarEvent` (subjectId), `createTopic`, `addAssessment`, `addResourceLink`,
+`markTopicStatus`, `addTopicNote`, `deleteCalendarEvent` (eventId).
+`startPomodoroSession` (in `tools.ts`) is also id-only.
+
+**Group B, `toolsLibrary.ts` (15 tools): id-then-name via the shared resolver.**
+`resolveByIdOrName(rows, ref, nameOf, label)` in `toolResolve.ts` tries the exact
+id, then an exact case-insensitive name, then a unique substring, and returns
+candidates on ambiguity. All 15 note and resource-group tools use it through a
+`need()` helper.
+
+**Group C, `manage_split_screen` (in `tools.ts`): a THIRD implementation.**
+Lines 562-582 do its own `db.resources.get()`, then its own exact-then-partial
+title/fileName matching. Same idea as Group B, written a third time.
+
+### What the search and list tools actually return
+
+`searchLibrary` (tools.ts:320) returns, per subject bucket:
+`{ subject: <NAME>, matchedSubject, topics: [{id, title, status, excerpt}],
+resources: [{id, title, kind, dueDate, group}], assessments: [{name, type, date}] }`.
+
+Two concrete defects:
+
+1. **The subject bucket is keyed by NAME, not id.** There is no `subjectId` field
+   anywhere in the `searchLibrary` result, so the model cannot get a subject id
+   from a search at all. `listSubjects` does return ids.
+2. **Assessments are returned with no `id` field at all** (only `name`, `type`,
+   `date`), and no tool can act on an assessment, because there is no
+   `updateAssessment` or `deleteAssessment` anywhere in the codebase.
+
+The `id` values that ARE returned (`topics[].id`, `resources[].id`) are the exact
+Dexie primary keys (`t1`, `r1` style in fixtures, `newId()` UUIDs in production),
+not truncated and not display indexes. So the ids themselves are sound; what is
+missing is `kind`, and a consistent way to route them.
+
+### Reproducing the reported bug
+
+The reported symptom, "passes the id and the tool says it cannot find the item",
+is reproducible whenever a model reaches a Group A tool with something that is
+not a raw id, and the reverse happens in `deleteCalendarEvent`, which is id-only
+and is reached with an event the model only ever saw a NAME for. `toolsExtended.ts`
+even documents a behaviour it does not have: its header comment claims "when an
+argument references an entity by name we resolve it to an id and fail loudly on
+ambiguity", but there is no name resolution in that file at all.
+
 # Calendar update: report
 
 **Branch:** `calendar-update` (created from the working branch, pushed). **`main` was NOT touched, merged, or force-pushed.**

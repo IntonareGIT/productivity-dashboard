@@ -1,6 +1,6 @@
 import { endOfMonth, format, startOfMonth, startOfWeek, subDays } from 'date-fns';
 import { db } from '../../db/db';
-import type { EventKind, Topic } from '../../types';
+import type { CalendarEvent, EventKind, Topic } from '../../types';
 import { deleteEvent, saveEvent } from '../calendar/eventsRepo';
 import { PERIODS, normalizePeriod, periodByNumber, usesPeriod } from '../calendar/categories';
 import { saveAssessment, saveResource, saveSubject, saveTopic } from '../library/libraryRepo';
@@ -8,6 +8,7 @@ import { DEFAULT_SUBJECT_COLOR, SUBJECT_PALETTE } from '../library/palette';
 import { buildShiftContext, dayEndTime, getWeekDays, resolveDay, toDateKey } from '../shifts/shiftLogic';
 import { setOverrideForDate } from '../shifts/shiftsRepo';
 import { useStatusThemeStore } from '../../stores/useStatusThemeStore';
+import { ITEM_KINDS, kindNameOf, needItem, refOf, type ItemKind } from './toolResolve';
 import {
   ASSESSMENT_TYPES,
   EVENT_CATEGORIES,
@@ -322,27 +323,28 @@ export const EXTENDED_TOOL_SPECS: ToolSpec[] = [
 
 /* ---------------- Lookup helpers ---------------- */
 
-/** Resolve a required id, failing loudly rather than guessing. */
-async function requireSubject(id: string): Promise<{ id: string; name: string }> {
-  const key = requireString({ subjectId: id }, 'subjectId');
-  const subject = await db.subjects.get(key);
-  if (!subject) {
-    throw new ToolError(
-      `No subject has id "${key}". Call listSubjects() to get the correct id — never guess one.`
-    );
-  }
-  return { id: subject.id, name: subject.name };
+type ItemRow = { id: string; name?: string; title?: string; subjectId?: string | null };
+
+/**
+ * Resolve a subject by id OR name.
+ *
+ * Was a bare `db.subjects.get(id)`, which meant a name always failed with
+ * "No subject has id ...". Both now work, through the one shared resolver.
+ */
+async function requireSubject(
+  ref: unknown,
+  scope?: { field: string; value: string; label: string } | null,
+): Promise<{ id: string; name: string }> {
+  const rows = await db.subjects.toArray();
+  return needItem<{ id: string; name: string }>({ kind: 'subject', ref, rows, scope });
 }
 
-async function requireTopic(id: string): Promise<Topic> {
-  const key = requireString({ topicId: id }, 'topicId');
-  const topic = await db.topics.get(key);
-  if (!topic) {
-    throw new ToolError(
-      `No topic has id "${key}". Call listTopics(subjectId) to get the correct id — never guess one.`
-    );
-  }
-  return topic;
+/** Resolve a topic by id OR name, optionally scoped to one subject. */
+async function requireTopic(
+  ref: unknown,
+  scope?: { field: string; value: string; label: string } | null,
+): Promise<Topic> {
+  return needItem<Topic>({ kind: 'topic', ref, rows: await db.topics.toArray(), scope });
 }
 
 async function listSubjects(): Promise<ToolExecution> {
@@ -784,17 +786,24 @@ async function addOneOffShiftException(args: Record<string, unknown>): Promise<T
 }
 
 async function deleteCalendarEvent(args: Record<string, unknown>): Promise<ToolExecution> {
-  const eventId = requireString(args, 'eventId');
-  const event = await db.calendarEvents.get(eventId);
-  if (!event) throw new ToolError(`No calendar event has id "${eventId}".`);
+  // Resolved by id OR title, through the shared resolver. It used to be a raw
+  // `db.calendarEvents.get(eventId)`, so a title the model had just read out of
+  // listEvents always failed with "No calendar event has id ...".
+  const event = await needItem<CalendarEvent>({
+    kind: 'event',
+    ref: args.eventId,
+    rows: await db.calendarEvents.toArray(),
+  });
 
-  await deleteEvent(eventId);
+  await deleteEvent(event.id);
   const when = event.startTime ? `${event.date} at ${event.startTime}` : event.date;
   return {
     ok: true,
     summary: `Deleted event “${event.title}” (${when}${event.recurrenceType && event.recurrenceType !== 'none' ? `, whole ${event.recurrenceType} series` : ''}).`,
     data: {
-      eventId,
+      // The generic block every tool result carries, plus the specifics.
+      event: refOf('event', event),
+      eventId: event.id,
       title: event.title,
       date: event.date,
       recurrence: event.recurrenceType ?? 'none',

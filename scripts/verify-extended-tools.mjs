@@ -163,10 +163,12 @@ check('5 percent confident', r.data.percentConfident === 0);
 // ---- 6. Never guess ids ---------------------------------------------
 let threw = null;
 try { await call('listTopics', { subjectId: 'sub_does_not_exist' }); } catch (e) { threw = e.message; }
-check('6 unknown subjectId rejected', !!threw && /listSubjects|listTopics/i.test(threw), threw);
+check('6 unknown subjectId rejected', !!threw && /No subject matches/.test(threw), threw);
+check('6 the subject rejection offers the closest names', !!threw && /Closest:/.test(threw), threw);
 threw = null;
 try { await call('markTopicStatus', { topicId: 'nope', status: 'confident' }); } catch (e) { threw = e.message; }
-check('6 unknown topicId rejected', !!threw && /never guess|listTopics/i.test(threw), threw);
+check('6 unknown topicId rejected', !!threw && /No topic matches/.test(threw), threw);
+check('6 the topic rejection offers the closest names', !!threw && /Closest:/.test(threw), threw);
 
 // ---- 7. Writes land in the store -------------------------------------
 r = await call('createSubject', { name: 'Chemistry' });
@@ -253,7 +255,7 @@ r = await call('deleteCalendarEvent', { eventId: ev.id });
 check('10 deleteCalendarEvent removed row', !S.calendarEvents.has(ev.id) && r.data.title === 'Lab');
 threw = null;
 try { await call('deleteCalendarEvent', { eventId: 'ghost' }); } catch (e) { threw = e.message; }
-check('10 deleting unknown event rejected', !!threw && /No calendar event/.test(threw), threw);
+check('10 deleting unknown event rejected', !!threw && /No event matches/.test(threw), threw);
 
 // ---- 13. manage_split_screen queues commands for App ------------------
 // Seed two PDF resources: one with a blob (previewable), one without.
@@ -272,7 +274,10 @@ check('13 close queues without a pane or view', r.data.action === 'close' && /si
 
 threw = null;
 try { await call('manage_split_screen', { action: 'open', pane: 'left', viewType: 'pdf', resourceId: 'ghost' }); } catch (e) { threw = e.message; }
-check('13 unknown resource rejected, never guessed', !!threw && /No resource has id/.test(threw), threw);
+// The wording is now the shared resolver's: it says what was searched and that
+// nothing changed, rather than the old id-only "No resource has id ...".
+check('13 unknown resource rejected, never guessed', !!threw && /No resource matches/.test(threw), threw);
+check('13 the rejection says nothing was changed', !!threw && /Nothing was changed/.test(threw), threw);
 
 threw = null;
 try { await call('manage_split_screen', { action: 'open', pane: 'left', viewType: 'pdf' }); } catch (e) { threw = e.message; }

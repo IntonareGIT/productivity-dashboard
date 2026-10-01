@@ -33,6 +33,7 @@ import {
   executeLibraryTool,
 } from './toolsLibrary';
 import { topicPlainText } from '../library/libraryRepo';
+import { isAmbiguous, resolveItem } from './toolResolve';
 import type { ToolSpec } from './types';
 
 /**
@@ -330,19 +331,37 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
   ]);
   const groupName = new Map(groups.map((g) => [g.id, g.name]));
 
+  // Every row carries `id`, `kind`, its display name and its PARENT (subject
+  // name and id), so one search result is enough to call any other tool. The
+  // subject bucket previously exposed only a NAME, so the model could not get a
+  // subjectId from a search at all, and assessments carried no id whatsoever.
   interface Bucket {
+    subjectId: string;
     subject: string;
     matchedSubject: boolean;
-    topics: { id: string; title: string; status: Topic['status']; excerpt: string }[];
-    resources: { id: string; title: string; kind: Resource['kind']; dueDate: string | null; group: string | null }[];
-    assessments: { name: string; type: Assessment['type']; date: string }[];
+    topics: {
+      id: string; kind: 'topic'; title: string; status: Topic['status'];
+      excerpt: string; subjectId: string; subject: string;
+    }[];
+    resources: {
+      id: string; kind: 'resource'; title: string; resourceKind: Resource['kind'];
+      dueDate: string | null; group: string | null;
+      subjectId: string; subject: string; topicId: string | null; topic: string | null;
+    }[];
+    assessments: {
+      id: string; kind: 'assessment'; name: string; type: Assessment['type'];
+      date: string; subjectId: string; subject: string;
+    }[];
   }
 
   const buckets = new Map<string, Bucket>();
   const bucketFor = (subject: Subject): Bucket => {
     const existing = buckets.get(subject.id);
     if (existing) return existing;
-    const created: Bucket = { subject: subject.name, matchedSubject: false, topics: [], resources: [], assessments: [] };
+    const created: Bucket = {
+      subjectId: subject.id, subject: subject.name, matchedSubject: false,
+      topics: [], resources: [], assessments: [],
+    };
     buckets.set(subject.id, created);
     return created;
   };
@@ -367,9 +386,14 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
     const body = topicPlainText(t);
     if (t.title.toLowerCase().includes(q) || body.toLowerCase().includes(q)) {
       const subject = subjects.find((s) => s.id === t.subjectId);
-      // The id travels with the topic: without it the model can name a topic
-      // but can never pass one to a tool.
-      if (subject) bucketFor(subject).topics.push({ id: t.id, title: t.title, status: t.status, excerpt: excerpt(body, q) });
+      // The id travels with the topic, and so does its parent subject, so one
+      // search result is enough to call any later tool with either id.
+      if (subject) {
+        bucketFor(subject).topics.push({
+          id: t.id, kind: 'topic', title: t.title, status: t.status,
+          excerpt: excerpt(body, q), subjectId: subject.id, subject: subject.name,
+        });
+      }
     }
   }
   // Defensive: a row restored from an older backup can be missing `tags` or
@@ -392,12 +416,19 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
     if (matchesResource(r)) {
       const subject = subjects.find((s) => s.id === r.subjectId);
       if (subject) {
+        const topic = r.topicId ? topics.find((t) => t.id === r.topicId) : undefined;
         bucketFor(subject).resources.push({
           id: r.id,
+          // `kind` is now the ITEM kind, so it is uniform across topics,
+          // resources and assessments. The resource's own link/file type moved
+          // to `resourceKind` rather than overloading the word.
+          kind: 'resource',
           title: r.title,
-          kind: r.kind,
+          resourceKind: r.kind,
           dueDate: r.dueDate ?? null,
           group: (r.groupId ? groupName.get(r.groupId) : undefined) ?? null,
+          subjectId: subject.id, subject: subject.name,
+          topicId: topic?.id ?? null, topic: topic?.title ?? null,
         });
       }
     }
@@ -405,7 +436,15 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
   for (const a of assessments) {
     if (a.name.toLowerCase().includes(q)) {
       const subject = subjects.find((s) => s.id === a.subjectId);
-      if (subject) bucketFor(subject).assessments.push({ name: a.name, type: a.type, date: a.date });
+      if (subject) {
+        bucketFor(subject).assessments.push({
+          // Assessments previously carried no id at all, so there was no way to
+          // act on one afterwards. The id is what makes updateAssessment and
+          // deleteAssessment possible.
+          id: a.id, kind: 'assessment', name: a.name, type: a.type,
+          date: a.date, subjectId: subject.id, subject: subject.name,
+        });
+      }
     }
   }
 
@@ -555,53 +594,43 @@ async function manageSplitScreen(args: Record<string, unknown>): Promise<ToolExe
     throw new ToolError('Opening a pane needs a "viewType" (and a "resourceId" for a PDF).');
   }
 
-  // Resolve a real resource. An id always wins; only then is a title/name
-  // attempted. The model used to have no id to copy and would pass the FILE
-  // NAME as one, which failed outright. Forgiving that here is far better than
-  // another round-trip the model cannot recover from.
+  // Resolve a real resource through the ONE shared resolver. This had its own
+  // hand-rolled copy (id, then exact title, then contains) which was a third
+  // variation on the same idea; it now behaves identically to every other tool,
+  // including returning candidates on ambiguity rather than a dead end.
   let resource: Resource | undefined;
-  let ambiguous: Resource[] = [];
+  let ambiguousIds: { id: string; name: string }[] = [];
   if (resourceId) {
-    resource = await db.resources.get(resourceId);
-    if (!resource) {
-      const needle = resourceId.trim().toLowerCase();
-      const all = await db.resources.toArray();
-      // Exact (case-insensitive) title/fileName matches first, then contains.
-      const exact = all.filter(
-        (r) => r.title.toLowerCase() === needle || (r.fileName ?? '').toLowerCase() === needle
-      );
-      const pool = exact.length > 0 ? exact : all.filter(
-        (r) => r.title.toLowerCase().includes(needle) || (r.fileName ?? '').toLowerCase() === needle
-      );
-      if (pool.length === 1) {
-        resource = pool[0];
-      } else if (pool.length > 1) {
-        ambiguous = pool.slice(0, 10);
-      }
-    }
+    const r = resolveItem<Resource>({
+      kind: 'resource',
+      ref: resourceId,
+      rows: await db.resources.toArray(),
+      nameOf: (row) => row.title,
+      label: 'resource',
+    });
+    if ('row' in r) resource = r.row;
+    else if (isAmbiguous(r)) ambiguousIds = r.candidates;
   }
 
-  // Several plausible matches is not an error to throw away — return the
+  // Several plausible matches is not an error to throw away: return the
   // candidates WITH their ids so the model can pick one and call again.
-  if (ambiguous.length > 0) {
+  if (ambiguousIds.length > 0) {
     return {
       ok: false,
-      summary: `“${resourceId}” matches ${ambiguous.length} resources. Call again with one of these ids.`,
+      summary: `“${resourceId}” matches ${ambiguousIds.length} resources. Call again with one of these ids.`,
       data: {
         error: 'ambiguous_resource',
         query: resourceId,
-        candidates: ambiguous.map((r) => ({
-          id: r.id,
-          title: r.title,
-          type: r.kind,
-        })),
+        candidates: ambiguousIds.map((c) => ({ id: c.id, title: c.name, type: 'resource' })),
       },
     };
   }
 
   if (resourceId && !resource) {
     throw new ToolError(
-      `No resource has id “${resourceId}”, and nothing is titled like it. Call searchLibrary and use the "id" field from its "resources" results — never the file name.`
+      `No resource matches “${resourceId}”, and nothing is titled like it. `
+      + `Call searchLibrary and pass the "id" field from its "resources" results — never the file name. `
+      + `Nothing was changed.`
     );
   }
 
