@@ -1,8 +1,10 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Columns2, Maximize2, Minimize2, PanelLeftClose, X } from 'lucide-react';
+import { Columns2, FileText, Maximize2, Minimize2, PanelLeftClose, X } from 'lucide-react';
 import { db } from '../../db/db';
 import { previewKindFor } from '../library/previewKind';
+import { FilePicker } from '../library/components/FilePicker';
+import { labelForResource, type PickerWant } from '../library/components/filePickerData';
 import type { Resource, Topic } from '../../types';
 import {
   addSecondPane, closePane, initialSplitState, setPane, toggleMaximize,
@@ -65,19 +67,33 @@ interface PaneHeaderProps {
 export const PaneHeader: React.FC<PaneHeaderProps> = ({
   index, slot, split, maximized, setState, pdfControls, imageControls,
 }) => {
-  // Pickers are driven by the currently selected kind, so each pane chooses
-  // "Dashboard / PDF / Notes / Assistant" and then its own resource or topic.
-  const pdfs = useLiveQuery(async () => {
-    const all = await db.resources.toArray();
-    return all.filter((r) => r.kind === 'file' && !!r.blob);
-  }, []) ?? [];
-  // Images use the SAME detector the viewer uses (`previewKindFor`), so the
-  // dropdown can never offer something the viewer then refuses to render — the
-  // two lists staying in sync is the whole point of sharing the helper.
-  const images = useLiveQuery(async () => {
-    const all = await db.resources.toArray();
-    return all.filter((r) => !!r.blob && previewKindFor(r) === 'image');
-  }, []) ?? [];
+  // The picker supplies the file list now, so this header no longer queries
+  // resources at all. It needs only the CURRENT file's label, which is the one
+  // thing the picker itself does not hand back to the button that opened it.
+  const currentId = slot.kind === 'image' ? slot.imageId : slot.resourceId;
+  const currentResource = useLiveQuery(
+    () => (currentId ? db.resources.get(currentId) : undefined),
+    [currentId],
+  );
+  // The title AND the path, so two files called "1-introduction" are told apart
+  // in the header itself. Resolved through the picker's own data layer, which
+  // is the only place that knows how to walk the group tree.
+  const [docLabel, setDocLabel] = useState<{ title: string; path: string } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!currentId) { setDocLabel(null); return; }
+    void labelForResource(currentId).then((l) => {
+      if (!cancelled) setDocLabel(l);
+    });
+    return () => { cancelled = true; };
+  }, [currentId]);
+
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // The viewer this pane is showing decides what the picker may offer. A pane
+  // with nothing open yet defaults to PDFs, which is the common case.
+  const want: PickerWant = slot.kind === 'image' ? 'image' : 'pdf';
+  const currentDoc = docLabel;
+
   const topics = useLiveQuery(() => db.topics.toArray(), []) ?? [];
 
   const select = (patch: Partial<PaneSlot> & { kind: PaneSlot['kind'] }) => {
@@ -88,14 +104,16 @@ export const PaneHeader: React.FC<PaneHeaderProps> = ({
     setState((s) => setPane(s, index, next));
   };
 
-  // The current document, encoded so one dropdown can carry both kinds.
-  const selectedDoc = slot.kind === 'pdf' && slot.resourceId
-    ? `pdf:${slot.resourceId}`
-    : slot.kind === 'image' && slot.imageId
-      ? `image:${slot.imageId}`
-      : slot.kind === 'notes' && slot.topicId
-        ? `note:${slot.topicId}`
-        : '';
+  // A file chosen in the picker also switches the pane to the matching view, so
+  // the user never has to set the view and the file as two separate steps. The
+  // kind is derived from the SAME detector the picker filtered with, so the pane
+  // cannot end up trying to render a file the picker thought it could not.
+  const pickFile = (r: Resource) => {
+    setPickerOpen(false);
+    select(previewKindFor(r) === 'image'
+      ? { kind: 'image', imageId: r.id }
+      : { kind: 'pdf', resourceId: r.id });
+  };
 
   // The two dropdowns, as a value so they can be rendered in two different
   // places: inside the PDF viewer's own toolbar (a PDF pane) or in the pane's
@@ -117,46 +135,56 @@ export const PaneHeader: React.FC<PaneHeaderProps> = ({
         <option value="assistant">Assistant</option>
       </select>
 
-      {/* The document dropdown is ALWAYS rendered, on every pane kind. It used
-          to appear only for pdf/notes, which left an empty pane with just a
-          view selector: picking "PDF preview" gave a pane whose only way
-          forward was another round of navigation. Now the file can be chosen
-          straight from the header, and choosing one also switches the pane to
-          the matching kind, so no intermediate step is needed. */}
-      <select
+      {/* The FILE selector is the drill-down picker, not a flat list.
+          It used to be one <select> carrying every PDF, image and note in a
+          flat list of titles, which is unusable now that files are called
+          "1-introduction" and that name repeats across subjects and folders.
+
+          The button itself shows the current file WITH ITS PATH, truncated, so
+          which file a pane is showing is answerable from the header without
+          opening anything. `min-w-0` plus `truncate` is what makes that work on
+          a narrow split half: the text gives way rather than pushing the rest
+          of the toolbar off-screen.
+
+          NOTES are still chosen from their own dropdown. A topic is not a file
+          and does not live in a group, so teaching the picker about notes would
+          mean inventing a node kind the tree does not have. It is left as it
+          was, and reported as not swapped. */}
+      <button
+        onClick={() => setPickerOpen(true)}
         aria-label={`Pane ${index + 1} document`}
-        value={selectedDoc}
-        onChange={(e) => {
-          const v = e.target.value;
-          if (v.startsWith('pdf:')) select({ kind: 'pdf', resourceId: v.slice(4) });
-          else if (v.startsWith('image:')) select({ kind: 'image', imageId: v.slice(6) });
-          else if (v.startsWith('note:')) select({ kind: 'notes', topicId: v.slice(5) });
-          else select({ kind: slot.kind === 'pdf' ? 'pdf' : slot.kind === 'image' ? 'image' : 'notes' });
-        }}
-        className={`${field} w-[8rem] sm:w-[11rem] shrink-0`}
+        aria-haspopup="dialog"
+        aria-expanded={pickerOpen}
+        data-pane-document
+        title={currentDoc ? `${currentDoc.title} - ${currentDoc.path}` : 'Choose a file'}
+        className={`${field} w-[9rem] sm:w-[13rem] shrink-0 flex items-center gap-1.5 text-left`}
       >
-        <option value="">Select file\u2026</option>
-        {(pdfs as Resource[]).length > 0 && (
-          <optgroup label="PDFs">
-            {(pdfs as Resource[]).map((r) => (
-              <option key={r.id} value={`pdf:${r.id}`}>{r.title}</option>
-            ))}
-          </optgroup>
-        )}
-        {(images as Resource[]).length > 0 && (
-          <optgroup label="Images">
-            {(images as Resource[]).map((r) => (
-              <option key={r.id} value={`image:${r.id}`}>{r.title}</option>
-            ))}
-          </optgroup>
-        )}
-        {(topics as Topic[]).length > 0 && (
-          <optgroup label="Notes">
-            {(topics as Topic[]).map((t) => (
-              <option key={t.id} value={`note:${t.id}`}>{t.title}</option>
-            ))}
-          </optgroup>
-        )}
+        <FileText className="w-3.5 h-3.5 text-content-tertiary shrink-0" aria-hidden="true" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-semibold">
+            {currentDoc?.title ?? 'Choose a file...'}
+          </span>
+          {/* The path is the whole point: two files share a name, and this is
+              what tells them apart without opening the picker. Hidden when
+              there is no file yet, so the button is not half empty. */}
+          {currentDoc && (
+            <span className="block truncate text-[10px] font-normal text-content-tertiary">
+              {currentDoc.path}
+            </span>
+          )}
+        </span>
+      </button>
+
+      <select
+        aria-label={`Pane ${index + 1} note`}
+        value={slot.kind === 'notes' && slot.topicId ? slot.topicId : ''}
+        onChange={(e) => select({ kind: 'notes', topicId: e.target.value })}
+        className={`${field} max-w-[8rem] shrink-0`}
+      >
+        <option value="">Notes...</option>
+        {(topics as Topic[]).map((t) => (
+          <option key={t.id} value={t.id}>{t.title}</option>
+        ))}
       </select>
     </>
   );
@@ -212,6 +240,7 @@ export const PaneHeader: React.FC<PaneHeaderProps> = ({
   );
 
   return (
+    <>
     <div className="flex items-center gap-1 shrink-0">
       {/* LEFT: view + document selectors, always present. */}
       <div className="flex items-center gap-1.5 flex-shrink-0 whitespace-nowrap">
@@ -254,6 +283,21 @@ export const PaneHeader: React.FC<PaneHeaderProps> = ({
       {/* RIGHT: pane-level actions. */}
       <div className="flex items-center gap-1 flex-shrink-0 whitespace-nowrap">{actions}</div>
     </div>
+
+      {/* The picker itself. It renders through a portal into document.body, so
+          it is a SIBLING of this header rather than a child: the pane wrapper is
+          `overflow-hidden` and the header row is horizontally scrollable, either
+          of which would clip a popover anchored inside it. `slotKey` is the pane
+          index, so each pane browses and remembers independently. */}
+      <FilePicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        currentResource={currentResource ?? null}
+        want={want}
+        slotKey={`pane-${index}`}
+        onPick={pickFile}
+      />
+    </>
   );
 };
 

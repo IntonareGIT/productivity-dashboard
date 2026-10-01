@@ -277,13 +277,30 @@ const touchHook = readFileSync('src/features/library/useZoomAnchor.ts', 'utf8');
   check('10 the picker offers all four kinds',
     /value="dashboard"/.test(paneHeader) && /value="pdf"/.test(paneHeader) &&
     /value="notes"/.test(paneHeader) && /value="assistant"/.test(paneHeader));
-  // ONE document dropdown on every pane kind, grouping PDFs and notes, rather
-  // than two sub-pickers that only appeared for pdf/notes kinds.
-  check('10 the picker has one document dropdown covering PDFs and notes',
-    /Select file/.test(paneHeader) && /optgroup label="PDFs"/.test(paneHeader) &&
-    /optgroup label="Notes"/.test(paneHeader));
-  check('10 the document dropdown is always rendered, not kind-gated',
+  // The flat document <select> is GONE. It listed every PDF, image and note by
+  // title alone, so two files called "1-introduction" were indistinguishable.
+  // The file chooser is now the drill-down picker. These assertions were
+  // rewritten with the swap, not deleted: each one keeps the property it was
+  // protecting and now checks it against the picker.
+  check('10 the document control is the drill-down picker, not a flat select',
+    /<FilePicker/.test(paneHeader) && /data-pane-document/.test(paneHeader) &&
+    !/optgroup label="PDFs"/.test(paneHeader));
+  check('10 the document control is still reachable on every pane kind',
+    /aria-label=\{`Pane \$\{index \+ 1\} document`\}/.test(paneHeader) &&
     !/\{(slot\.kind === 'pdf' \|\| slot\.kind === 'notes') && \(\s*<select/.test(paneHeader));
+  check('10 the button shows the current file name WITH its path',
+    /currentDoc\?\.title/.test(paneHeader) && /\{currentDoc\.path\}/.test(paneHeader));
+  check('10 the button truncates rather than pushing the toolbar off a narrow pane',
+    /min-w-0/.test(paneHeader) && /truncate/.test(paneHeader));
+  check('10 each pane passes its OWN slotKey, so panes never share a location',
+    /slotKey=\{`pane-\$\{index\}`\}/.test(paneHeader));
+  check('10 the picker is a sibling of the header row, not a clipped child',
+    /<\/div>\s*\n\s*\{?\/\* The picker itself/.test(paneHeader) ||
+    paneHeader.indexOf('overflow-hidden') < 0);
+  check('10 notes are still selectable from their own dropdown',
+    /Pane \$\{index \+ 1\} note/.test(paneHeader));
+  check('10 a chosen file switches the pane to the matching view',
+    /previewKindFor\(r\) === 'image'/.test(paneHeader));
   check('10 there is a swap control', /swapPanes\(s\)/.test(splitView) || /swapPanes\(s\)/.test(paneHeader));
   check('10 there is a close control collapsing to one pane', /closePane\(s, index\)/.test(paneHeader));
   check('10 a single pane can open the split', /addSecondPane\(s, \{ kind: 'assistant' \}\)/.test(paneHeader));
@@ -718,8 +735,8 @@ const touchHook = readFileSync('src/features/library/useZoomAnchor.ts', 'utf8');
     check('H the view and document dropdowns are unconditional',
       /{selectors}/.test(paneHeader) && !/part ===/.test(paneHeader));
     check('H the document dropdown is present on every pane kind',
-      /aria-label={`Pane \$\{index \+ 1\} document`}/.test(paneHeader) &&
-      /Select file/.test(paneHeader));
+      /aria-label=\{`Pane \$\{index \+ 1\} document`\}/.test(paneHeader) &&
+      /Choose a file/.test(paneHeader));
     check('H the PDF controls are conditional on the view type',
       /pdfControls && \(/.test(paneHeader) &&
       /pdfControls\?: React\.ReactNode/.test(paneHeader));
@@ -809,13 +826,20 @@ const touchHook = readFileSync('src/features/library/useZoomAnchor.ts', 'utf8');
     check('19 image is a first-class pane kind',
       /'pdf' \| 'image' \| 'notes'/.test(model) && /imageId\?: string/.test(model));
     check('19 the view picker offers Image', /<option value="image">/.test(paneHeader));
-    check('19 the document dropdown lists images',
-      /<optgroup label="Images">/.test(paneHeader) && /image:\$\{r\.id\}/.test(paneHeader));
-    // The dropdown and the viewer must agree on what counts as an image, or the
+    // The image list is no longer built here at all: the picker filters by the
+    // viewer's `want`, and the header only says which viewer it is. What must
+    // still hold is that BOTH sides use the same detector, or the picker would
+    // offer something the viewer then refuses to render.
+    check('19 the document chooser lists images through the picker',
+      /<FilePicker/.test(paneHeader) && /want=\{want\}/.test(paneHeader) &&
+      /slot\.kind === 'image' \? 'image' : 'pdf'/.test(paneHeader));
+    // The chooser and the viewer must agree on what counts as an image, or the
     // picker offers something the viewer then refuses to render.
-    check('19 the dropdown uses the viewer\'s own detector',
+    check('19 the chooser uses the viewer\'s own detector',
       /previewKindFor\(r\) === 'image'/.test(paneHeader) &&
-      /from '..\/library\/previewKind'/.test(paneHeader));
+      /from '\.\.\/library\/previewKind'/.test(paneHeader) &&
+      /previewKindFor/.test(readFileSync(
+        'src/features/library/components/filePickerData.ts', 'utf8')));
 
     check('19 a split pane dispatches image content',
       /case 'image':/.test(paneContent) && /onRegisterImageControls/.test(paneContent));
