@@ -297,8 +297,20 @@ const touchHook = readFileSync('src/features/library/useZoomAnchor.ts', 'utf8');
   check('10 the picker is a sibling of the header row, not a clipped child',
     /<\/div>\s*\n\s*\{?\/\* The picker itself/.test(paneHeader) ||
     paneHeader.indexOf('overflow-hidden') < 0);
-  check('10 notes are still selectable from their own dropdown',
-    /Pane \$\{index \+ 1\} note/.test(paneHeader));
+  // The old flat notes <select> is gone for good; `every` is used rather than a
+  // leading `!` because a line that BEGINS with `!` after a completed call
+  // triggers automatic semicolon insertion and fails to parse.
+  const hasOldNotesDropdown = /Pane \$\{index \+ 1\} note/.test(paneHeader);
+  check('10 notes are selectable FROM THE PICKER, not a flat dropdown',
+    /onPickNote=\{pickNote\}/.test(paneHeader)
+    && /kinds=\{kinds\}/.test(paneHeader)
+    && /PickerKinds = \['resource', 'note'\]/.test(paneHeader)
+    && hasOldNotesDropdown === false);
+  check('10 choosing a note opens it in the notes view of that pane',
+    /select\(\{ kind: 'notes', topicId: t\.id \}\)/.test(paneHeader));
+  check('10 the header shows a note with its path, like a file',
+    /labelForNote\(currentTopic\.id\)/.test(paneHeader)
+    && /currentTopic\s*\?\s*\n?\s*<NotebookPen/.test(paneHeader));
   check('10 a chosen file switches the pane to the matching view',
     /previewKindFor\(r\) === 'image'/.test(paneHeader));
   check('10 there is a swap control', /swapPanes\(s\)/.test(splitView) || /swapPanes\(s\)/.test(paneHeader));

@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, FileText, Folder, FolderOpen, Search, X } from 'lucide-react';
-import type { Resource } from '../../../types';
+import { ArrowLeft, FileText, Folder, FolderOpen, NotebookPen, Search, X } from 'lucide-react';
+import type { Resource, Topic } from '../../../types';
 import { Z } from '../../../components/ui/zIndex';
 import {
+  DEFAULT_KINDS,
   getChildren, getRecentNodes, lastLocation, noteOpened, pathToResource,
-  rememberLocation, searchAll,
-  type PickerNode, type PickerWant,
+  pathToTopic, rememberLocation, searchAll,
+  type PickerKinds, type PickerNode, type PickerWant,
 } from './filePickerData';
 
 export interface FilePickerProps {
@@ -14,8 +15,16 @@ export interface FilePickerProps {
   onClose: () => void;
   /** The file currently open, so the picker can start where it is. */
   currentResource?: Resource | null;
+  /** The note currently open, for a notes pane. */
+  currentTopic?: Topic | null;
   /** Filters what is openable: 'pdf' for the PDF viewer, 'image' for images. */
   want?: PickerWant;
+  /**
+   * Which kinds this caller can open. `['resource']` for the PDF and image
+   * selectors, so a note is never offered to a viewer that cannot show one;
+   * `['resource', 'note']` for the split pane's open menu, which can do both.
+   */
+  kinds?: PickerKinds;
   /**
    * Identifies the calling slot, normally the pane index. Two split panes each
    * pass their own, so each keeps its own selection AND its own remembered
@@ -23,6 +32,8 @@ export interface FilePickerProps {
    */
   slotKey?: string;
   onPick: (resource: Resource) => void;
+  /** Called instead of `onPick` when a NOTE row is chosen. */
+  onPickNote?: (topic: Topic) => void;
 }
 
 /**
@@ -41,7 +52,8 @@ export interface FilePickerProps {
  * thumb, and arrows, Enter, Backspace and Escape work from a keyboard.
  */
 export const FilePicker: React.FC<FilePickerProps> = ({
-  open, onClose, currentResource, want = 'pdf', slotKey = 'default', onPick,
+  open, onClose, currentResource, currentTopic, want = 'pdf',
+  kinds = DEFAULT_KINDS, slotKey = 'default', onPick, onPickNote,
 }) => {
   const [path, setPath] = useState<PickerNode[]>([]);
   const [rows, setRows] = useState<PickerNode[]>([]);
@@ -52,22 +64,28 @@ export const FilePicker: React.FC<FilePickerProps> = ({
   const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [cursor, setCursor] = useState(0);
 
+  // A note counts as "the current item" exactly as a file does, so the picker
+  // opens on the subject the open note lives in and highlights that note.
+  const currentId = currentResource?.id ?? currentTopic?.id ?? null;
+
   // Where the picker opens, in the order the brief asks for: the currently open
-  // file's own location first, then the last place this slot was left, then the
-  // root. Re-run whenever it opens or the current file changes.
+  // item's own location first, then the last place this slot was left, then the
+  // root. Re-run whenever it opens or the current item changes.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setQuery('');
     setRecents(getRecentNodes());
     void (async () => {
-      const start = currentResource
-        ? await pathToResource(currentResource.id)
-        : (lastLocation(slotKey) ?? []);
+      const start = currentTopic
+        ? await pathToTopic(currentTopic.id)
+        : currentResource
+          ? await pathToResource(currentResource.id)
+          : (lastLocation(slotKey) ?? []);
       if (cancelled) return;
       setPath(start);
     })();
-  }, [open, currentResource?.id, slotKey]);
+  }, [open, currentResource?.id, currentTopic?.id, slotKey]);
 
   const current = path.length > 0 ? path[path.length - 1] : null;
 
@@ -84,15 +102,15 @@ export const FilePicker: React.FC<FilePickerProps> = ({
     void (async () => {
       const q = query.trim();
       const list = q
-        ? await searchAll(q, want, currentResource?.id ?? null)
-        : await getChildren(current, want, currentResource?.id ?? null);
+        ? await searchAll(q, want, currentId, kinds)
+        : await getChildren(current, want, currentId, kinds);
       if (cancelled) return;
       setRows(list);
       setCursor(0);
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [open, current, query, want, currentResource?.id]);
+  }, [open, current, query, want, currentId, kinds]);
 
   // Focus the search box on open, so typing works without a tap.
   useEffect(() => {
@@ -102,22 +120,37 @@ export const FilePicker: React.FC<FilePickerProps> = ({
   /**
    * The rows actually on screen, and where the Recent section ends.
    *
-   * Step 1 shows the Recent files ABOVE the subjects, rather than replacing
+   * Step 1 shows the Recent items ABOVE the subjects, rather than replacing
    * them: the brief asks for a Recent section at the top of step 1, and
    * subjects are step 1's real content. It only appears at the root and only
    * when something has been opened, because an empty heading is worse than no
    * heading. A search suppresses it, because a "Recent" heading in the middle
    * of search results would be a lie about where these rows came from.
+   *
+   * A Recent row the caller cannot open is filtered out here rather than shown
+   * as a row that does nothing: a PDF viewer must not list a note just because
+   * the user opened one in the other pane.
    */
-  const showRecent = !query.trim() && path.length === 0 && recents.length > 0;
-  const visible = showRecent ? [...recents, ...rows] : rows;
-  const recentCount = showRecent ? recents.length : 0;
+  const usableRecents = recents.filter((n) => (
+    n.kind === 'note' ? kinds.includes('note') : kinds.includes('resource')
+  ));
+  const showRecent = !query.trim() && path.length === 0 && usableRecents.length > 0;
+  const visible = showRecent ? [...usableRecents, ...rows] : rows;
+  const recentCount = showRecent ? usableRecents.length : 0;
 
   const goUp = useCallback(() => setPath((p) => p.slice(0, -1)), []);
   const goTo = useCallback((depth: number) => setPath((p) => p.slice(0, depth + 1)), []);
 
   const choose = useCallback((node: PickerNode) => {
     if (node.disabledReason) return;
+    // A note is a leaf you open, not a folder you descend into.
+    if (node.kind === 'note') {
+      if (!node.topic || !onPickNote) return;
+      noteOpened(node);
+      onPickNote(node.topic);
+      onClose();
+      return;
+    }
     if (node.kind !== 'resource' || !node.resource) {
       setPath((p) => [...p, node]);
       return;
@@ -125,7 +158,7 @@ export const FilePicker: React.FC<FilePickerProps> = ({
     noteOpened(node);
     onPick(node.resource);
     onClose();
-  }, [onPick, onClose]);
+  }, [onPick, onPickNote, onClose]);
 
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
@@ -246,9 +279,15 @@ return createPortal(
                       ${node.disabledReason ? 'opacity-45 cursor-not-allowed' : 'hover:bg-bg-elevated'}
                       ${node.isCurrent ? 'bg-accent-subtle' : ''}`}
                   >
+                    {/* A note needs its OWN icon, not the file one. Sharing the
+                        file glyph would make a note indistinguishable from a
+                        document called the same thing, which is the exact
+                        confusion this picker exists to remove. */}
                     {isFolder
                       ? <Folder className="w-4 h-4 text-content-tertiary shrink-0" />
-                      : <FileText className="w-4 h-4 text-content-tertiary shrink-0" />}
+                      : node.kind === 'note'
+                        ? <NotebookPen className="w-4 h-4 text-accent shrink-0" aria-hidden="true" />
+                        : <FileText className="w-4 h-4 text-content-tertiary shrink-0" />}
                     <span className="min-w-0 flex-1">
                       {/* Two files with the same name are only distinguishable by
                           the path underneath, which is the whole reason this picker

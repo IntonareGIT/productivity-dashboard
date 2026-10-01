@@ -51,13 +51,33 @@ const img = (id, title, extra = {}) => ({
 const grp = (id, name, parentGroupId, subjectId = 's1') => ({
   id, subjectId, name, parentGroupId, order: 0, createdAt: 'x',
 });
+// A note IS a Topic row. `topicId` is its own id, which is how the rest of the
+// app refers to it.
+const note = (id, title, subjectId) => ({
+  id, subjectId, title, topicId: id, notes: 'body',
+  status: 'not_started', order: 0, createdAt: 'x', updatedAt: 'x',
+});
 
 globalThis.__S = {
   subjects: new Map([
     ['s1', { id: 's1', name: 'Thermodynamics', color: '#111', createdAt: 'x' }],
     ['s2', { id: 's2', name: 'Physics', color: '#222', createdAt: 'x' }],
+    // A subject with notes and NOTHING else: no groups, no files.
+    ['s3', { id: 's3', name: 'Chemistry', color: '#333', createdAt: 'x' }],
   ]),
-  topics: new Map(),
+  topics: new Map([
+    // A note in each subject, plus two with the SAME title in different
+    // subjects, which is the note-side version of the duplicate-file problem.
+    ['n1', note('n1', "Thermodynamics's Notes", 's1')],
+    ['n2', note('n2', "Thermodynamics's Notes", 's2')],
+    // A note with a title the user typed, to prove custom titles survive.
+    ['n3', note('n3', 'Lecture 4 recap', 's1')],
+    // Natural sorting for note titles.
+    ['n4', note('n4', 'Week 10', 's1')],
+    ['n5', note('n5', 'Week 2', 's1')],
+    // A subject whose ONLY content is notes: no groups, no files.
+    ['n6', note('n6', "Physics's Notes 2", 's3')],
+  ]),
   resourceGroups: new Map([
     // A four-level chain: subject / L1 / L2 / L3 / L4 / resource.
     ['g1', grp('g1', 'Lectures')],
@@ -110,7 +130,8 @@ rmSync(outDir, { recursive: true, force: true });
 const P = await import(`file://${outFile.replace(/\\/g, '/')}`);
 const {
   getChildren, searchAll, pathToResource, noteOpened, getRecentNodes,
-  lastLocation, rememberLocation, labelForResource,
+  lastLocation, rememberLocation, labelForResource, pathToTopic, labelForNote,
+  DEFAULT_KINDS,
 } = P;
 
 let pass = 0;
@@ -125,9 +146,12 @@ const names = (rows) => rows.map((r) => r.name).join(',');
 /* ============ 1. step 1 shows the subjects ============ */
 const root = await getChildren(null, 'pdf');
 check('step 1 lists every subject',
-  names(root) === 'Physics,Thermodynamics', names(root));
+  names(root) === 'Chemistry,Physics,Thermodynamics', names(root));
+// Chemistry holds only a note. A file-only selector counts nothing there, so it
+// reports 0 rather than a made-up number; it still appears as a row.
 check('each subject reports how many folders and files it holds',
-  root.every((s) => typeof s.childCount === 'number' && s.childCount > 0),
+  root.filter((s) => s.childCount > 0).every((s) => typeof s.childCount === 'number')
+  && root.find((s) => s.id === 's1').childCount === 4,
   root.map((s) => `${s.name}:${s.childCount}`).join(' '));
 
 /* ============ 2. a subject WITH groups and ungrouped files ============ */
@@ -382,7 +406,110 @@ check('a file can be labelled with its title AND its full path',
 check('an unknown file yields no label rather than throwing',
   (await labelForResource('nope')) === null);
 
-/* ============ 17. the component is a thin renderer over this data ============ */
+/* ============ 18. notes in the tree ============ */
+const BOTH = ['resource', 'note'];
+const FILES_ONLY = ['resource'];
+
+// A subject with groups, files AND notes must show all three together, at the
+// subject level. This is the whole point of the change: notes used to live in a
+// flat global dropdown and a note had nowhere to be found from.
+const thermoAll = await getChildren(node('s1', 'subject', 'Thermodynamics'), 'pdf', null, BOTH);
+const thermoKindSet = [...new Set(thermoAll.map((r) => r.kind))].sort().join(',');
+check('a subject with groups, files and notes shows all three kinds together',
+  thermoKindSet === 'group,note,resource', thermoKindSet);
+check('the subject really does have all three',
+  thermoAll.some((r) => r.kind === 'group') && thermoAll.some((r) => r.kind === 'note')
+  && thermoAll.some((r) => r.kind === 'resource'));
+check('every note of the subject is listed, not just one',
+  thermoAll.filter((r) => r.kind === 'note').length === 4,
+  names(thermoAll.filter((r) => r.kind === 'note')));
+
+// A subject whose ONLY content is notes must still reach them.
+const chemOnly = await getChildren(node('s3', 'subject', 'Chemistry'), 'pdf', null, BOTH);
+check('a subject with only notes lists them and nothing else',
+  chemOnly.length === 1 && chemOnly[0].kind === 'note', names(chemOnly));
+
+// The PDF and image selectors must NOT offer notes, however many exist.
+const thermoFilesOnly = await getChildren(node('s1', 'subject', 'Thermodynamics'), 'pdf');
+check('a file-only selector shows NO notes at all',
+  !thermoFilesOnly.some((r) => r.kind === 'note'), names(thermoFilesOnly));
+check('the split pane selector (both kinds) DOES show notes',
+  thermoAll.some((r) => r.kind === 'note'));
+check('the default kinds are files-only, so a caller that forgets is safe',
+  !thermoFilesOnly.some((r) => r.kind === 'note'));
+
+// Notes never sit inside a group, because a group holds resources only.
+const inGroup = await getChildren(
+  { id: 'g1', kind: 'group', name: 'Lectures', childCount: 0, path: 'Lectures' }, 'pdf', null, BOTH);
+check('a GROUP never lists notes, only its subgroups and its files',
+  !inGroup.some((r) => r.kind === 'note'), names(inGroup));
+
+// Two notes with the same title must be told apart by their path.
+const sameNotes = (await searchAll("Thermodynamics's Notes", 'pdf', null, BOTH))
+  .filter((h) => h.kind === 'note');
+check('search finds two notes with the SAME title', sameNotes.length === 2,
+  names(sameNotes));
+const notePaths = sameNotes.map((h) => h.path).sort();
+check('their paths differ, so they are distinguishable',
+  notePaths[0] === 'Physics' && notePaths[1] === 'Thermodynamics',
+  notePaths.join(' | '));
+check('a note node carries its subject as the path, with no group',
+  sameNotes.every((h) => !h.path.includes('/')));
+
+// A note with a title the user typed is searched and listed by that title.
+check('a custom note title is used verbatim',
+  (await searchAll('Lecture 4', 'pdf', null, BOTH)).some((h) => h.id === 'n3'));
+
+// Search covers note TITLES only, never the body.
+globalThis.__S.topics.get('n1').notes = 'a body mentioning entropy and catalysis';
+const bodyHit = await searchAll('entropy', 'pdf', null, BOTH);
+check('search does NOT match note CONTENT, only the title',
+  !bodyHit.some((h) => h.id === 'n1'), names(bodyHit));
+check('but the note is still findable by its title',
+  (await searchAll("Thermodynamics's", 'pdf', null, BOTH)).some((h) => h.id === 'n1'));
+
+// Natural sorting applies to note titles exactly as it does to files.
+const noteOrder = thermoAll.filter((r) => r.kind === 'note').map((r) => r.name);
+check('note titles are naturally sorted, so "Week 2" beats "Week 10"',
+  noteOrder.indexOf('Week 2') < noteOrder.indexOf('Week 10'), noteOrder.join(','));
+
+// Row order is documented and consistent: groups, then notes, then files.
+const order = thermoAll.map((r) => r.kind);
+const firstNote = order.indexOf('note');
+const firstResource = order.indexOf('resource');
+const lastGroup = order.lastIndexOf('group');
+check('rows are ordered group, then note, then file',
+  lastGroup < firstNote && firstNote < firstResource, order.join(','));
+
+// Starting at the current item works for a note, not only for a file.
+const notePath = await pathToTopic('n3');
+check('the path to a note is just its subject',
+  notePath.length === 1 && notePath[0].name === 'Thermodynamics',
+  notePath.map((p) => p.name).join(','));
+check('the current note is marked on its row',
+  (await getChildren(notePath[0], 'pdf', 'n3', BOTH)).some((r) => r.isCurrent));
+check('an unknown note yields an empty path rather than throwing',
+  (await pathToTopic('nope')).length === 0);
+
+// The header label for a note carries the subject, like a file's group path.
+const noteLabel = await labelForNote('n1');
+check('a note is labelled with its title and its subject',
+  noteLabel.title === "Thermodynamics's Notes" && noteLabel.path === 'Thermodynamics',
+  `${noteLabel.title} :: ${noteLabel.path}`);
+
+// Recent includes notes, and a file-only picker does not offer a remembered note.
+noteOpened({ id: 'n3', kind: 'note', name: 'Lecture 4 recap', path: 'Thermodynamics', childCount: 0, topic: globalThis.__S.topics.get('n3') });
+check('a note can be remembered in the recent list',
+  getRecentNodes().some((r) => r.id === 'n3' && r.kind === 'note'));
+const compSrcNote = readFileSync('src/features/library/components/FilePicker.tsx', 'utf8');
+check('the component filters recent rows by the kinds it can open',
+  /usableRecents/.test(compSrcNote) && /kinds\.includes\('note'\)/.test(compSrcNote));
+check('a note is OPENED, not descended into',
+  /node\.kind === 'note'/.test(compSrcNote) && /onPickNote\(node\.topic\)/.test(compSrcNote));
+check('a note gets its own icon, distinct from a file',
+  /NotebookPen/.test(compSrcNote) && /node\.kind === 'note'/.test(compSrcNote));
+
+/* ============ 19. the component is a thin renderer over this data ============ */
 const dataSrc = readFileSync('src/features/library/components/filePickerData.ts', 'utf8');
 const compSrc = readFileSync('src/features/library/components/FilePicker.tsx', 'utf8');
 check('the data layer queries the tables', /db\.subjects\.toArray/.test(dataSrc)

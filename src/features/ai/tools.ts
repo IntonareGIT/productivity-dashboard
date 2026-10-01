@@ -183,7 +183,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     function: {
       name: 'manage_split_screen',
       description:
-        'Control the two-pane split view for side-by-side work: show a PDF, its notes, the dashboard or the assistant in a pane, close the split, or swap the panes. Use searchLibrary first and pass resource_id as the "id" field from its "resources" results — never the file name or the title.',
+        'Control the two-pane split view for side-by-side work: show a PDF, a note, the dashboard or the assistant in a pane, close the split, or swap the panes. Use searchLibrary first and pass the "id" field from its "resources" results for a PDF, or from its "topics" results for a note — never the file name or the title.',
       parameters: {
         type: 'object',
         properties: {
@@ -204,7 +204,7 @@ export const TOOL_SPECS: ToolSpec[] = [
           },
           resourceId: {
             type: 'string',
-            description: 'The study resource (PDF) to preview. Required when viewType is "pdf".',
+            description: 'The study resource (PDF) to preview, or the note to open. Required when viewType is "pdf" or "notes". A note is identified by the "id" from searchLibrary\'s "topics" results.',
           },
         },
         required: ['action'],
@@ -384,6 +384,14 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
     topics: {
       id: string; kind: 'topic'; title: string; status: Topic['status'];
       excerpt: string; subjectId: string; subject: string;
+      /**
+       * The note's path, in the same "Subject" form a resource carries as
+       * `groupPathString`. A note has no group, so this is simply its subject,
+       * and it is what makes two notes with the SAME title tellable apart: the
+       * default title is derived from the subject, but a user-typed title can
+       * repeat across subjects.
+       */
+      path: string;
     }[];
     resources: {
       id: string; kind: 'resource'; title: string; resourceKind: Resource['kind'];
@@ -436,6 +444,9 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
         bucketFor(subject).topics.push({
           id: t.id, kind: 'topic', title: t.title, status: t.status,
           excerpt: excerpt(body, q), subjectId: subject.id, subject: subject.name,
+          // A note belongs to its subject and no folder, so its path IS the
+          // subject name. Sent explicitly so the model does not have to infer it.
+          path: subject.name,
         });
       }
     }
@@ -529,11 +540,18 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
   const topicList = topics
     .filter((t) => t.title.toLowerCase().includes(q) || topicPlainText(t).toLowerCase().includes(q))
     .slice(0, 25)
-    .map((t) => ({
-      id: t.id,
-      title: t.title,
-      subject: subjects.find((s) => s.id === t.subjectId)?.name ?? null,
-    }));
+    .map((t) => {
+      // `path` is the SUBJECT name, matching what the picker shows and what the
+      // bucketed view carries. Without it two notes with the same title look
+      // identical to the model, and it cannot choose between them.
+      const subjectName = subjects.find((s) => s.id === t.subjectId)?.name ?? null;
+      return {
+        id: t.id,
+        title: t.title,
+        subject: subjectName,
+        path: subjectName,
+      };
+    });
 
   return {
     ok: true,
@@ -675,7 +693,10 @@ async function manageSplitScreen(args: Record<string, unknown>): Promise<ToolExe
     };
   }
 
-  if (resourceId && !resource) {
+  // A notes pane may have been given a NOTE id, which is not a resource at all,
+  // so an unresolved resource is only a hard error when a file is what the pane
+  // needs. Otherwise it falls through to the note lookup below.
+  if (resourceId && !resource && viewType !== 'notes') {
     throw new ToolError(
       `No resource matches “${resourceId}”, and nothing is titled like it. `
       + `Call searchLibrary and pass the "id" field from its "resources" results — never the file name. `
@@ -692,10 +713,41 @@ async function manageSplitScreen(args: Record<string, unknown>): Promise<ToolExe
     }
   }
   if (viewType === 'notes') {
+    // The ORIGINAL path still works: open a resource, and its topic's note is
+    // what the pane shows. Kept so nothing that used to work now fails.
     topicId = resource?.topicId ?? undefined;
-    if (!topicId) {
-      throw new ToolError('A notes pane needs a topic. Open a resource that belongs to a topic, or name the topic.');
+  }
+  // A notes pane can also be opened by naming a NOTE directly. Before this it
+  // could only be reached by opening a RESOURCE and borrowing that resource's
+  // topic, so "show me Thermodynamics's Notes in the left pane" was impossible:
+  // the note itself was not addressable. It now resolves through the SAME shared
+  // resolver as every other tool, so an id, an exact title and a unique partial
+  // all work, and an ambiguous name returns candidates rather than a guess.
+  if (viewType === 'notes' && !topicId && resourceId) {
+    const t = resolveItem<Topic>({
+      kind: 'note',
+      ref: resourceId,
+      rows: await db.topics.toArray(),
+      nameOf: (row) => row.title,
+      label: 'note',
+    });
+    if ('row' in t) {
+      topicId = t.row.id;
+    } else if (isAmbiguous(t)) {
+      return {
+        ok: false,
+        summary: `“${resourceId}” matches ${t.candidates.length} notes. Call again with one of these ids.`,
+        data: {
+          error: 'ambiguous_note',
+          query: resourceId,
+          candidates: t.candidates.map((c) => ({ id: c.id, title: c.name, type: 'note' })),
+        },
+      };
     }
+  }
+
+  if (viewType === 'notes' && !topicId) {
+    throw new ToolError('A notes pane needs a note. Search the library and pass the "id" field from its "topics" results.');
   }
 
   const cmd: Omit<SplitCommand, 'id'> = { action, pane, viewType, resourceId: resource?.id, topicId };

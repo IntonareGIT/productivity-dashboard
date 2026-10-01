@@ -261,6 +261,18 @@ check('10 deleting unknown event rejected', !!threw && /No event matches/.test(t
 // Seed two PDF resources: one with a blob (previewable), one without.
 S.resources.set('pdf1', { id: 'pdf1', subjectId: 'subA', topicId: 'topB', title: 'Calculus Ch.3', blob: new Blob(['x']) });
 S.resources.set('pdf2', { id: 'pdf2', subjectId: 'subA', topicId: null, title: 'Orphan notes' });
+// Notes, for the notes-pane resolution tests. `nAmb` and `nAmb2` deliberately
+// share a title so ambiguity can be proved rather than assumed.
+const noteRow = (id, title, subjectId) => ({
+  id, subjectId, title, topicId: id, notes: 'body',
+  status: 'not_started', order: 0, createdAt: 'x', updatedAt: 'x',
+});
+S.subjects.set('subA', { id: 'subA', name: 'Calculus', color: '#111', notes: '', createdAt: 'x', updatedAt: 'x' });
+S.subjects.set('subZ', { id: 'subZ', name: 'Algebra', color: '#222', notes: '', createdAt: 'x', updatedAt: 'x' });
+S.topics.set('noteA', noteRow('noteA', "Calculus's Notes", 'subA'));
+S.topics.set('noteZ', noteRow('noteZ', "Algebra's Notes", 'subZ'));
+S.topics.set('nAmb', noteRow('nAmb', 'Shared recap', 'subA'));
+S.topics.set('nAmb2', noteRow('nAmb2', 'Shared recap', 'subZ'));
 
 r = await call('manage_split_screen', { action: 'open', pane: 'left', viewType: 'pdf', resourceId: 'pdf1' });
 check('13 open queues a left-pane PDF command', r.data.pane === 'left' && r.data.action === 'open');
@@ -290,9 +302,40 @@ check('13 an open needs a view or a resource', !!threw && /needs a "viewType"/.t
 r = await call('manage_split_screen', { action: 'open', pane: 'right', viewType: 'notes', resourceId: 'pdf1' });
 check('13 a notes pane derives the topic from its resource', r.data.action === 'open' && /Notes/.test(r.summary), r.summary);
 
+// A note can now be named DIRECTLY, by the id searchLibrary returns. Before this
+// a note was unreachable: the tool could only borrow a resource's topic.
+{
+  // searchLibrary must give notes a PATH in the same shape resources get, or two
+  // notes with the same title are indistinguishable to the model.
+  const found = await call('searchLibrary', { query: 'recap' });
+  const hits = found.data?.topics ?? [];
+  check('searchLibrary returns notes', hits.length === 2, JSON.stringify(hits));
+  check('each note carries its path, like a resource carries its folder',
+    hits.every((h) => typeof h.path === 'string' && h.path.length > 0),
+    JSON.stringify(hits.map((h) => h.path)));
+  check('two same-titled notes are told apart by their subject path',
+    new Set(hits.map((h) => h.path)).size === 2,
+    hits.map((h) => `${h.title}@${h.path}`).join(' | '));
+}
+r = await call('manage_split_screen', { action: 'open', pane: 'left', viewType: 'notes', resourceId: 'noteA' });
+check('13 a notes pane opens from a NOTE id, not only from a resource',
+  r.ok === true && r.data.requested.topicId === 'noteA',
+  JSON.stringify(r.data.requested));
+r = await call('manage_split_screen', { action: 'open', pane: 'left', viewType: 'notes', resourceId: "Algebra's Notes" });
+check('13 a note is also resolvable by its exact title',
+  r.ok === true && r.data.requested.topicId === 'noteZ',
+  JSON.stringify(r.data.requested));
+r = await call('manage_split_screen', { action: 'open', pane: 'left', viewType: 'notes', resourceId: 'recap' });
+check('13 an ambiguous note name returns candidates, never a guess',
+  r.ok === false && r.data.error === 'ambiguous_note' && r.data.candidates.length === 2,
+  JSON.stringify(r.data));
+check('13 the ambiguous candidates carry ids, so the model can retry',
+  r.data.candidates.every((c) => !!c.id && c.type === 'note'),
+  JSON.stringify(r.data.candidates));
+
 threw = null;
 try { await call('manage_split_screen', { action: 'open', pane: 'right', viewType: 'notes', resourceId: 'pdf2' }); } catch (e) { threw = e.message; }
-check('13 a notes pane without a topic is rejected', !!threw && /needs a topic/.test(threw), threw);
+check('13 a notes pane that resolves to no note is rejected', !!threw && /No note matches|needs a note/.test(threw), threw);
 
 threw = null;
 try { await call('manage_split_screen', { action: 'teleport' }); } catch (e) { threw = e.message; }

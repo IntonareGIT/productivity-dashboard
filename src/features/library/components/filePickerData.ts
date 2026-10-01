@@ -1,5 +1,5 @@
 import { db } from '../../../db/db';
-import type { Resource, ResourceGroup, Subject } from '../../../types';
+import type { Resource, ResourceGroup, Subject, Topic } from '../../../types';
 import { previewKindFor } from '../previewKind';
 import { getChildGroups, getDescendants, getAncestors, pathOf, parentOf } from '../groupTree';
 
@@ -19,7 +19,7 @@ import { getChildGroups, getDescendants, getAncestors, pathOf, parentOf } from '
  * Library tree, the AI tools and this picker all read.
  */
 
-export type PickerNodeKind = 'subject' | 'group' | 'resource';
+export type PickerNodeKind = 'subject' | 'group' | 'note' | 'resource';
 
 /**
  * Which kind of file the calling viewer can OPEN.
@@ -30,6 +30,36 @@ export type PickerNodeKind = 'subject' | 'group' | 'resource';
  * says what this viewer can open.
  */
 export type PickerWant = 'pdf' | 'image';
+
+/**
+ * Which kinds of thing a caller can actually OPEN.
+ *
+ * Separate from `want`, because the two answer different questions. `want`
+ * narrows FILES to the ones a given viewer can render (PDFs for the PDF viewer,
+ * images for the image viewer). `kinds` says whether files are on offer at all,
+ * and whether notes are too: the PDF and image selectors pass
+ * `['resource']` and never show a note, while the split pane's open menu passes
+ * `['resource', 'note']` and shows both.
+ */
+export type PickerKinds = readonly ('resource' | 'note')[];
+
+/**
+ * Files only, which is what the PDF and image selectors pass.
+ *
+ * Chosen as the DEFAULT so that a caller that forgets the prop behaves the way
+ * it did before notes existed: a viewer is never handed a note it cannot open.
+ */
+export const DEFAULT_KINDS: PickerKinds = ['resource'];
+
+/**
+ * Row order within one level: folders, then notes, then files.
+ *
+ * Consistent everywhere, and asserted by the tests. Folders come first because
+ * they are the way down the tree; notes sit between because a note is material
+ * belonging to the subject itself, while a file is an attachment.
+ */
+const kindRank = (k: PickerNodeKind): number =>
+  k === 'group' ? 0 : k === 'note' ? 1 : 2;
 
 export interface PickerNode {
   id: string;
@@ -43,6 +73,8 @@ export interface PickerNode {
   path: string;
   resource?: Resource;
   group?: ResourceGroup;
+  /** A note node carries the Topic row, since a note IS a topic. */
+  topic?: Topic;
   /** True when this node is the currently open resource. */
   isCurrent?: boolean;
 }
@@ -58,9 +90,15 @@ export interface PickerNode {
 const RECENT_LIMIT = 5;
 const recent: PickerNode[] = [];
 
-/** Remember a file as recently opened, newest first, without duplicates. */
+/**
+ * Remember something as recently opened, newest first, without duplicates.
+ *
+ * Files AND notes, because the split pane's open menu offers both and the
+ * Recent section has to reflect what the user actually opened.
+ */
 export function noteOpened(node: PickerNode): void {
-  if (node.kind !== 'resource' || !node.resource) return;
+  if ((node.kind !== 'resource' && node.kind !== 'note')
+    || (!node.resource && !node.topic)) return;
   const i = recent.findIndex((r) => r.id === node.id);
   if (i >= 0) recent.splice(i, 1);
   recent.unshift(node);
@@ -107,12 +145,13 @@ const byName = (a: { name: string }, b: { name: string }) =>
 
 /** Everything the picker needs, read once per open. */
 async function loadAll() {
-  const [subjects, groups, resources] = await Promise.all([
+  const [subjects, groups, resources, topics] = await Promise.all([
     db.subjects.toArray(),
     db.resourceGroups.toArray(),
     db.resources.toArray(),
+    db.topics.toArray(),
   ]);
-  return { subjects, groups, resources };
+  return { subjects, groups, resources, topics };
 }
 
 /** "Subject / Lectures / Week 1" for one resource. */
@@ -121,6 +160,25 @@ function fullPath(subjects: Subject[], groups: ResourceGroup[], r: Resource): st
   const g = r.groupId ? groups.find((x) => x.id === r.groupId) : null;
   const gPath = g ? pathOf(groups, g.id) : '';
   return [subjectName, gPath].filter(Boolean).join(' / ');
+}
+
+/**
+ * The path for one note: its SUBJECT, and nothing else.
+ *
+ * A note has no group, because a group only ever holds resources. Even when the
+ * note was created inside a topic, the subject is the folder a person thinks in,
+ * so the note is listed under the subject. That is also what makes two notes with
+ * the same title distinguishable: their paths differ by subject.
+ *
+ * The second element is optional so the caller can show the topic name as
+ * secondary text without it being part of the path proper.
+ */
+export function pathOfNote(subjects: Subject[], topic: Topic): {
+  path: string;
+  subjectName: string;
+} {
+  const subjectName = subjects.find((s) => s.id === topic.subjectId)?.name ?? '';
+  return { path: subjectName, subjectName };
 }
 
 /**
@@ -138,17 +196,22 @@ export async function getChildren(
   node: PickerNode | null,
   want: PickerWant = 'pdf',
   currentResourceId?: string | null,
+  kinds: PickerKinds = DEFAULT_KINDS,
 ): Promise<PickerNode[]> {
-  const { subjects, groups, resources } = await loadAll();
+  const { subjects, groups, resources, topics } = await loadAll();
+  const wantNotes = kinds.includes('note');
+  const wantFiles = kinds.includes('resource');
 
   // ---- the root: every subject
   if (!node) {
     return subjects.slice().sort(byName).map((s) => {
       const folders = groups.filter((g) => g.subjectId === s.id && parentOf(g) === null).length;
       const loose = resources.filter((r) => r.subjectId === s.id && !r.groupId && listableFor(r, want)).length;
+      // A note is never inside a group, so it only ever adds at the subject level.
+      const notes = wantNotes ? topics.filter((t) => t.subjectId === s.id).length : 0;
       return {
         id: s.id, kind: 'subject' as const, name: s.name,
-        childCount: folders + loose, path: s.name,
+        childCount: folders + loose + notes, path: s.name,
       };
     });
   }
@@ -181,21 +244,38 @@ export async function getChildren(
     const here = node.kind === 'subject'
       ? resources.filter((r) => r.subjectId === node.id && !r.groupId)
       : resources.filter((r) => r.groupId === node.id);
-    for (const r of here) {
-      if (!listableFor(r, want)) continue;
-      const disabled = disabledReasonFor(r, want);
-      out.push({
-        id: r.id, kind: 'resource', name: r.title, childCount: 0,
-        path: fullPath(subjects, groups, r), resource: r,
-        disabledReason: disabled ?? undefined,
-        isCurrent: r.id === currentResourceId,
-      });
+    if (wantFiles) {
+      for (const r of here) {
+        if (!listableFor(r, want)) continue;
+        const disabled = disabledReasonFor(r, want);
+        out.push({
+          id: r.id, kind: 'resource', name: r.title, childCount: 0,
+          path: fullPath(subjects, groups, r), resource: r,
+          disabledReason: disabled ?? undefined,
+          isCurrent: r.id === currentResourceId,
+        });
+      }
     }
-    // Groups first (they are the way down), then files, each naturally sorted.
-    return out.sort((a, b) => (a.kind === b.kind ? byName(a, b) : a.kind === 'group' ? -1 : 1));
+    // Notes belong to the SUBJECT, never to a group, so they are added only at a
+    // subject. A note created inside a topic still shows here, because the
+    // subject is the folder the user browses by.
+    if (node.kind === 'subject' && wantNotes) {
+      for (const t of topics.filter((t) => t.subjectId === node.id)) {
+        const { path } = pathOfNote(subjects, t);
+        out.push({
+          id: t.id, kind: 'note', name: t.title, childCount: 0,
+          path, topic: t, isCurrent: t.id === currentResourceId,
+        });
+      }
+    }
+    // Groups first (they are the way down), then notes, then files; each group
+    // naturally sorted. Notes sit between the two because a folder is something
+    // you go INTO and a file is a leaf you open, while a note is a leaf you open
+    // too but is conceptually part of the subject's own material.
+    return out.sort((a, b) => (a.kind === b.kind ? byName(a, b) : kindRank(a.kind) - kindRank(b.kind)));
   }
 
-  // A resource has nothing inside it.
+  // A resource and a note both have nothing inside them.
   return [];
 }
 
@@ -213,17 +293,21 @@ export async function searchAll(
   query: string,
   want: PickerWant = 'pdf',
   currentResourceId?: string | null,
+  kinds: PickerKinds = DEFAULT_KINDS,
 ): Promise<PickerNode[]> {
   const q = query.trim().toLowerCase();
   if (!q) return [];
-  const { subjects, groups, resources } = await loadAll();
+  const { subjects, groups, resources, topics } = await loadAll();
+  const wantNotes = kinds.includes('note');
+  const wantFiles = kinds.includes('resource');
   const out: PickerNode[] = [];
 
   // Subjects too: the brief asks for one box that searches every subject and
   // group at once, and a subject whose NAME matches is a legitimate hit.
   for (const s of subjects) {
     if (!s.name.toLowerCase().includes(q)) continue;
-    if (!subjectHasOpenable(s.id, groups, resources, want)) continue;
+    const hasNotes = wantNotes && topics.some((t) => t.subjectId === s.id);
+    if (!subjectHasOpenable(s.id, groups, resources, want) && !hasNotes) continue;
     out.push({ id: s.id, kind: 'subject', name: s.name, childCount: 0, path: s.name });
   }
 
@@ -235,18 +319,34 @@ export async function searchAll(
       path: pathOf(groups, g.id) || g.name, group: g,
     });
   }
-  for (const r of resources) {
-    if (!r.title.toLowerCase().includes(q)) continue;
-    if (!listableFor(r, want) || disabledReasonFor(r, want)) continue;
-    out.push({
-      id: r.id, kind: 'resource', name: r.title, childCount: 0,
-      path: fullPath(subjects, groups, r), resource: r,
-      isCurrent: r.id === currentResourceId,
-    });
+  // Note TITLES only, never the body. A search that reached into note content
+  // would return a note whose text happens to contain the word while its title
+  // says nothing about it, and the row would be indistinguishable from a file.
+  if (wantNotes) {
+    for (const t of topics) {
+      if (!t.title.toLowerCase().includes(q)) continue;
+      const { path } = pathOfNote(subjects, t);
+      out.push({
+        id: t.id, kind: 'note', name: t.title, childCount: 0,
+        path, topic: t, isCurrent: t.id === currentResourceId,
+      });
+    }
+  }
+  if (wantFiles) {
+    for (const r of resources) {
+      if (!r.title.toLowerCase().includes(q)) continue;
+      if (!listableFor(r, want) || disabledReasonFor(r, want)) continue;
+      out.push({
+        id: r.id, kind: 'resource', name: r.title, childCount: 0,
+        path: fullPath(subjects, groups, r), resource: r,
+        isCurrent: r.id === currentResourceId,
+      });
+    }
   }
   // Files first: someone searching is usually after a file, not a folder. Then
-  // groups, then subjects, each naturally sorted.
-  const rank = (k: PickerNodeKind) => (k === 'resource' ? 0 : k === 'group' ? 1 : 2);
+  // notes, then groups, then subjects, each naturally sorted.
+  const rank = (k: PickerNodeKind) =>
+    k === 'resource' ? 0 : k === 'note' ? 1 : k === 'group' ? 2 : 3;
   return out.sort((a, b) => (a.kind === b.kind ? byName(a, b) : rank(a.kind) - rank(b.kind)));
 }
 
@@ -317,6 +417,24 @@ export async function pathToResource(resourceId: string): Promise<PickerNode[]> 
   return out;
 }
 
+/**
+ * The path from the root down to a NOTE: the subject, and nothing else.
+ *
+ * A note has no group, so this is a one-element path. It exists so
+ * "start where the current item is" works for a notes pane exactly as it does
+ * for a PDF, rather than the picker snapping to the root.
+ */
+export async function pathToTopic(topicId: string): Promise<PickerNode[]> {
+  const { subjects, topics } = await loadAll();
+  const t = topics.find((x) => x.id === topicId);
+  if (!t) return [];
+  const subject = subjects.find((s) => s.id === t.subjectId);
+  if (!subject) return [];
+  return [{
+    id: subject.id, kind: 'subject', name: subject.name, childCount: 0, path: subject.name,
+  }];
+}
+
 /* ===== the last place the picker was left, per session ===== */
 
 /**
@@ -347,4 +465,19 @@ export async function labelForResource(resourceId: string): Promise<{ title: str
   const r = resources.find((x) => x.id === resourceId);
   if (!r) return null;
   return { title: r.title, path: fullPath(subjects, groups, r) };
+}
+
+/**
+ * The label for a note: its title, and its subject as the path.
+ *
+ * The pane header shows the SAME shape for a note as for a file, so a note is
+ * identified by "Thermodynamics's Notes" under "Thermodynamics" rather than by a
+ * bare title that repeats in every subject.
+ */
+export async function labelForNote(topicId: string): Promise<{ title: string; path: string } | null> {
+  const { subjects, topics } = await loadAll();
+  const t = topics.find((x) => x.id === topicId);
+  if (!t) return null;
+  const { path } = pathOfNote(subjects, t);
+  return { title: t.title, path };
 }
