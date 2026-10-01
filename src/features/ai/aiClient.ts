@@ -1,5 +1,6 @@
 import type { AiProvider } from '../../types';
 import { buildChatCompletionsUrl } from './aiProviderRepo';
+import { normalizeHistoryForProvider, logRepair } from './historyNormalizer';
 import type { ChatMessage, ToolCall, ToolSpec } from './types';
 
 /**
@@ -395,8 +396,16 @@ async function attemptCompletion(
 }
 
 export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatCompletionResult> {
-  const { provider, messages, tools, temperature = 0.2, maxTokens = 4096 } = opts;
+  const { provider, tools, temperature = 0.2, maxTokens = 4096 } = opts;
   const { signal, onRetry, fallbackModel } = opts;
+
+  // EVERY request goes through the one normalizer, here, so the main path, each
+  // retry, the fallback model and every tool round are covered by construction
+  // rather than by each call site remembering to. It works on a COPY: the
+  // caller's array and the stored rows are untouched.
+  const normalized = normalizeHistoryForProvider(opts.messages, 'gemini');
+  logRepair(normalized.report);
+  const messages = normalized.messages as ChatMessage[];
 
   // A thinking model draws its reasoning from the SAME `max_tokens` budget as
   // the answer, so a tight cap is spent on thinking and the reply comes back

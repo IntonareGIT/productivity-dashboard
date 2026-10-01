@@ -3,6 +3,7 @@ import type { ChatMessageRow, ChatSession } from '../../types';
 import { newId } from '../../utils/id';
 import type { ChatMessage } from './types';
 import { extractThinking } from './thinking';
+import { trimToWindow } from './historyNormalizer';
 
 /**
  * Persistent assistant chat history (schema v7).
@@ -106,63 +107,35 @@ export async function autoTitle(sessionId: string, text: string): Promise<void> 
 }
 
 /**
- * Rebuild a request transcript from stored rows using the most recent `limit`
- * messages, without ever splitting a tool-call sequence.
+ * Rebuild a request transcript from stored rows.
  *
- * Two rules matter for the provider:
- *  1. An assistant message carrying `tool_calls` must stay together with the
- *     `tool` messages answering it.
- *  2. What we send is the stored `raw` object, never a reconstruction.
+ * Trimming now happens at TURN BOUNDARIES: the window is walked back to the
+ * start of its exchange so it always opens on a user turn and never splits a
+ * `tool_calls` turn from the results answering it. The previous version walked
+ * back only when a result's parent was already visible, which left the window
+ * free to START on a call.
  *
- * Orphaned tool results (whose parent fell outside the window) are dropped
- * rather than sent, since an unpaired `tool_call_id` is rejected outright.
+ * The turn-order guarantees themselves live in `normalizeHistoryForProvider`,
+ * which every request goes through; this function only decides WHICH rows are
+ * worth sending.
  */
 export function buildTranscript(rows: ChatMessageRow[], limit = 20): ChatMessage[] {
   if (rows.length === 0) return [];
-
-  // Index of the assistant turn that issued a given tool call.
-  const parentOf = (callId: string) =>
-    rows.findIndex((c) => c.role === 'assistant' && c.toolCallIds && c.toolCallIds.includes(callId));
-
-  // Start as late as the limit allows, then move earlier if any tool result in
-  // the tail needs its issuing turn. The window may end up slightly longer than
-  // `limit` — that is deliberate: a tool_calls turn must never be separated
-  // from the results answering it.
-  let start = Math.max(0, rows.length - limit);
-  for (const m of rows.slice(start)) {
-    if (m.role === 'tool' && m.toolCallId) {
-      const parent = parentOf(m.toolCallId);
-      if (parent >= 0) start = Math.min(start, parent);
-    }
-  }
-
-  return closeDanglingCalls(
-    rows
-      .slice(start)
-      // Never send a tool result that no assistant turn asked for.
-      .filter((r) => !(r.role === 'tool' && r.toolCallId && parentOf(r.toolCallId) < 0))
-      .map(toChatMessage)
-  );
+  // The rows keep their provider-native fields (`raw`, `reasoning`), so the cast
+  // is safe: `trimToWindow` only re-slices, it never rebuilds a turn.
+  return trimToWindow(rows.map(toChatMessage), limit).window as ChatMessage[];
 }
 
 /**
- * Guarantee every `tool_calls` turn is immediately followed by a tool turn
- * answering it.
- *
- * The provider requires the sequence `user -> model call -> tool response ->
- * model answer`. An assistant call with no response after it is rejected with
- * HTTP 400, so a single unanswered call poisons every later request in that
- * session. The store refuses to create that state, but rows written before that
- * guard — or by an older build, or restored from a backup — can still contain
- * it, and those rows are never rewritten.
- *
- * So this is the backstop: any call id left unanswered gets a synthetic
- * function response saying so. The model can then recover on its own ("that
- * action did not run") instead of the request failing outright. The synthetic
- * turn is added to the outgoing payload ONLY — nothing is persisted, so this can
- * never invent history in the database.
+ * @deprecated Superseded by `normalizeHistoryForProvider`, which enforces the
+ * full turn-order contract instead of only patching unanswered calls. It also
+ * fixed a bug this could not: it appended a synthetic response straight after
+ * the call, so a parallel call that already had a stored response came out in
+ * the wrong order. Kept exported because the older suite asserts on it, and
+ * because removing it would change behaviour the store has not been re-checked
+ * against. Nothing in the request path calls it any more.
  */
-function closeDanglingCalls(messages: ChatMessage[]): ChatMessage[] {
+export function closeDanglingCalls(messages: ChatMessage[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   for (let idx = 0; idx < messages.length; idx += 1) {
     const m = messages[idx];
