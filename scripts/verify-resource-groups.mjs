@@ -228,39 +228,51 @@ check('cloud: blob mode unchanged (still lazy)', /BLOB_MODE = 'lazy'/.test(cloud
 // ------------------------------------------------------------ UI and the AI
 const detail = readFileSync('src/features/library/components/SubjectDetail.tsx', 'utf8');
 const menu = readFileSync('src/features/library/components/MoveToGroupMenu.tsx', 'utf8');
+// The group markup moved into GroupTree.tsx when nesting landed, so the UI
+// assertions read the file that actually renders the tree. The properties being
+// protected (collapsible, per-group rename/delete, no nested buttons) are
+// unchanged; only their location moved.
+const tree = readFileSync('src/features/library/components/GroupTree.tsx', 'utf8');
 const tools = readFileSync('src/features/ai/tools.ts', 'utf8');
 check('UI: "New group" button is rendered', /<NewGroupButton/.test(detail));
-check('UI: groups are collapsible', /toggleGroupCollapsed/.test(detail) && /aria-expanded/.test(detail));
+check('UI: groups are collapsible',
+  /toggleGroupCollapsed/.test(detail) && /aria-expanded/.test(tree));
   // Phase 1 routed these through `renameGroup` / `removeGroup` wrappers that
   // await the write and surface a failure, so assert the handlers now wired
-  // rather than the old direct repository calls.
-  check('UI: rename and delete are per group', /renameGroup\(group\.id/.test(detail) && /removeGroup\(group\.id/.test(detail));
+  // rather than the old direct repository calls. The tree calls them with the
+  // node id and name.
+  check('UI: rename and delete are per group',
+  /onCommitRename\(node\.id, name\)/.test(tree) && /onDeleteGroup\(node\.id, node\.name\)/.test(tree));
 check('UI: a "Move to group" control is on each resource row', /<MoveToGroupMenu/.test(detail));
 check('UI: the move menu offers "No group"', />\s*No group\s*</.test(menu));
 check('UI: the move menu offers "New group…"', /New group…/.test(menu));
 check('UI: the move menu is tap-driven, not drag-only', /onClick/.test(menu) && !/onDrag|draggable/.test(menu));
 check('UI: menu rows meet the 40px touch target', /min-h-\[40px\]/.test(menu));
 check('UI: the menu closes on outside tap and Escape', /pointerdown/.test(menu) && /Escape/.test(menu));
+check('UI: the move menu shows nested groups as an indented tree',
+  /buildGroupTree/.test(menu) && /data-depth/.test(menu));
 // A nested control is <button ...> ... <button inside it. Siblings look like
 // </button><button>, so the check is for a <button BETWEEN the aria-expanded
 // button's own open and close tags.
-// Start just before the collapse <button so the tag count is balanced.
-const headerBlock = detail.slice(
-  detail.lastIndexOf('<button', detail.indexOf('aria-expanded')),
-  detail.indexOf('{renamingGroupId === group.id'),
+// Start just before the collapse <button so the tag count is balanced. The
+// block now ends at the rename editor, which is the first thing after the
+// header controls.
+const headerBlock = tree.slice(
+  tree.lastIndexOf('<button', tree.indexOf('aria-expanded')),
+  tree.indexOf('{renamingGroupId === node.id'),
 );
-check('UI: collapse, rename and delete are three sibling controls',
-  (headerBlock.match(/<button/g) ?? []).length === 3 && (headerBlock.match(/<\/button>/g) ?? []).length === 3,
+// Five controls now: collapse, new subgroup, move, rename, delete.
+check('UI: the group header controls are sibling controls',
+  (headerBlock.match(/<button/g) ?? []).length === 5
+  && (headerBlock.match(/<\/button>/g) ?? []).length === 5,
   `${(headerBlock.match(/<button/g) ?? []).length} open / ${(headerBlock.match(/<\/button>/g) ?? []).length} close`);
-const collapseBtn = detail.slice(
-  detail.lastIndexOf('<button', detail.indexOf('aria-expanded')),
-  detail.indexOf('</button>', detail.indexOf('aria-expanded')) + '</button>'.length,
+const collapseBtn = tree.slice(
+  tree.lastIndexOf('<button', tree.indexOf('aria-expanded')),
+  tree.indexOf('</button>', tree.indexOf('aria-expanded')) + '</button>'.length,
 );
 // Skip the opening tag itself when looking for a nested control.
 const collapseInner = collapseBtn.slice(collapseBtn.indexOf('>') + 1, collapseBtn.lastIndexOf('</button>'));
 check('UI: the group header is not a button inside a button', !/<button/.test(collapseInner), collapseInner.replace(/\s+/g, ' ').trim().slice(0, 60));
-check('UI: collapse, rename and delete are three sibling controls',
-  (headerBlock.match(/<button/g) ?? []).length === 3 && (headerBlock.match(/<\/button>/g) ?? []).length === 3);
 check('AI: searchLibrary reads the group table', /db\.resourceGroups\.toArray\(\)/.test(tools));
 check('AI: results carry the group name', /group: \(r\.groupId \? groupName\.get\(r\.groupId\)/.test(tools));
 check('AI: a resource also matches on its group name', /\(group \?\? ''\)\.toLowerCase\(\)\.includes\(q\)/.test(tools));

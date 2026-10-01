@@ -19,6 +19,7 @@
     "verify:stop": "node scripts/verify-stop-responding.mjs",
     "verify:resolve": "node scripts/verify-item-resolution.mjs",
     "verify:calendartools": "node scripts/verify-calendar-tools.mjs",
+    "verify:nestedgroups": "node scripts/verify-nested-groups.mjs",
     "shots": "node scripts/shots-note-editor.mjs"
   },
   "dependencies": {

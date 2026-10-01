@@ -14,8 +14,18 @@ import { ResourceFullScreen, useResourceFullScreen } from '../../split/useResour
 import { AssessmentModal } from './AssessmentModal';
 import { MoveToGroupMenu } from './MoveToGroupMenu';
 import { GroupNameEditor, NewGroupButton } from './ResourceGroups';
-import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes } from '../libraryRepo';
+import { GroupTree } from './GroupTree';
+import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, moveGroup, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes } from '../libraryRepo';
 import type { Assessment, Resource, ResourceGroup, Subject, Topic, TopicStatus } from '../../../types';
+
+/**
+ * Which groups are collapsed, per subject.
+ *
+ * Module-level so the expanded/collapsed shape of a subject survives leaving it
+ * and coming back. Keyed by subject id, because the same group name can appear
+ * in two subjects and must not share state.
+ */
+const collapsedBySubject = new Map<string, Set<string>>();
 
 interface SubjectDetailProps {
   subject: Subject;
@@ -192,11 +202,24 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   const [deleteResourceId, setDeleteResourceId] = useState<string | null>(null);
   const [deleteTopicId, setDeleteTopicId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  /** Collapsed group ids. A Set keyed by id so expanding one is a single change. */
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
-  /** Which group is showing its inline rename box, and which awaits delete confirmation. */
+  /**
+   * Collapsed group ids, remembered PER SUBJECT.
+   *
+   * A module-level map rather than plain component state, so collapsing a deep
+   * branch in one subject survives leaving that subject and coming back, which
+   * is what "remembered expand state per subject" has to mean in practice.
+   */
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    () => collapsedBySubject.get(subject.id) ?? new Set(),
+  );
+  /** Which group is showing its inline rename box. */
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
-  const [deleteGroupId, setDeleteGroupId] = useState<string | null>(null);
+
+  // Persist on every change, and drop the entry when the subject is left.
+  useEffect(() => {
+    collapsedBySubject.set(subject.id, collapsedGroups);
+    return () => { collapsedBySubject.set(subject.id, collapsedGroups); };
+  }, [collapsedGroups, subject.id]);
 
   /**
    * Run a group write and REPORT the failure.
@@ -220,8 +243,15 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
     }
   }, []);
 
-  const createGroup = useCallback(async (name: string) => {
-    const ok = await runGroupAction('create group', () => saveResourceGroup({ subjectId: subject.id, name }));
+  /**
+   * Create a group at a level. `parentGroupId === null` is the subject root.
+   *
+   * The one function behind both the top-level "New group" button and every
+   * group's "New subgroup", so the two can never diverge.
+   */
+  const createGroup = useCallback(async (name: string, parentGroupId: string | null = null) => {
+    const ok = await runGroupAction('create group',
+      () => saveResourceGroup({ subjectId: subject.id, name, parentGroupId }));
     if (ok) toast('success', 'Group created', name);
   }, [runGroupAction, subject.id]);
 
@@ -231,15 +261,19 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   }, [runGroupAction]);
 
   const removeGroup = useCallback(async (groupId: string, name: string) => {
-    // Deleting a group UNGROUPS its resources; it never deletes them.
+    // Deleting a group moves its resources AND its child groups up one level;
+    // it never deletes them. The confirmation states those counts first.
     const ok = await runGroupAction('delete group', () => deleteResourceGroup(groupId));
-    if (ok) toast('success', 'Group deleted', `${name} was removed. Its resources were kept.`);
+    if (ok) toast('success', 'Group deleted', `${name} was removed. Its contents were kept.`);
   }, [runGroupAction]);
 
-  const sortedGroups = useMemo(
-    () => [...groups].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.createdAt.localeCompare(b.createdAt)),
-    [groups],
-  );
+  const moveGroupAction = useCallback(async (groupId: string, newParentGroupId: string | null) => {
+    const ok = await runGroupAction('move group', () => moveGroup(groupId, newParentGroupId));
+    if (ok) toast('success', 'Group moved', 'The group is now in its new place.');
+  }, [runGroupAction]);
+
+  // The tree does its own ordering and depth, so the raw list is passed through.
+  const sortedGroups = groups;
   const toggleGroupCollapsed = (id: string) => {
     setCollapsedGroups((prev) => {
       const next = new Set(prev);
@@ -497,91 +531,46 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
             <p className="text-xs text-content-tertiary py-6 text-center">{filter ? 'No resources match.' : 'No resources for this topic yet.'}</p>
           ) : (
             <>
-              <div className="space-y-2.5">
-                {/*
-                  Resources are bucketed by their group. A group is ALWAYS
-                  rendered, including when it has no resources in this topic:
-                  hiding empty groups is what made "New group" look broken,
-                  because the row was written to Dexie and then never drawn.
-                */}
-                {sortedGroups.map((group) => {
-                  const members = topicResources.filter((r) => r.groupId === group.id);
-                  const collapsed = collapsedGroups.has(group.id);
-                  return (
-                    <div key={group.id} className="rounded-xl border border-border/70 bg-bg-elevated/20 p-2.5">
-                      {/* Siblings, not a button inside a button: the collapse
-                          toggle and the two actions are independent controls, and
-                          nesting interactive elements is invalid HTML. */}
-                      <div className="flex items-center gap-1 min-h-[40px]">
-                        <button
-                          onClick={() => toggleGroupCollapsed(group.id)}
-                          aria-expanded={!collapsed}
-                          aria-label={`${collapsed ? 'Expand' : 'Collapse'} group ${group.name}`}
-                          className="flex items-center gap-2 min-h-[40px] min-w-0 flex-1 text-left"
-                        >
-                          <ChevronRight className={`w-3.5 h-3.5 shrink-0 text-content-tertiary transition-transform ${collapsed ? '' : 'rotate-90'}`} />
-                          <span className="text-xs font-semibold text-content-primary truncate">{group.name}</span>
-                          <span className="text-[10px] font-semibold text-content-tertiary shrink-0">{members.length}</span>
-                        </button>
-                        <button
-                          onClick={() => setRenamingGroupId(group.id)}
-                          aria-label={`Rename group ${group.name}`}
-                          className="p-2 rounded-lg shrink-0 text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => (deleteGroupId === group.id
-                            ? void removeGroup(group.id, group.name).then(() => setDeleteGroupId(null))
-                            : setDeleteGroupId(group.id))}
-                          aria-label={`Delete group ${group.name}`}
-                          className={`p-2 rounded-lg shrink-0 ${deleteGroupId === group.id ? 'bg-rose-600 text-white' : 'text-content-tertiary hover:text-rose-500 hover:bg-rose-500/10'}`}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                      {renamingGroupId === group.id ? (
-                        <div className="mt-2">
-                          <GroupNameEditor
-                            initialName={group.name}
-                            placeholder="Group name"
-                            submitLabel="Save"
-                            onSubmit={(name) => { void renameGroup(group.id, name); setRenamingGroupId(null); }}
-                            onCancel={() => setRenamingGroupId(null)}
-                          />
-                        </div>
-                      ) : collapsed ? null : (
-                        <div className="space-y-2.5 mt-2">
-                          {members.length === 0 ? (
-                            <p className="text-[11px] text-content-tertiary italic">No resources in this group yet. Use “Move to group” on a resource to add one.</p>
-                          ) : members.map((resource) => (
-                            <ResourceRow
-                              key={resource.id}
-                              resource={resource}
-                              copied={copiedId === resource.id}
-                              confirmDelete={deleteResourceId === resource.id}
-                              onToggle={() => toggleResourceCompleted(resource)}
-                              onEdit={() => setEditingResource(resource)}
-                              onDelete={() => (deleteResourceId === resource.id ? void deleteResource(resource.id).then(() => setDeleteResourceId(null)) : setDeleteResourceId(resource.id))}
-                              onCopy={() => copyPath(resource)}
-                              onPreview={() => setPreviewingResource(resource)}
-                              onDownload={() => downloadFile(resource)}
-                              onSplitWithNotes={onSplitWithNotes}
-                              fallbackTopicId={selectedTopic?.id ?? null}
-                              groups={sortedGroups}
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-
-                {ungroupedResources.length > 0 && (
-                  <div className="space-y-2.5">
-                    {ungroupedResources.map((resource) => (
-                      <ResourceRow
-                        key={resource.id}
+              {/* The nested group tree owns the whole grouping surface: the
+                  indented levels, expand/collapse, the per-group counts, and
+                  the rename / delete / move / new-subgroup actions. It is given
+                  the resources to render rather than rendering them itself, so
+                  the row behaviour stays exactly as it was. */}
+              <GroupTree
+                subjectId={subject.id}
+                groups={sortedGroups}
+                resources={topicResources}
+                collapsedIds={collapsedGroups}
+                onToggleCollapsed={toggleGroupCollapsed}
+                renamingGroupId={renamingGroupId}
+                onStartRename={setRenamingGroupId}
+                onCommitRename={renameGroup}
+                onCreateGroup={createGroup}
+                onDeleteGroup={removeGroup}
+                onMoveGroup={moveGroupAction}
+                renderResources={(groupId) => {
+                  const members = topicResources.filter((r) => r.groupId === groupId);
+                  return members.map((resource) => (
+                    <ResourceRow
+                      key={resource.id}
+                      resource={resource}
+                      copied={copiedId === resource.id}
+                      confirmDelete={deleteResourceId === resource.id}
+                      onToggle={() => toggleResourceCompleted(resource)}
+                      onEdit={() => setEditingResource(resource)}
+                      onDelete={() => (deleteResourceId === resource.id ? void deleteResource(resource.id).then(() => setDeleteResourceId(null)) : setDeleteResourceId(resource.id))}
+                      onCopy={() => copyPath(resource)}
+                      onPreview={() => setPreviewingResource(resource)}
+                      onDownload={() => downloadFile(resource)}
+                      onSplitWithNotes={onSplitWithNotes}
+                      fallbackTopicId={selectedTopic?.id ?? null}
+                      groups={sortedGroups}
+                    />
+                  ));
+                }}
+                renderUngrouped={() => ungroupedResources.map((resource) => (
+                  <ResourceRow
+                    key={resource.id}
                         resource={resource}
                         copied={copiedId === resource.id}
                         confirmDelete={deleteResourceId === resource.id}
@@ -596,9 +585,7 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
                         groups={sortedGroups}
                       />
                     ))}
-                  </div>
-                )}
-              </div>
+              />
             </>
           )}
         </Card>

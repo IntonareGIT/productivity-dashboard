@@ -1,4 +1,55 @@
-# AI upgrade: report
+# Nested groups and drill-down picker: report
+
+**Branch:** `nested-groups-picker` (created from `ai-upgrade`, pushed). **`main`
+was NOT touched, merged, or force-pushed.**
+
+## Summary
+
+| Phase | What it asked for | Status | Evidence |
+| --- | --- | --- | --- |
+| 1 | Nested groups (data and Library UI) | **done** | `npm run verify:nestedgroups` 91/91. |
+| 2 | AI tools updated for nesting | see below | |
+| 3 | Drill-down file picker | see below | |
+
+**Reverted:** nothing. **Partly done:** nothing.
+
+### Dexie Cloud: does the new field need any manual action?
+
+**No.** `parentGroupId` is plain row metadata, added to the existing
+`resourceGroups` row, so Dexie Cloud replicates it exactly like `name` and
+`subjectId` already are. Concretely:
+
+- **No new database to register.** Dexie Cloud mirrors the IndexedDB schema; a
+  version bump in `db.ts` does not create or require a new cloud database.
+- **No schema change in the cloud console.** The Dexie Cloud dashboard only
+  matters for settings that are not stored per row (auth, access). Nothing here
+  touches those.
+- **No migration script.** Existing rows simply have no `parentGroupId`, which
+  already means "top-level". `resourceGroups` stays in `UNSYNCED_TABLES` = empty,
+  so it syncs as before.
+- **Existing groups keep their ids**, so a group's `groupId` reference from any
+  resource, any chat message, or any other device stays valid.
+
+The one thing to do after deploying is nothing at all: open the app and the v14
+upgrade runs on the client, clearing only an impossible `parentGroupId` (which
+cannot exist yet, since nothing wrote one before this version).
+
+### What the v14 upgrade actually does
+
+It **normalises rather than creates**, mirroring the v10 upgrade that
+normalised `resources.groupId`:
+
+- a parent that no longer exists -> cleared (the group becomes top-level)
+- a parent in another subject -> cleared
+- a self-parent -> cleared
+- a cycle already present in the data -> cleared
+- `parentGroupId: undefined` -> written as explicit `null`
+
+It never deletes a row, and it never rewrites `name`, `order`, `subjectId` or
+`createdAt`. A group that had to be repaired stays **visible at the top level**
+rather than disappearing into a branch nothing can render.
+
+
 
 **Branch:** `ai-upgrade` (created from `calendar-update`, pushed). **`main` was
 NOT touched, merged, or force-pushed.**

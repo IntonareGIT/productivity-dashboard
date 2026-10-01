@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Check, FolderInput, FolderPlus, X } from 'lucide-react';
 import type { ResourceGroup } from '../../../types';
 import { moveResourceToGroup, saveResourceGroup } from '../libraryRepo';
+import { buildGroupTree } from '../groupTree';
 import { toast } from '../../../stores/useToastStore';
 import { GroupNameEditor } from './ResourceGroups';
 
@@ -67,7 +68,11 @@ export const MoveToGroupMenu: React.FC<{
     }
   };
 
-  const sorted = [...groups].sort((a, b) => a.name.localeCompare(b.name));
+  // The tree is rendered from the SHARED builder, so the menu shows the same
+  // indentation, the same natural ordering and the same paths as the Library
+  // tree and the Phase 2 AI tools. A flat list of names is exactly what made
+  // "Week 1" ambiguous once groups could nest.
+  const tree = buildGroupTree(groups, new Map());
 
   return (
     <div className="relative" ref={wrapRef}>
@@ -83,7 +88,7 @@ export const MoveToGroupMenu: React.FC<{
       {open && (
         <div
           role="menu"
-          className="absolute right-0 z-30 mt-1 w-56 max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-bg-surface shadow-lg py-1 overflow-hidden"
+          className="absolute right-0 z-30 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-bg-surface shadow-lg py-1 overflow-hidden"
         >
           {creating ? (
             <div className="p-2">
@@ -108,18 +113,24 @@ export const MoveToGroupMenu: React.FC<{
                 {currentGroupId === null && <Check className="w-3.5 h-3.5 ml-auto text-accent shrink-0" />}
               </button>
               <div className="my-1 border-t border-border/60" />
-              {sorted.map((g) => (
-                <button
-                  key={g.id}
-                  role="menuitem"
-                  onClick={() => void choose(g.id)}
-                  className="w-full flex items-center gap-2 px-3 min-h-[40px] text-xs text-content-secondary hover:bg-bg-elevated text-left"
-                >
-                  <FolderInput className="w-3.5 h-3.5 shrink-0" />
-                  <span className="truncate">{g.name}</span>
-                  {currentGroupId === g.id && <Check className="w-3.5 h-3.5 ml-auto text-accent shrink-0" />}
-                </button>
-              ))}
+              <div className="max-h-64 overflow-y-auto">
+                {tree.map((node) => (
+                  <button
+                    key={node.id}
+                    role="menuitem"
+                    onClick={() => void choose(node.id)}
+                    data-group-option={node.id}
+                    data-depth={node.depth}
+                    // Indent by depth so nested groups are unambiguous.
+                    className="w-full flex items-center gap-2 px-3 min-h-[40px] text-xs text-content-secondary hover:bg-bg-elevated text-left"
+                    style={{ paddingLeft: `${12 + (node.depth - 1) * 12}px` }}
+                  >
+                    <FolderInput className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">{node.name}</span>
+                    {currentGroupId === node.id && <Check className="w-3.5 h-3.5 ml-auto text-accent shrink-0" />}
+                  </button>
+                ))}
+              </div>
               <div className="my-1 border-t border-border/60" />
               <button
                 role="menuitem"

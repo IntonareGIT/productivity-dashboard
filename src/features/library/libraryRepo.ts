@@ -4,6 +4,7 @@ import type { Assessment, AssessmentStatus, AssessmentType, Resource, ResourceGr
 import { newId } from '../../utils/id';
 import { markdownToEditorHtml } from './noteEditor/markdownToHtml';
 import { htmlToPlainText, sanitizeEditorHtml } from './noteEditor/sanitizeHtml';
+import { parentOf, validateGroupPlacement } from './groupTree';
 
 /* ---------------- Subjects ---------------- */
 
@@ -67,6 +68,11 @@ export async function deleteSubjectCascade(id: string): Promise<void> {
       if (res.length > 0) await db.resources.bulkDelete(res.map((r) => r.id));
       // Groups belong to a subject and go with it. The resources above are
       // deleted too, so nothing is left pointing at a removed group.
+      //
+      // This deletes EVERY group of the subject regardless of nesting depth,
+      // because the query is by `subjectId` rather than by parent. No depth
+      // walk is needed, and a nested group can never be orphaned by a subject
+      // delete.
       const groups = await db.resourceGroups.where('subjectId').equals(id).toArray();
       if (groups.length > 0) await db.resourceGroups.bulkDelete(groups.map((g) => g.id));
       const asm = await db.assessments.where('subjectId').equals(id).toArray();
@@ -387,81 +393,172 @@ export async function deleteResource(id: string): Promise<void> {
  */
 
 export interface ResourceGroupInput {
-  id?: string; // present = update (rename / reorder)
+  id?: string; // present = update (rename / reorder / move)
   subjectId: string;
   name: string;
   order?: number;
+  /** null or omitted = top-level in the subject. */
+  parentGroupId?: string | null;
 }
 
-/** The next `order` for a group in this subject — appended to the end. */
-export async function nextGroupOrder(subjectId: string): Promise<number> {
+/** The next `order` among a group's SIBLINGS — appended to the end. */
+export async function nextGroupOrder(
+  subjectId: string,
+  parentGroupId: string | null = null,
+): Promise<number> {
   const existing = await db.resourceGroups.where('subjectId').equals(subjectId).toArray();
-  return existing.reduce((max, g) => Math.max(max, g.order ?? 0), -1) + 1;
+  const siblings = existing.filter((g) => parentOf(g) === parentGroupId);
+  return siblings.reduce((max, g) => Math.max(max, g.order ?? 0), -1) + 1;
 }
 
+/**
+ * Create or update a group.
+ *
+ * Every placement rule is checked through the SHARED `validateGroupPlacement`,
+ * so the Library UI, the AI tools and this repository cannot disagree about
+ * what is legal. The check runs against the subject's current groups, read in
+ * the same transaction as the write so a concurrent change cannot slip between
+ * validation and commit.
+ */
 export async function saveResourceGroup(input: ResourceGroupInput): Promise<string> {
   const name = (input.name ?? '').trim();
   if (!name) throw new Error('Group name is required');
   if (!input.subjectId) throw new Error('subjectId is required');
   const subject = await db.subjects.get(input.subjectId);
   if (!subject) throw new Error('Subject not found');
+  const parentGroupId = input.parentGroupId == null || input.parentGroupId === ''
+    ? null : String(input.parentGroupId);
 
-  if (input.id) {
-    const existing = await db.resourceGroups.get(input.id);
-    if (existing) {
-      // A group can never be re-homed to another subject: its members are, by
-      // definition, resources of that subject. Treat it as a rename/reorder.
-      await db.resourceGroups.put({
-        ...existing,
-        name,
-        order: input.order ?? existing.order,
-      });
-      return existing.id;
+  return db.transaction('rw', [db.resourceGroups, db.subjects], async () => {
+    // The parent is resolved by id from the WHOLE table, not from this subject's
+    // list. Reading only the subject's own groups made a cross-subject parent look
+    // like a missing one, so the user was told "that parent no longer exists"
+    // when the real problem was that it belongs elsewhere.
+    const parentRow = parentGroupId == null ? null : await db.resourceGroups.get(parentGroupId);
+    if (parentGroupId != null && !parentRow) {
+      throw new Error('That parent group no longer exists. Pick another destination.');
     }
-  }
+    if (parentRow && parentRow.subjectId !== input.subjectId) {
+      throw new Error('A group cannot be moved to another subject. It belongs to the subject it was created in.');
+    }
 
-  const record: ResourceGroup = {
-    id: newId(),
-    subjectId: input.subjectId,
-    name,
-    order: input.order ?? (await nextGroupOrder(input.subjectId)),
-    createdAt: new Date().toISOString(),
-  };
-  await db.resourceGroups.put(record);
-  return record.id;
+    const siblings = await db.resourceGroups.where('subjectId').equals(input.subjectId).toArray();
+    const violation = validateGroupPlacement({
+      groups: siblings,
+      subjectId: input.subjectId,
+      name,
+      parentGroupId,
+      selfId: input.id ?? null,
+    });
+    if (violation) throw new Error(violation.message);
+
+    if (input.id) {
+      const existing = await db.resourceGroups.get(input.id);
+      if (existing) {
+        // A group can never be re-homed to another subject: its members are,
+        // by definition, resources of that subject.
+        await db.resourceGroups.put({
+          ...existing,
+          name,
+          parentGroupId,
+          order: input.order ?? existing.order,
+        });
+        return existing.id;
+      }
+    }
+
+    const record: ResourceGroup = {
+      id: newId(),
+      subjectId: input.subjectId,
+      name,
+      parentGroupId,
+      order: input.order ?? (await nextGroupOrder(input.subjectId, parentGroupId)),
+      createdAt: new Date().toISOString(),
+    };
+    await db.resourceGroups.put(record);
+    return record.id;
+  });
 }
 
-/** Rename a group in place. An empty name is rejected rather than saved blank. */
+/** Rename a group in place. Sibling-name uniqueness is still enforced. */
 export async function renameResourceGroup(id: string, name: string): Promise<void> {
   const next = (name ?? '').trim();
   if (!next) return;
   const existing = await db.resourceGroups.get(id);
   if (!existing || existing.name === next) return;
-  await db.resourceGroups.put({ ...existing, name: next });
+  await saveResourceGroup({
+    id,
+    subjectId: existing.subjectId,
+    name: next,
+    parentGroupId: parentOf(existing),
+  });
 }
 
-/** Persist a manual reorder. Takes the full ordered id list. */
+/**
+ * Move a group under a new parent (or to the subject root with null).
+ *
+ * The cycle, depth, subject and sibling-name rules all come from the shared
+ * module, so an illegal move is refused with a message the user (and the model)
+ * can act on rather than silently corrupting the tree.
+ */
+export async function moveGroup(groupId: string, newParentGroupId: string | null): Promise<void> {
+  const group = await db.resourceGroups.get(groupId);
+  if (!group) throw new Error('That group no longer exists.');
+  await saveResourceGroup({
+    id: groupId,
+    subjectId: group.subjectId,
+    name: group.name,
+    parentGroupId: newParentGroupId,
+  });
+}
+
+/**
+ * Persist a manual reorder. Takes the full ordered id list of ONE SIBLING SET.
+ *
+ * Only groups sharing the first id's parent are rewritten, so a stale list from
+ * one level can never reorder a different level's groups.
+ */
 export async function reorderResourceGroups(subjectId: string, orderedIds: string[]): Promise<void> {
+  if (orderedIds.length === 0) return;
   await db.transaction('rw', db.resourceGroups, async () => {
+    const first = await db.resourceGroups.get(orderedIds[0]);
+    if (!first) return;
+    const parentId = parentOf(first);
     for (let i = 0; i < orderedIds.length; i += 1) {
       const g = await db.resourceGroups.get(orderedIds[i]);
-      // Only rewrite rows of THIS subject, so a stale list cannot reorder
-      // another subject's groups.
-      if (g && g.subjectId === subjectId) await db.resourceGroups.put({ ...g, order: i });
+      if (g && g.subjectId === subjectId && parentOf(g) === parentId) {
+        await db.resourceGroups.put({ ...g, order: i });
+      }
     }
   });
 }
 
 /**
- * Delete a group and UNGROUP its resources.
+ * Delete a group, moving its contents UP one level.
  *
- * The resources are never deleted — losing a folder must not lose the work in
- * it — so every member simply has `groupId` cleared.
+ * Nothing is ever deleted except the group itself. Its child groups are
+ * re-parented to its own parent (becoming top-level when it was top-level), and
+ * a resource directly inside it follows to that same destination. This replaces
+ * the old behaviour of stripping every member to "no group", which would have
+ * scattered a nested tree the moment a middle group was removed.
  */
 export async function deleteResourceGroup(id: string): Promise<void> {
   await db.transaction('rw', [db.resourceGroups, db.resources], async () => {
+    const group = await db.resourceGroups.get(id);
+    if (!group) return;
+    const newParentId = parentOf(group);
+
+    // Children first, so the tree is never briefly pointing at a deleted parent.
+    const children = await db.resourceGroups.where('subjectId').equals(group.subjectId).toArray();
+    for (const child of children) {
+      if (parentOf(child) !== id) continue;
+      await db.resourceGroups.put({ ...child, parentGroupId: newParentId });
+    }
+
+    // Resources that sat directly in this group move up with the children.
     const members = await db.resources.where('groupId').equals(id).toArray();
-    for (const r of members) await db.resources.put({ ...r, groupId: null });
+    for (const r of members) await db.resources.put({ ...r, groupId: newParentId });
+
     await db.resourceGroups.delete(id);
   });
 }

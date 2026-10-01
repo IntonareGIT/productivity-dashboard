@@ -62,7 +62,13 @@ export interface ResourceGroup {
   id: string;              // UUID
   subjectId: string;       // FK -> Subject.id
   name: string;            // User-given group name
-  order: number;           // manual ordering within a subject
+  order: number;           // manual ordering among SIBLINGS
+  /**
+   * FK -> ResourceGroup.id of the parent, or null/absent for a top-level group
+   * in the subject (schema v14, additive). Metadata only, so it syncs like the
+   * rest of the group row; every pre-v14 group is simply top-level.
+   */
+  parentGroupId?: string | null;
   createdAt: string;       // ISO 8601
 }
 

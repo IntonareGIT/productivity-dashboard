@@ -271,19 +271,18 @@ const renderWith = ({ signedIn, currentUserValue }) => {
   // and its upgrade contains no upgrade function at all (nothing to migrate).
   // v12 (event kind + period) is additive too, and its upgrade is an explicit
   // no-op, so it rewrites no rows either.
-  // v13 (aiProviders.fallbackModel + calendarEvents.seriesId, for the AI
-  // upgrade) is likewise additive: two unindexed optional fields, and an
-  // upgrade that is an explicit no-op. The guard moves to v13 rather than being
-  // removed, so the NEXT accidental version bump still gets caught, and the new
-  // version is now checked for the same additive/no-op properties.
+  // v14 (resourceGroups.parentGroupId, for nested groups) is additive too: one
+  // unindexed optional field, and its upgrade only ever CLEARS an impossible
+  // parent, never deleting a row. The guard moves forward rather than being
+  // removed, so the next accidental version bump is still caught, and v14's
+  // additive no-delete properties are now asserted explicitly.
   const dbSrc = read('src/db/db.ts');
-  check('8 no schema version beyond v13 (fallback model + event series) was added',
-    !/this\.version\(1[4-9]\)/.test(dbSrc));
-  check('8 v13 adds only unindexed fields, so no index set changes',
-    /this\.version\(13\)[\s\S]{0,400}?aiProviders: 'id, label, isDefault'/.test(dbSrc)
-    && /this\.version\(13\)[\s\S]{0,400}?calendarEvents: 'id, date, category, startTime, endTime, subjectId'/.test(dbSrc));
-  check('8 v13 rewrites no rows (explicit no-op upgrade)',
-    /this\.version\(13\)[\s\S]{0,900}?void tx;/.test(dbSrc));
+  check('8 no schema version beyond v14 (nested groups) was added',
+    !/this\.version\(1[5-9]\)/.test(dbSrc));
+  check('8 v14 keeps resourceGroups keyed by string id with an unchanged index set',
+    /this\.version\(14\)[\s\S]{0,300}?resourceGroups: 'id, subjectId, order, createdAt'/.test(dbSrc));
+  check('8 v14 deletes no rows in its upgrade',
+    !/this\.version\(14\)[\s\S]{0,900}?\.delete\(/.test(dbSrc));
   check('8 v11 adds the note fields additively and migrates nothing',
     /this\.version\(11\)[\s\S]{0,200}?topics: 'id, subjectId, status, createdAt, title'/.test(dbSrc)
     && !/this\.version\(11\)[\s\S]{0,400}?\.upgrade\(/.test(dbSrc));

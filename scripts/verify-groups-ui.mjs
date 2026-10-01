@@ -174,7 +174,10 @@ check('subject delete: no resource is left pointing at a deleted group',
 const detail = readFileSync('src/features/library/components/SubjectDetail.tsx', 'utf8');
 const menu = readFileSync('src/features/library/components/MoveToGroupMenu.tsx', 'utf8');
 check('UI: a zero-member group is NOT skipped', !/if \(members\.length === 0\) return null;/.test(detail));
-check('UI: an empty group shows an inline hint', /No resources in this group yet/.test(detail));
+// The empty-group hint moved into GroupTree.tsx with the rest of the tree
+// markup, and now covers both "no resources and no subgroups".
+const treeUi = readFileSync('src/features/library/components/GroupTree.tsx', 'utf8');
+check('UI: an empty group shows an inline hint', /This group is empty/.test(treeUi));
 check('UI: the New group control renders even with zero resources',
   /<NewGroupButton onCreate=\{createGroup\}/.test(detail) &&
   detail.indexOf('<NewGroupButton') < detail.indexOf('topicResources.length === 0 ?'));

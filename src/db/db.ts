@@ -275,6 +275,74 @@ export class ProductivityDB extends Dexie {
         // backfilled series id would group unrelated events together.
         void tx;
       });
+
+    /**
+     * v14: groups can nest inside groups.
+     *
+     * ADDITIVE ONLY. `parentGroupId` is a plain, UNINDEXED, optional field:
+     * absent or null means "a top-level group in the subject", which is exactly
+     * what every existing group already is. No index is added because groups are
+     * read per SUBJECT (`subjectId` is already indexed) and a subject has only a
+     * handful of them, so the parent filter is a cheap in-memory pass rather than
+     * an index walk. `order` keeps its existing meaning, now scoped to siblings.
+     *
+     * The upgrade NORMALISES rather than creating: it only clears a
+     * `parentGroupId` that could not be valid, and it never deletes a row. The
+     * four impossible states it repairs are a parent that no longer exists, a
+     * parent in another subject, a self-parent, and a cycle already in the data.
+     * Every repaired group becomes top-level, so it stays visible and reachable
+     * instead of disappearing into a branch nothing can render.
+     *
+     * This mirrors the v10 upgrade, which normalised `resources.groupId` the same
+     * way for the same reason.
+     */
+    this.version(14)
+      .stores({
+        // Unchanged string `id` primary key and an unchanged index set: this is a
+        // new UNINDEXED field, so no key change and no index change. Re-declaring
+        // a different set here would silently drop `subjectId`/`order`.
+        resourceGroups: 'id, subjectId, order, createdAt',
+      })
+      .upgrade(async (tx) => {
+        const groups = (await tx.table('resourceGroups').toArray()) as ResourceGroup[];
+        if (groups.length === 0) return;
+        const byId = new Map(groups.map((g) => [g.id, g]));
+        const parentOf = (g: ResourceGroup): string | null => {
+          const p = g.parentGroupId;
+          return p == null || p === '' ? null : String(p);
+        };
+
+        for (const g of groups) {
+          const parentId = parentOf(g);
+          if (parentId === null) {
+            // Already top-level. Normalise an explicit `undefined` to null so
+            // every row has the same shape, without rewriting anything else.
+            if (g.parentGroupId === undefined) {
+              await tx.table('resourceGroups').put({ ...g, parentGroupId: null });
+            }
+            continue;
+          }
+
+          const parent = byId.get(parentId);
+          const wrongSubject = parent != null && parent.subjectId !== g.subjectId;
+          // Walk up from the proposed parent; if we reach this group, the link
+          // is a cycle and cannot be kept.
+          let cycle = false;
+          const seen = new Set<string>([g.id]);
+          let cursor: string | null = parentId;
+          while (cursor != null) {
+            if (seen.has(cursor)) { cycle = true; break; }
+            seen.add(cursor);
+            const next = byId.get(cursor);
+            if (!next) break;
+            cursor = parentOf(next);
+          }
+
+          if (!parent || wrongSubject || parentId === g.id || cycle) {
+            await tx.table('resourceGroups').put({ ...g, parentGroupId: null });
+          }
+        }
+      });
   }
 }
 
