@@ -20,7 +20,31 @@ import type {
 import { newId } from '../utils/id';
 import { BLOB_MODE, DEXIE_CLOUD_URL, UNSYNCED_TABLES } from './cloudConfig';
 
-import { deriveNoteTitle, needsTitleBackfill } from './noteTitle';
+import {
+  DEFAULT_NOTE_TITLE,
+  deriveNoteTitle,
+  getDefaultNoteTitle,
+  LEGACY_NOTE_TITLE,
+  needsTitleBackfill,
+} from './noteTitle';
+
+/**
+ * The v15 rule: a title the app generated, not one the user typed.
+ *
+ * Kept SEPARATE from `needsTitleBackfill` (the v9 rule) on purpose. v9 asked
+ * "does this note need a title at all?", which included the legacy 'General'
+ * placeholder. v15 asks the narrower, safer question: "is this one of the
+ * defaults the app itself produced?". Sharing one predicate would mean v15 also
+ * touched notes v9 had deliberately left alone.
+ *
+ * Note that `'Untitled note'` is in BOTH lists: it was v9's fallback for an
+ * empty note, so a note can legitimately carry it, and it is exactly the old
+ * default v15 replaces.
+ */
+const needsTitleBackfillV15 = (title: string | undefined | null): boolean => {
+  const t = (title ?? '').trim();
+  return t === '' || t === LEGACY_NOTE_TITLE || t === DEFAULT_NOTE_TITLE;
+};
 
 export class ProductivityDB extends Dexie {
   subjects!: Table<Subject, string>;
@@ -340,6 +364,71 @@ export class ProductivityDB extends Dexie {
 
           if (!parent || wrongSubject || parentId === g.id || cycle) {
             await tx.table('resourceGroups').put({ ...g, parentGroupId: null });
+          }
+        }
+      });
+
+    /**
+     * v15: a note with no title of its own is named after its subject.
+     *
+     * ADDITIVE ONLY, and in fact not even that: **no schema change at all.** No
+     * table is added, no field is added, no index is added and nothing is
+     * removed. `.stores()` re-declares the existing `topics` schema verbatim,
+     * which is required so Dexie knows the version exists; changing it would
+     * drop an index.
+     *
+     * The upgrade only RE-LABELS notes whose title the app generated rather than
+     * the user typed, namely an empty title, the legacy `'General'` placeholder,
+     * or the old generic default `'Untitled note'`. Those become
+     * "<Subject>'s Notes", numbered per subject so two never collide.
+     *
+     * **The note body is never touched.** Each write is `{ ...topic, title }`, so
+     * `notes`, `contentHtml`, `contentFormat` and every other field are carried
+     * across byte-for-byte.
+     *
+     * Safe to run more than once: after the first pass no title matches the old
+     * defaults, so a second pass writes nothing. That matters because Dexie Cloud
+     * can replay a schema upgrade on a synced device.
+     */
+    this.version(15)
+      .stores({
+        // Verbatim from v9: same primary key, same index set, nothing new.
+        topics: 'id, subjectId, status, createdAt, title',
+      })
+      .upgrade(async (tx) => {
+        const subjects = (await tx.table('subjects').toArray()) as Subject[];
+        const topics = (await tx.table('topics').toArray()) as Topic[];
+        const subjectById = new Map(subjects.map((s) => [s.id, s]));
+        const now = new Date().toISOString();
+
+        // Group by subject so the numbering counter is per subject, not global.
+        const bySubject = new Map<string, Topic[]>();
+        for (const t of topics) {
+          const list = bySubject.get(t.subjectId) ?? [];
+          list.push(t);
+          bySubject.set(t.subjectId, list);
+        }
+
+        for (const [subjectId, notes] of bySubject) {
+          const subject = subjectById.get(subjectId);
+          const base = getDefaultNoteTitle(subject);
+          // Titles already in use, EXCLUDING the ones we are about to replace,
+          // so a real user title is never overwritten and is respected when
+          // choosing a number.
+          const claimed = new Set<string>();
+          for (const t of notes) {
+            if (!needsTitleBackfillV15(t.title)) claimed.add(t.title.trim().toLowerCase());
+          }
+          const used = new Set(claimed);
+          for (const t of notes) {
+            if (!needsTitleBackfillV15(t.title)) continue;
+            let next = base;
+            let n = 2;
+            while (used.has(next.trim().toLowerCase())) next = `${base} ${n++}`;
+            used.add(next.trim().toLowerCase());
+            // Only the label changes; `notes` and `contentHtml` ride along
+            // untouched because the whole row is spread first.
+            await tx.table('topics').put({ ...t, title: next, updatedAt: now });
           }
         }
       });

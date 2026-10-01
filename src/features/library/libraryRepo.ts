@@ -1,5 +1,10 @@
 import { db } from '../../db/db';
-import { DEFAULT_NOTE_TITLE } from '../../db/noteTitle';
+import {
+  generatedNoteTitleNumber,
+  getDefaultNoteTitle,
+  noteTitleForNumber,
+  uniqueDefaultNoteTitle,
+} from '../../db/noteTitle';
 import type { Assessment, AssessmentStatus, AssessmentType, Resource, ResourceGroup, ResourceKind, Subject, Topic, TopicStatus } from '../../types';
 import { newId } from '../../utils/id';
 import { markdownToEditorHtml } from './noteEditor/markdownToHtml';
@@ -23,13 +28,22 @@ export async function saveSubject(input: SubjectInput): Promise<string> {
   if (input.id) {
     const existing = await db.subjects.get(input.id);
     if (existing) {
-      await db.subjects.put({
-        ...existing,
-        name,
-        description: input.description?.trim() || undefined,
-        color: input.color,
-        notes: input.notes ?? existing.notes,
-        updatedAt: new Date().toISOString(),
+      // A rename and the note-title follow-through happen in ONE transaction, so
+      // there is no window where the subject reads "Physics" while its note is
+      // still "Thermodynamics's Notes". Both tables are listed so the write is
+      // atomic; neither is deleted.
+      await db.transaction('rw', [db.subjects, db.topics], async () => {
+        await db.subjects.put({
+          ...existing,
+          name,
+          description: input.description?.trim() || undefined,
+          color: input.color,
+          notes: input.notes ?? existing.notes,
+          updatedAt: new Date().toISOString(),
+        });
+        if (existing.name !== name) {
+          await renameGeneratedNoteTitles(existing.id, existing.name, name);
+        }
       });
       await ensureDefaultTopic(existing.id);
       return existing.id;
@@ -50,6 +64,41 @@ export async function saveSubject(input: SubjectInput): Promise<string> {
   await db.subjects.put(record);
   await ensureDefaultTopic(id);
   return id;
+}
+
+/**
+ * Carry GENERATED note titles across a subject rename, without a new field.
+ *
+ * A note whose title was never typed by the user still equals the old default
+ * for the old subject name ("Thermodynamics's Notes", or that plus a number).
+ * Such a title is rewritten to the same number under the new name. A note whose
+ * title the user typed, or that the v9 migration derived from its content, does
+ * NOT match and is left exactly as it is.
+ *
+ * The number is preserved rather than recomputed, so "X's Notes 2" becomes
+ * "Y's Notes 2" and does not collide with a sibling that was already numbered.
+ * The check is purely textual, which is what keeps this additive: nothing is
+ * written to the database that was not already there.
+ */
+export async function renameGeneratedNoteTitles(
+  subjectId: string,
+  oldName: string,
+  newName: string,
+): Promise<number> {
+  if (oldName === newName) return 0;
+  const notes = await db.topics.where('subjectId').equals(subjectId).toArray();
+  const now = new Date().toISOString();
+  let changed = 0;
+  for (const n of notes) {
+    const num = generatedNoteTitleNumber(n.title, oldName);
+    // null means the user owns this title. Never touch it.
+    if (num === null) continue;
+    const next = noteTitleForNumber(newName, num);
+    if (next === n.title) continue;
+    await db.topics.put({ ...n, title: next, updatedAt: now });
+    changed += 1;
+  }
+  return changed;
 }
 
 export async function updateSubjectNotes(id: string, notes: string): Promise<void> {
@@ -215,13 +264,25 @@ export async function setTopicStatus(id: string, status: TopicStatus): Promise<v
 }
 
 /**
- * Rename a note. An empty title falls back to the default rather than being
- * saved blank, so a note is never left with no label in a list.
+ * Rename a note. An empty title falls back to the SUBJECT's default rather than
+ * being saved blank, so a note is never left with no label in a list.
+ *
+ * The fallback is numbered against the note's siblings, so clearing the title of
+ * a note in a subject that already has notes cannot create a duplicate label.
  */
 export async function setTopicTitle(id: string, title: string): Promise<void> {
   const existing = await db.topics.get(id);
   if (!existing) return;
-  const next = title.trim() || DEFAULT_NOTE_TITLE;
+  let next = title.trim();
+  if (!next) {
+    const subject = await db.subjects.get(existing.subjectId);
+    const siblings = await db.topics.where('subjectId').equals(existing.subjectId).toArray();
+    next = uniqueDefaultNoteTitle(
+      getDefaultNoteTitle(subject),
+      // The note itself is excluded, or it would always collide with itself.
+      siblings.filter((t) => t.id !== existing.id).map((t) => t.title),
+    );
+  }
   if (next === existing.title) return;
   await db.topics.put({ ...existing, title: next, updatedAt: new Date().toISOString() });
 }
@@ -245,8 +306,12 @@ export async function ensureDefaultTopic(subjectId: string): Promise<string> {
     id: newId(),
     subjectId,
     // A real, editable default rather than the generic 'General' placeholder
-    // that made every note look identical in lists and headers.
-    title: DEFAULT_NOTE_TITLE,
+    // that made every note look identical in lists and headers. Numbered when
+    // this subject already has notes, so two generated titles never collide.
+    title: uniqueDefaultNoteTitle(
+      getDefaultNoteTitle(subject),
+      existing.map((t) => t.title),
+    ),
     notes: subject?.notes ?? '',
     status: 'not_started',
     order: 0,

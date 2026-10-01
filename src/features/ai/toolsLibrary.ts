@@ -25,6 +25,7 @@ import {
 import {
   buildGroupTree, deleteImpact, pathOf, type GroupNode,
 } from '../library/groupTree';
+import { getDefaultNoteTitle, uniqueDefaultNoteTitle } from '../../db/noteTitle';
 import { ToolError } from './toolRuntime';
 import { resolveByIdOrName, resolveItem, isAmbiguous, resolutionMessage } from './toolResolve';
 import type { ToolSpec } from './types';
@@ -149,16 +150,16 @@ export const LIBRARY_TOOL_SPECS: ToolSpec[] = [
     function: {
       name: 'createNote',
       description:
-        'Create a new note in a subject (optionally inside a topic) and write markdown text into it.',
+        'Create a new note in a subject (optionally inside a topic) and write markdown text into it. With no title it is named after the subject.',
       parameters: {
         type: 'object',
         properties: {
           subjectId: { type: 'string', description: 'Subject id or exact name.' },
           topicId: { type: 'string', description: 'Optional topic id to put the note in.' },
-          title: { type: 'string', description: 'Note title.' },
+          title: { type: 'string', description: 'Note title. Omit it and the note is named after the subject.' },
           content: { type: 'string', description: 'Markdown text for the note body.' },
         },
-        required: ['subjectId', 'title'],
+        required: ['subjectId'],
         additionalProperties: false,
       },
     },
@@ -479,14 +480,13 @@ const HANDLERS: Record<string, (a: Args) => Promise<ReturnType<typeof ok>>> = {
   },
 
   async createNote(a) {
-    const title = String(a.title ?? '').trim();
-    if (!title) throw new ToolError('A note needs a title. Nothing was changed.');
     const subject = need(await subjectRows(), a.subjectId, (s: Subject) => s.name, 'subject');
     let subjectId = subject.id;
+    let topic: Topic | null = null;
     if (a.topicId) {
       // A note inside a named topic means writing into that topic's own note,
       // which is what `topicId` identifies in this app (notes ARE topics).
-      const topic = need(await topicRows(), a.topicId, (t: Topic) => t.title, 'note');
+      topic = need(await topicRows(), a.topicId, (t: Topic) => t.title, 'note');
       if (topic.subjectId !== subject.id) {
         throw new ToolError(`"${topic.title}" belongs to a different subject than "${subject.name}". Nothing was changed.`);
       }
@@ -497,6 +497,18 @@ const HANDLERS: Record<string, (a: Args) => Promise<ReturnType<typeof ok>>> = {
       await ensureDefaultTopic(subject.id);
     }
     const content = String(a.content ?? '');
+    // With no title given, the note is named after its subject, exactly as a
+    // note created in the UI is. `title` is no longer required, so the model can
+    // say "add a note to Thermodynamics" and get a sensibly named note rather
+    // than having to invent a title or leave the note unlabelled.
+    let title = String(a.title ?? '').trim();
+    if (!title) {
+      const siblings = await db.topics.where('subjectId').equals(subjectId).toArray();
+      title = uniqueDefaultNoteTitle(
+        getDefaultNoteTitle(subject),
+        siblings.map((t) => t.title),
+      );
+    }
     // `saveTopic` returns the new row's id.
     const id = await saveTopic({
       subjectId,

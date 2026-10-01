@@ -276,13 +276,25 @@ const renderWith = ({ signedIn, currentUserValue }) => {
   // parent, never deleting a row. The guard moves forward rather than being
   // removed, so the next accidental version bump is still caught, and v14's
   // additive no-delete properties are now asserted explicitly.
+  // v15 (default note titles from the subject name) changes NO schema at all: it
+  // re-declares the existing `topics` schema verbatim and only re-labels rows
+  // whose title the app itself generated. The guard moves forward rather than
+  // being removed, so the next accidental version bump is still caught, and
+  // v15's no-delete and content-preserving properties are asserted below.
   const dbSrc = read('src/db/db.ts');
-  check('8 no schema version beyond v14 (nested groups) was added',
-    !/this\.version\(1[5-9]\)/.test(dbSrc));
+  check('8 no schema version beyond v15 (note default titles) was added',
+    !/this\.version\(1[6-9]\)/.test(dbSrc));
   check('8 v14 keeps resourceGroups keyed by string id with an unchanged index set',
     /this\.version\(14\)[\s\S]{0,300}?resourceGroups: 'id, subjectId, order, createdAt'/.test(dbSrc));
   check('8 v14 deletes no rows in its upgrade',
     !/this\.version\(14\)[\s\S]{0,900}?\.delete\(/.test(dbSrc));
+  check('8 v15 changes no schema, re-declaring topics verbatim',
+    /this\.version\(15\)[\s\S]{0,200}?topics: 'id, subjectId, status, createdAt, title'/.test(dbSrc));
+  check('8 v15 deletes no rows and never rewrites note content',
+    !/this\.version\(15\)[\s\S]{0,1400}?\.delete\(/.test(dbSrc)
+    // Every write spreads the whole row and overrides ONLY the title, so
+    // `notes` and `contentHtml` survive byte-for-byte.
+    /tx\.table\('topics'\)\.put\(\{ \.\.\.t, title: next/.test(dbSrc));
   check('8 v11 adds the note fields additively and migrates nothing',
     /this\.version\(11\)[\s\S]{0,200}?topics: 'id, subjectId, status, createdAt, title'/.test(dbSrc)
     && !/this\.version\(11\)[\s\S]{0,400}?\.upgrade\(/.test(dbSrc));
