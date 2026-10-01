@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { format } from 'date-fns';
-import { chatCompletion } from '../features/ai/aiClient';
+import { chatCompletion, friendlyError } from '../features/ai/aiClient';
 import { getDefaultProvider, providerIsReady } from '../features/ai/aiProviderRepo';
 import {
   DEFAULT_TITLE,
@@ -23,7 +23,7 @@ import {
 } from '../features/ai/tools';
 import type { AssistantViewMessage } from '../features/ai/chatRepo';
 import { describeDeleteCounts } from '../features/ai/toolsLibrary';
-import type { ChatMessage } from '../features/ai/types';
+import type { ChatMessage, ToolSpec } from '../features/ai/types';
 import type { AiProvider, ChatSession } from '../types';
 import { newId } from '../utils/id';
 import { toast } from './useToastStore';
@@ -32,6 +32,32 @@ const MAX_TOOL_ROUNDS = 4;
 
 /** How many stored messages are replayed to the model on a new turn. */
 const CONTEXT_WINDOW = 20;
+
+/**
+ * Ceiling on ONE tool result sent back to the model.
+ *
+ * A tool such as `searchLibrary` or `listEvents` can return hundreds of rows,
+ * and every one of them is re-sent on each of the following tool rounds. That
+ * is the single biggest source of avoidable request size, and request size is
+ * what makes a provider slow to answer and quick to return 503. Truncating the
+ * tool result keeps the transcript small without dropping any instruction or
+ * answer, and the marker tells the model the list was cut so it does not report
+ * a partial list as complete.
+ */
+export const MAX_TOOL_RESULT_CHARS = 4000;
+
+/**
+ * Cap a tool result for the wire, marking it so the model knows it is partial.
+ *
+ * Applied ONLY to the copy sent to the provider. The stored row keeps the full
+ * result, so the UI still shows everything that happened, and the next turn
+ * built from storage is unaffected.
+ */
+export function capToolResult(content: string): string {
+  if (content.length <= MAX_TOOL_RESULT_CHARS) return content;
+  const kept = content.slice(0, MAX_TOOL_RESULT_CHARS);
+  return `${kept}\n[truncated] (${content.length - MAX_TOOL_RESULT_CHARS} more characters. Ask a narrower question if you need the rest.)`;
+}
 
 /** Parse a tool's arguments without throwing; a preview must never be the failure. */
 function safeParseArgs(argsJson: string): Record<string, unknown> {
@@ -130,7 +156,9 @@ async function runTool(
     else toast('info', `${call.name} ran`, exec.summary);
     return {
       role: 'tool',
-      content: JSON.stringify({ ok: true, result: exec.data }),
+      // Capped for the wire only. `display` below keeps the full, friendly
+      // summary for the UI, and the row stores the full result too.
+      content: capToolResult(JSON.stringify({ ok: true, result: exec.data })),
       toolCallId: call.id,
       name: call.name,
       display: exec.summary,
@@ -175,6 +203,19 @@ interface AssistantState {
   providerLabel: string | null;
   providerReady: boolean;
   providerError: string | null;
+  /**
+   * Transient, non-error line shown while a request is being retried, e.g.
+   * "Model is busy, retrying (2/4)...". Null whenever nothing is retrying, and
+   * the UI hides the row entirely on null, so it can never linger after success.
+   */
+  retryStatus: string | null;
+  /**
+   * The friendly failure to show with a Retry button, with the raw provider
+   * error kept for the Details toggle. Null when there is no failure to offer.
+   */
+  failure: { message: string; details: string; retryable: boolean } | null;
+  /** Set when the last answer came from the configured fallback model. */
+  fallbackNotice: string | null;
   /** Sessions this provider can safely continue (v7). */
   sessions: ChatSession[];
   sessionId: string | null;
@@ -182,7 +223,11 @@ interface AssistantState {
   pending: PendingCall | null;
   setOpen: (open: boolean) => void;
   ask: (text: string) => void;
-  send: (text: string) => Promise<void>;
+  send: (text: string, isRetry?: boolean) => Promise<void>;
+  /** Re-send the last turn without adding a second copy of the user message. */
+  retryLast: () => Promise<void>;
+  /** Abort the turn in flight: fetch, stream, backoff wait and tool rounds. */
+  stop: () => void;
   confirmPending: () => Promise<void>;
   cancelPending: () => void;
   clearChat: () => Promise<void>;
@@ -201,6 +246,31 @@ const WELCOME: AssistantViewMsg[] = [
     text: 'Hi! Ask me about today, upcoming deadlines, your library — or tell me to set a schedule or start a focus timer.',
   },
 ];
+
+/**
+ * The turn in flight, if any.
+ *
+ * Module-level rather than in the store because it is NOT state the UI renders:
+ * it exists so `stop` can reach an in-flight request from anywhere, including
+ * from an Escape key handler, without the store having to re-render. Exactly one
+ * turn runs at a time (`busy` guards it), so a single slot is sufficient and
+ * two concurrent turns cannot abort each other by accident.
+ */
+let turnController: AbortController | null = null;
+/** The prompt of the turn currently running, so Retry can resume it verbatim. */
+let lastUserPrompt: string | null = null;
+
+/** Was this turn ended by Stop rather than by finishing or failing? */
+export class TurnStopped extends Error {
+  constructor() {
+    super('Stopped');
+    this.name = 'TurnStopped';
+  }
+}
+
+const isStopped = (err: unknown): boolean =>
+  err instanceof TurnStopped ||
+  (err instanceof Error && (err.name === 'AbortError' || err.message === 'Stopped'));
 
 export const useAssistantStore = create<AssistantState>((set, get) => {
   async function resolveProvider(): Promise<{ provider: AiProvider | null; error: string | null }> {
@@ -252,12 +322,64 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     set({ view: projected.length ? projected : WELCOME });
   }
 
+  /**
+   * One provider request, with the retry status wired to the UI.
+   *
+   * Every request in a turn goes through here, which is what makes the retry
+   * policy single-sourced: the status line, the abort signal, the fallback
+   * model and the request accounting all live in one call site, so a new caller
+   * cannot accidentally get a turn that neither retries nor can be stopped.
+   *
+   * The status is cleared as soon as the call settles, whether it succeeded or
+   * failed, so it can never be left on screen after the turn is over.
+   */
+  async function request(
+    provider: AiProvider,
+    messages: ChatMessage[],
+    opts: { tools?: ToolSpec[] } = {},
+  ) {
+    try {
+      return await chatCompletion({
+        provider,
+        messages,
+        tools: opts.tools,
+        signal: turnController?.signal,
+        fallbackModel: provider.fallbackModel ?? null,
+        onRetry: ({ attempt, max }) => {
+          set({ retryStatus: `Model is busy, retrying (${attempt}/${max})...` });
+        },
+      });
+    } finally {
+      set({ retryStatus: null });
+    }
+  }
+
+  /**
+   * Record a failure in the user's terms, with the raw error behind Details.
+   *
+   * Replaces pushing the provider's raw JSON into the transcript, which is what
+   * produced the "Provider responded HTTP 503 - {"error":{...}}" wall of text.
+   */
+  function reportFailure(err: unknown): void {
+    const { message, retryable } = friendlyError(err);
+    set({
+      failure: {
+        message,
+        details: err instanceof Error ? err.message : String(err),
+        retryable,
+      },
+    });
+  }
+
   return {
     open: false,
     busy: false,
     providerLabel: null,
     providerReady: false,
     providerError: null,
+    retryStatus: null,
+    failure: null,
+    fallbackNotice: null,
     sessions: [],
     sessionId: null,
     view: WELCOME,
@@ -330,11 +452,22 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     },
 
 
-    send: async (text) => {
+    /**
+     * Send one user turn.
+     *
+     * `isRetry` is what makes the Retry button honest: on a retry the user
+     * message is NOT pushed to the view or written to the session again, so the
+     * transcript never gains a duplicate of what the user already sees. Only the
+     * model request is made again.
+     */
+    send: async (text, isRetry = false) => {
       const prompt = text.trim();
       if (!prompt || get().busy) return;
-      pushView({ role: 'user', text: prompt });
-      set({ busy: true });
+      if (!isRetry) pushView({ role: 'user', text: prompt });
+      // A fresh turn replaces any previous failure notice and any retry line.
+      set({ busy: true, failure: null, retryStatus: null, fallbackNotice: null });
+      turnController = new AbortController();
+      lastUserPrompt = prompt;
       try {
         const { provider, error } = await resolveProvider();
         if (!provider) {
@@ -366,7 +499,9 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
           });
         }
 
-        await persist(sessionId, { role: 'user', content: prompt });
+        if (!isRetry) {
+          await persist(sessionId, { role: 'user', content: prompt });
+        }
 
         // Only the most recent messages are replayed, tool sequences intact.
         let transcript: ChatMessage[] = [
@@ -380,11 +515,18 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         let answered = false;
 
         for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
-          const result = await chatCompletion({
-            provider,
-            messages: [{ role: 'system', content: systemPrompt(new Date()) }, ...transcript],
-            tools: TOOL_SPECS,
-          });
+          // Stop is checked BEFORE each request, so no request is issued after
+          // the user asked for it to stop.
+          if (turnController?.signal.aborted) throw new TurnStopped();
+
+          const result = await request(provider, [
+            { role: 'system', content: systemPrompt(new Date()) },
+            ...transcript,
+          ], { tools: TOOL_SPECS });
+
+          if (result.answeredByFallback) {
+            set({ fallbackNotice: `Answered by fallback model ${result.answeredByFallback}` });
+          }
 
           if (result.toolCalls.length === 0) {
             const raw = result.content.trim() || 'Done.';
@@ -465,10 +607,11 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         // (user -> model call -> tool response -> ...), so appending the missing
         // final answer here cannot introduce an HTTP 400.
         if (!answered) {
-          const closing = await chatCompletion({
-            provider,
-            messages: [{ role: 'system', content: systemPrompt(new Date()) }, ...transcript],
-          });
+          if (turnController?.signal.aborted) throw new TurnStopped();
+          const closing = await request(provider, [
+            { role: 'system', content: systemPrompt(new Date()) },
+            ...transcript,
+          ]);
           const raw = closing.content.trim() ||
             'I reached the limit on how many actions I can take in one go. Here is where things stand — tell me what to do next.';
           transcript = [...transcript, { role: 'assistant', content: raw }];
@@ -477,13 +620,68 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
 
         set({ sessions: await listSessions() });
       } catch (err) {
-        pushView({
-          role: 'assistant',
-          text: err instanceof Error ? err.message : 'The assistant request failed.',
-          error: true,
-        });
+        // Stop is a normal outcome, not a failure: no error row, no failure
+        // notice, just the "Stopped" line. Distinguishing it here is what keeps
+        // Stop from looking like the assistant broke.
+        if (isStopped(err)) {
+          set({ activeTool: null, retryStatus: null });
+        } else {
+          reportFailure(err);
+        }
       } finally {
-        set({ busy: false, activeTool: null });
+        // The controller is released here and ONLY here, so `stop` can never
+        // abort a turn that has already finished and left a stale controller
+        // behind that a later turn would trip over.
+        turnController = null;
+        // `busy` is cleared unconditionally, so the input is always re-enabled
+        // and the chat can never be stuck in a loading state.
+        set({ busy: false, activeTool: null, retryStatus: null });
+      }
+    },
+
+    /**
+     * Retry the last turn after a failure.
+     *
+     * Sends the SAME prompt again, but with `isRetry` set, so the user message
+     * is neither re-rendered nor stored a second time. Everything the model
+     * needs is already in the session: the tool results from the failed turn
+     * are stored rows, and the next request is rebuilt from them.
+     */
+    retryLast: async () => {
+      if (get().busy || !lastUserPrompt) return;
+      await get().send(lastUserPrompt, true);
+    },
+
+    /**
+     * Stop the turn in flight.
+     *
+     * Aborting the controller does three things at once: it aborts the in-flight
+     * fetch, it rejects the backoff wait so no further retry is issued, and the
+     * loop re-checks the signal before the next round, so no new tool call
+     * starts. A tool that is already running is left to finish, because
+     * interrupting a database write halfway is worse than finishing it.
+     *
+     * A pending Confirm card is CANCELLED here too, exactly as if the user had
+     * pressed Cancel. Leaving it open would mean a stop leaves a live delete
+     * waiting for a second press, which is not what "stop" means.
+     */
+    stop: () => {
+      turnController?.abort();
+      const pending = get().pending;
+      if (pending) {
+        set({ pending: null });
+        const sessionId = get().sessionId;
+        // Recorded so the transcript stays well-formed: an assistant tool_calls
+        // turn must be answered by a tool turn, or the next request is a 400.
+        if (sessionId) {
+          void persist(sessionId, {
+            role: 'tool',
+            content: JSON.stringify({ ok: false, error: 'Stopped by the user before confirming. Not executed.' }),
+            toolCallId: pending.callId,
+            name: pending.name,
+            display: 'Cancelled when you stopped, nothing was changed.',
+          });
+        }
       }
     },
 

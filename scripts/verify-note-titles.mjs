@@ -143,9 +143,14 @@ check('migration: no duplicate ids', new Set(migrated.map((t) => t.id)).size ===
 
 // ------------------------------------------------------- schema declarations
 const src = readFileSync('src/db/db.ts', 'utf8');
-check('schema: v9 is present and v12 (event kind + period) is the latest version',
+// v13 (fallback model + event series id, for the AI upgrade) is additive and
+// its upgrade is a no-op, so the "latest version" guard moves forward to v13
+// rather than being deleted.
+check('schema: v9 is present and v13 (fallback model + event series) is the latest version',
   /\.version\(9\)/.test(src) && /\.version\(10\)/.test(src)
-  && /\.version\(11\)/.test(src) && /\.version\(12\)/.test(src) && !/\.version\(1[3-9]\)/.test(src));
+  && /\.version\(11\)/.test(src) && /\.version\(12\)/.test(src)
+  && /\.version\(13\)/.test(src) && !/\.version\(1[4-9]\)/.test(src));
+check('schema: v13 adds no new index', /\.version\(13\)[\s\S]{0,400}?aiProviders: 'id, label, isDefault'/.test(src));
 check('schema: v9 stores topics (additive only)', /this\.version\(9\)[\s\S]{0,220}?topics: 'id, subjectId, status, createdAt, title'/.test(src));
 check('schema: primary key is still `id` (not rewritten)', /topics: 'id,/.test(src));
 check('schema: title is indexed for by-title lookup', /topics: '[^']*\btitle\b[^']*'/.test(src));

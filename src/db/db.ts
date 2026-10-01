@@ -243,6 +243,38 @@ export class ProductivityDB extends Dexie {
         // writing here has to remove this comment deliberately.
         void tx;
       });
+
+    /**
+     * v13: optional fallback model, and a shared series id for events.
+     *
+     * ADDITIVE ONLY, and following the v12 precedent exactly: both are plain,
+     * UNINDEXED, optional fields, absent on every existing row.
+     *
+     *  - `aiProviders.fallbackModel`: a second model id to try once, if the
+     *    primary model is overloaded. Empty string means off, which is the
+     *    default, so nothing changes for anyone who has not opted in.
+     *  - `calendarEvents.seriesId`: groups the events created together by one
+     *    `createRecurringEvents` call, so a whole series can be listed and
+     *    deleted as a unit later.
+     *
+     * The upgrade does NOT rewrite rows. `undefined` already means "no fallback"
+     * and "not part of a series", so there is nothing to backfill, and guessing
+     * a series for an existing event would be wrong.
+     */
+    this.version(13)
+      .stores({
+        // Unchanged primary key and index set for both tables, exactly as they
+        // were declared: these are new UNINDEXED fields, so no index changes
+        // and no key changes. Re-declaring a different index set here would
+        // silently DROP the `label` index on aiProviders.
+        aiProviders: 'id, label, isDefault',
+        calendarEvents: 'id, date, category, startTime, endTime, subjectId',
+      })
+      .upgrade(async (tx) => {
+        // No-op on purpose, exactly as v12: absent means off, and a wrong
+        // backfilled series id would group unrelated events together.
+        void tx;
+      });
   }
 }
 

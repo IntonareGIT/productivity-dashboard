@@ -15,6 +15,8 @@
     "verify:calendar": "node scripts/verify-calendar-day-panel-browser.mjs",
     "verify:period": "node scripts/verify-event-period-browser.mjs",
     "verify:assessments": "node scripts/verify-assessments-calendar-browser.mjs",
+    "verify:retry": "node scripts/verify-retry-resilience.mjs",
+    "verify:stop": "node scripts/verify-stop-responding.mjs",
     "shots": "node scripts/shots-note-editor.mjs"
   },
   "dependencies": {

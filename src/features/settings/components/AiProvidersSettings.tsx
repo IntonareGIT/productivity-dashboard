@@ -22,9 +22,11 @@ interface FormState {
   baseUrl: string;
   apiKey: string;
   modelName: string;
+  /** Optional second model tried once if the primary is overloaded. Blank = off. */
+  fallbackModel: string;
 }
 
-const EMPTY_FORM: FormState = { label: '', baseUrl: '', apiKey: '', modelName: '' };
+const EMPTY_FORM: FormState = { label: '', baseUrl: '', apiKey: '', modelName: '', fallbackModel: '' };
 
 function toForm(p?: AiProvider | null): FormState {
   return {
@@ -32,6 +34,7 @@ function toForm(p?: AiProvider | null): FormState {
     baseUrl: p?.baseUrl ?? '',
     apiKey: p?.apiKey ?? '',
     modelName: p?.modelName ?? '',
+    fallbackModel: p?.fallbackModel ?? '',
   };
 }
 
@@ -77,6 +80,7 @@ export const AiProvidersSettings: React.FC = () => {
         baseUrl: form.baseUrl,
         apiKey: form.apiKey,
         modelName: form.modelName,
+        fallbackModel: form.fallbackModel,
       };
       await saveProvider(input);
       setModalOpen(false);
@@ -229,6 +233,25 @@ export const AiProvidersSettings: React.FC = () => {
             <label className="block">
               <span className="block text-xs text-content-secondary mb-1">Model name</span>
               <input value={form.modelName} onChange={(e) => setForm({ ...form, modelName: e.target.value })} placeholder="e.g. gemini-3.1-flash-lite" spellCheck={false} className={`${inputCls} font-mono`} />
+            </label>
+            {/* Optional, and off unless filled. Tried ONCE, after the primary
+                model has exhausted its retries, so a busy model degrades to a
+                slower answer instead of an error. */}
+            <label className="block">
+              <span className="block text-xs text-content-secondary mb-1">
+                Fallback model <span className="text-content-tertiary">(optional)</span>
+              </span>
+              <input
+                value={form.fallbackModel}
+                onChange={(e) => setForm({ ...form, fallbackModel: e.target.value })}
+                placeholder="Leave empty to turn this off"
+                spellCheck={false}
+                aria-label="Fallback model"
+                className={`${inputCls} font-mono`}
+              />
+              <span className="block text-[11px] text-content-tertiary mt-1">
+                Used once if the model above is overloaded and all its retries fail. The chat says when an answer came from it.
+              </span>
             </label>
             {error && <p className="text-xs text-rose-500">{error}</p>}
             <div className="flex items-center justify-end gap-2 border-t border-border/50 pt-4">

@@ -16,6 +16,8 @@ export interface AiProviderInput {
   baseUrl: string;
   apiKey: string;
   modelName: string;
+  /** Optional second model tried once if the primary is overloaded. Off if blank. */
+  fallbackModel?: string;
 }
 
 function normalize(input: AiProviderInput) {
@@ -24,6 +26,9 @@ function normalize(input: AiProviderInput) {
     baseUrl: stripChatCompletionsSuffix(input.baseUrl.trim()),
     apiKey: input.apiKey.trim(),
     modelName: input.modelName.trim(),
+    // Stored as '' rather than undefined when cleared, so "off" and "never
+    // configured" cannot drift apart across saves.
+    fallbackModel: (input.fallbackModel ?? '').trim(),
   };
 }
 

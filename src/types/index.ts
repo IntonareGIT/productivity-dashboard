@@ -143,6 +143,12 @@ export interface CalendarEvent {
   // --- kind and period (schema v12), additive and optional ---
   eventKind?: EventKind;                  // undefined = no kind (every pre-v12 event)
   period?: number;                        // 1..6, only meaningful for lecture/section/lab
+  /**
+   * Shared id grouping the events created together by one bulk series
+   * (schema v13, additive and optional). Undefined means "not part of a
+   * series", which is true of every pre-v13 event.
+   */
+  seriesId?: string | null;
   createdAt: string;       // ISO 8601
 }
 
@@ -213,6 +219,12 @@ export interface AiProvider {
   apiKey: string;      // Secret key; empty = not configured yet
   modelName: string;   // Model id sent in the request body
   isDefault: boolean;  // Exactly one provider is default at a time
+  /**
+   * Optional second model id, tried ONCE if the primary fails every retry
+   * (schema v13, additive). Empty or absent means the feature is OFF, which is
+   * the default, so nothing changes unless the user opts in.
+   */
+  fallbackModel?: string;
   createdAt: string;   // ISO 8601
   updatedAt: string;   // ISO 8601
 }

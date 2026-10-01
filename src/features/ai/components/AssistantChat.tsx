@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, Check, SendHorizonal, TriangleAlert, Zap } from 'lucide-react';
+import { Bot, Check, Info, RefreshCw, SendHorizonal, Square, TriangleAlert, Zap } from 'lucide-react';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
 import { ThoughtBlock } from './ThoughtBlock';
 
@@ -45,12 +45,18 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
   const pending = useAssistantStore((s) => s.pending);
   const activeTool = useAssistantStore((s) => s.activeTool);
   const configured = useAssistantStore((s) => s.providerReady);
+  const retryStatus = useAssistantStore((s) => s.retryStatus);
+  const failure = useAssistantStore((s) => s.failure);
+  const fallbackNotice = useAssistantStore((s) => s.fallbackNotice);
   const setOpen = useAssistantStore((s) => s.setOpen);
   const send = useAssistantStore((s) => s.send);
+  const stop = useAssistantStore((s) => s.stop);
+  const retryLast = useAssistantStore((s) => s.retryLast);
   const confirmPending = useAssistantStore((s) => s.confirmPending);
   const cancelPending = useAssistantStore((s) => s.cancelPending);
 
   const [draft, setDraft] = useState('');
+  const [showDetails, setShowDetails] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -104,6 +110,17 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
    *    newline and the Send button is the way to send.
    */
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Escape stops a turn in flight, from inside the composer. Scoped to this
+    // input on purpose: a global Escape listener would also fire while the user
+    // is in Settings or a PDF viewer, where "stop the assistant" is not what
+    // they mean.
+    if (e.key === 'Escape') {
+      if (busy) {
+        e.preventDefault();
+        stop();
+      }
+      return;
+    }
     if (e.key !== 'Enter') return;
     // 1. Never send mid-composition.
     if (e.nativeEvent.isComposing || (e.nativeEvent as unknown as { keyCode?: number }).keyCode === 229) {
@@ -113,9 +130,19 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
     if (e.shiftKey) return;
     // 3. On a touch device, Enter is a newline; Send is the button.
     if (isTouchDevice()) return;
+    // 4. While a turn is running, Enter does not send: the button is Stop, and
+    //    starting a second turn would race the first. The text is still here
+    //    when the turn ends.
+    if (busy) return;
     e.preventDefault();
     submit();
   };
+
+  // A new failure gets a collapsed Details panel, so a stale expansion from a
+  // previous error never carries over and hides the new raw message.
+  useEffect(() => {
+    if (failure) setShowDetails(false);
+  }, [failure]);
 
   useEffect(() => {
     if (open) listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -188,7 +215,58 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
             </div>
           </div>
         )}
+        {/* Retrying is deliberately NOT styled as an error: nothing is wrong
+            with the user's data, the provider is just busy right now, and it
+            usually resolves itself within a few seconds. */}
+        {retryStatus && (
+          <div className="flex justify-start" data-retry-status>
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent-subtle px-2.5 py-1 text-[11px] font-semibold text-accent-text">
+              <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
+              {retryStatus}
+            </div>
+          </div>
+        )}
+        {fallbackNotice && (
+          <div className="flex justify-start">
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-elevated px-2.5 py-1 text-[11px] text-content-secondary">
+              <Info className="w-3 h-3" aria-hidden="true" />
+              {fallbackNotice}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* A failure is shown OUTSIDE the scrolling transcript, above the
+          composer, so Retry is always reachable without scrolling back to find
+          it. The raw provider error is behind Details, never dumped inline. */}
+      {failure && (
+        <div className="mx-3 mb-2 rounded-xl border border-rose-500/40 bg-rose-500/10 p-3" data-failure>
+          <p className="text-xs text-content-primary">{failure.message}</p>
+          <div className="flex flex-wrap items-center gap-2 mt-2">
+            {failure.retryable && (
+              <button
+                onClick={() => void retryLast()}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 px-3 min-h-[36px] rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-semibold transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Retry
+              </button>
+            )}
+            <button
+              onClick={() => setShowDetails((v) => !v)}
+              aria-expanded={showDetails}
+              className="px-2.5 min-h-[36px] rounded-lg text-xs font-semibold text-content-secondary hover:text-content-primary transition-colors"
+            >
+              {showDetails ? 'Hide details' : 'Details'}
+            </button>
+          </div>
+          {showDetails && (
+            <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-bg-surface p-2 text-[10px] text-content-secondary">
+              {failure.details}
+            </pre>
+          )}
+        </div>
+      )}
 
       {pending && (
         <div className="mx-3 mb-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3">
@@ -226,6 +304,9 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
         {/* A TEXTAREA, not an input: a single-line <input> physically cannot
             hold a newline, so Shift+Enter had nowhere to put one. The box grows
             with its content up to ~6 lines and then scrolls. */}
+        {/* The input stays ENABLED while a turn runs, so the next message can
+            be typed straight away. Only sending is blocked, which is what the
+            Stop button below takes over. */}
         <textarea
           ref={inputRef}
           rows={1}
@@ -233,19 +314,33 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder={configured ? 'Ask or tell me to do something…' : 'Configure a provider first…'}
-          disabled={busy || !configured}
+          disabled={!configured}
           aria-label="Message the assistant"
           className="flex-1 min-w-0 resize-none overflow-y-auto bg-bg-elevated/60 border border-border rounded-xl px-3 py-2.5 text-sm text-content-primary outline-none focus:border-accent placeholder:text-content-tertiary disabled:opacity-50"
           style={{ maxHeight: MAX_COMPOSER_HEIGHT_PX }}
         />
-        <button
-          type="submit"
-          disabled={busy || !draft.trim() || !configured}
-          aria-label="Send message"
-          className="p-3 rounded-xl bg-accent hover:bg-accent-hover text-white transition-colors disabled:opacity-40 shrink-0"
-        >
-          <SendHorizonal className="w-4 h-4" />
-        </button>
+        {/* One button, two jobs. While a turn is running it is Stop, so the
+            control the user reaches for to interrupt is the one already under
+            their thumb, at every width and in both the panel and the page. */}
+        {busy ? (
+          <button
+            type="button"
+            onClick={stop}
+            aria-label="Stop responding"
+            className="p-3 rounded-xl bg-accent hover:bg-accent-hover text-white transition-colors shrink-0"
+          >
+            <Square className="w-4 h-4 fill-current" aria-hidden="true" />
+          </button>
+        ) : (
+          <button
+            type="submit"
+            disabled={!draft.trim() || !configured}
+            aria-label="Send message"
+            className="p-3 rounded-xl bg-accent hover:bg-accent-hover text-white transition-colors disabled:opacity-40 shrink-0"
+          >
+            <SendHorizonal className="w-4 h-4" />
+          </button>
+        )}
       </form>
     </>
   );
