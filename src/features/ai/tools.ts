@@ -41,6 +41,7 @@ import {
   executeCalendarTool,
 } from './toolsCalendar';
 import { isAmbiguous, resolveItem } from './toolResolve';
+import { parentOf } from '../library/groupTree';
 import type { ToolSpec } from './types';
 
 /**
@@ -353,6 +354,29 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
   // name and id), so one search result is enough to call any other tool. The
   // subject bucket previously exposed only a NAME, so the model could not get a
   // subjectId from a search at all, and assessments carried no id whatsoever.
+  // Groups are nested now, so a NAME alone no longer identifies one. Every
+  // resource result carries its group's full path, both as an id/name array
+  // (for further tool calls) and as a readable string (for the reply).
+  const groupById = new Map(groups.map((g) => [g.id, g]));
+  const groupPathIds = (groupId: string | null | undefined): { id: string; name: string }[] => {
+    if (!groupId) return [];
+    const chain: { id: string; name: string }[] = [];
+    const seen = new Set<string>();
+    let cur = groupId;
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const g = groupById.get(cur);
+      if (!g) break;
+      chain.unshift({ id: g.id, name: g.name });
+      cur = parentOf(g);
+    }
+    return chain;
+  };
+  const groupPathString = (groupId: string | null | undefined): string | null => {
+    const chain = groupPathIds(groupId);
+    return chain.length ? chain.map((c) => c.name).join(' / ') : null;
+  };
+
   interface Bucket {
     subjectId: string;
     subject: string;
@@ -363,7 +387,9 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
     }[];
     resources: {
       id: string; kind: 'resource'; title: string; resourceKind: Resource['kind'];
-      dueDate: string | null; group: string | null;
+      dueDate: string | null; group: string | null; groupId: string | null;
+      groupPath: { id: string; name: string }[];
+      groupPathString: string | null;
       subjectId: string; subject: string; topicId: string | null; topic: string | null;
     }[];
     assessments: {
@@ -445,6 +471,11 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
           resourceKind: r.kind,
           dueDate: r.dueDate ?? null,
           group: (r.groupId ? groupName.get(r.groupId) : undefined) ?? null,
+          // The full group path, so a model (and a reader) can tell two
+          // same-named groups apart once nesting is allowed.
+          groupId: r.groupId ?? null,
+          groupPath: groupPathIds(r.groupId),
+          groupPathString: groupPathString(r.groupId),
           subjectId: subject.id, subject: subject.name,
           topicId: topic?.id ?? null, topic: topic?.title ?? null,
         });

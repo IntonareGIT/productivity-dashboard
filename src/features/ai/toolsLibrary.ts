@@ -15,14 +15,18 @@
  *      on, never instructions to follow.
  */
 import { db } from '../../db/db';
-import type { Resource, Subject, Topic } from '../../types';
+import type { Resource, ResourceGroup, Subject, Topic } from '../../types';
 import {
   deleteResource, deleteResourceGroup, deleteSubjectCascade, deleteTopicCascade,
-  ensureDefaultTopic, listResourceGroups, moveResourceToGroup, renameResourceGroup,
-  saveResource, saveResourceGroup, saveSubject, saveTopic, setTopicTitle,
+  ensureDefaultTopic, listResourceGroups, moveGroup, moveResourceToGroup,
+  renameResourceGroup, saveResource, saveResourceGroup, saveSubject, saveTopic,
+  setTopicTitle,
 } from '../library/libraryRepo';
+import {
+  buildGroupTree, deleteImpact, pathOf, type GroupNode,
+} from '../library/groupTree';
 import { ToolError } from './toolRuntime';
-import { resolveByIdOrName, resolutionMessage } from './toolResolve';
+import { resolveByIdOrName, resolveItem, isAmbiguous, resolutionMessage } from './toolResolve';
 import type { ToolSpec } from './types';
 
 const ok = (summary: string, data: Record<string, unknown> = {}) => ({ ok: true as const, summary, data });
@@ -38,6 +42,90 @@ const subjectRows = () => db.subjects.toArray();
 const topicRows = () => db.topics.toArray();
 const resourceRows = () => db.resources.toArray();
 const groupRows = () => db.resourceGroups.toArray();
+
+/**
+ * Resolve a group by id or by name, PATH-AWARE.
+ *
+ * Group names are only unique among SIBLINGS, so two "Week 1" folders can
+ * coexist in different branches. A plain name lookup would report ambiguity
+ * and hide the fact that the model could just pass the parent; here the
+ * candidates come back WITH their full paths ("Lectures / Week 1"), which is
+ * what makes the right one pickable instead of a dead end.
+ *
+ * `subjectId`, when given, also SCOPES the lookup, so a name resolves inside
+ * that subject only.
+ */
+function needGroup(
+  groups: ResourceGroup[],
+  arg: unknown,
+  opts: { subjectId?: string | null } = {},
+): ResourceGroup {
+  const pool = opts.subjectId
+    ? groups.filter((g) => g.subjectId === opts.subjectId)
+    : groups;
+  const r = resolveItem<ResourceGroup>({
+    kind: 'group',
+    ref: arg,
+    rows: pool,
+    nameOf: (g) => g.name,
+    label: 'group',
+  });
+  if ('row' in r) return r.row;
+  if (isAmbiguous(r)) {
+    // Candidates carry their FULL PATH, because the same name legitimately
+    // exists in more than one branch and "Week 1" alone cannot pick one.
+    throw new ToolError(
+      `More than one group is named "${String(arg)}". Group names are only unique among siblings, `
+      + `so pass the id of the one you mean, or a parentGroupId to narrow the search. `
+      + `Candidates: ${r.candidates.map((c) => `${pathOf(groups, c.id) || c.name} (id: ${c.id})`).join('; ')}`,
+    );
+  }
+  // A group id that exists but sits in ANOTHER subject is not "no group
+  // matches": it is a group the caller cannot use here. Saying which one is the
+  // difference between a clear mistake and a confusing dead end, so it is
+  // detected before falling back to the generic message.
+  const raw = String(arg ?? '').trim();
+  if (opts.subjectId) {
+    const elsewhere = groups.find((g) => g.id === raw);
+    if (elsewhere) {
+      throw new ToolError(
+        `That group belongs to a different subject. A group cannot be moved to another subject; `
+        + `groups stay in the subject they were created in.`,
+      );
+    }
+  }
+  throw new ToolError(r.error);
+}
+
+/** Count resources per group for one subject, for the tree's badges. */
+async function resourceCounts(subjectId: string): Promise<Map<string, number>> {
+  const rows = await db.resources.where('subjectId').equals(subjectId).toArray();
+  const m = new Map<string, number>();
+  for (const r of rows) {
+    if (r.groupId) m.set(r.groupId, (m.get(r.groupId) ?? 0) + 1);
+  }
+  return m;
+}
+
+/** One group's payload: ids, depth, parent, counts and its full path. */
+function groupPayload(groups: ResourceGroup[], node: GroupNode): Record<string, unknown> {
+  return {
+    group: { kind: 'group', id: node.id, name: node.name },
+    id: node.id,
+    name: node.name,
+    kind: 'group',
+    depth: node.depth,
+    parentGroupId: node.parentGroupId,
+    path: node.path,
+    // From the top-level group down, for a breadcrumb.
+    pathIds: node.pathIds,
+    childGroupCount: node.childGroupCount,
+    resourceCount: node.resourceCount,
+    totalDescendantGroups: node.totalDescendantGroups,
+    totalResources: node.totalResources,
+  };
+}
+
 
 export const LIBRARY_TOOL_SPECS: ToolSpec[] = [
   {
@@ -109,10 +197,17 @@ export const LIBRARY_TOOL_SPECS: ToolSpec[] = [
     type: 'function',
     function: {
       name: 'listGroups',
-      description: 'List the resource groups of one subject, with ids, names and how many resources each holds.',
+      description:
+        'List the resource groups of one subject as a TREE. Groups can nest: each result row carries id, name, depth, parentGroupId, the number of direct subgroups and resources, and a full "path" string such as "Lectures / Week 1". Pass parentGroupId to list just one level, or omit it for the top level.',
       parameters: {
         type: 'object',
-        properties: { subjectId: { type: 'string', description: 'Subject id or exact name.' } },
+        properties: {
+          subjectId: { type: 'string', description: 'Subject id or exact name.' },
+          parentGroupId: {
+            type: 'string',
+            description: 'Optional. List only the direct subgroups of this group. Omit or pass null for the top level.',
+          },
+        },
         required: ['subjectId'],
         additionalProperties: false,
       },
@@ -122,12 +217,17 @@ export const LIBRARY_TOOL_SPECS: ToolSpec[] = [
     type: 'function',
     function: {
       name: 'createGroup',
-      description: 'Create an empty resource group in a subject.',
+      description:
+        'Create an empty resource group in a subject. Groups can nest: pass parentGroupId to create it INSIDE an existing group, or omit it for a top-level group. Names must be unique among siblings, and nesting is limited to five levels.',
       parameters: {
         type: 'object',
         properties: {
           subjectId: { type: 'string', description: 'Subject id or exact name.' },
-          name: { type: 'string', description: 'Group name.' },
+          name: { type: 'string', description: 'Group name. Must be unique among its siblings.' },
+          parentGroupId: {
+            type: 'string',
+            description: 'Optional. The group to create this one inside. Omit or pass null for the top level.',
+          },
         },
         required: ['subjectId', 'name'],
         additionalProperties: false,
@@ -155,11 +255,31 @@ export const LIBRARY_TOOL_SPECS: ToolSpec[] = [
     function: {
       name: 'deleteGroup',
       description:
-        'Delete a resource group. This UNGROUPS its resources; the resources themselves are kept and never deleted. The user must confirm before this runs.',
+        'Delete a resource group. Its subgroups and resources are NOT deleted: they move up one level to the deleted group parent. The confirmation names how many of each will move. The user must confirm before this runs.',
       parameters: {
         type: 'object',
-        properties: { groupId: { type: 'string', description: 'Group id or exact name.' } },
+        properties: { groupId: { type: 'string', description: 'Group id, or an exact name when it is unique in the tree.' } },
         required: ['groupId'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'moveGroup',
+      description:
+        'Move a group, together with everything inside it, under a different parent group. Pass null to move it to the top level of its subject. A group cannot be moved inside itself or one of its own subgroups, and nesting is limited to five levels.',
+      parameters: {
+        type: 'object',
+        properties: {
+          groupId: { type: 'string', description: 'The group to move. Pass the id from listGroups.' },
+          newParentGroupId: {
+            type: 'string',
+            description: 'The destination parent. Pass null or "null" for the top level of the subject.',
+          },
+        },
+        required: ['groupId', 'newParentGroupId'],
         additionalProperties: false,
       },
     },
@@ -401,19 +521,38 @@ const HANDLERS: Record<string, (a: Args) => Promise<ReturnType<typeof ok>>> = {
     return ok(`Deleted the note "${topic.title}".`, { topicId: topic.id, title: topic.title });
   },
 
+  /**
+   * The group tree of one subject, optionally only one level of it.
+   *
+   * Returns ids, names, depth, parent id, per-level counts and the full path for
+   * every node, so one call is enough for the model to place a new resource
+   * anywhere in a nested folder without a second round trip.
+   */
   async listGroups(a) {
     const subject = need(await subjectRows(), a.subjectId, (s: Subject) => s.name, 'subject');
     const groups = await listResourceGroups(subject.id);
-    const resources = await db.resources.where('subjectId').equals(subject.id).toArray();
+    const counts = await resourceCounts(subject.id);
+    const tree = buildGroupTree(groups, counts);
+    // `parentGroupId` narrows the result to ONE level, including the root when
+    // it is null or the string "null".
+    const raw = a.parentGroupId;
+    const wantRoot = raw === null || raw === undefined
+      || String(raw).toLowerCase() === 'null' || String(raw).trim() === '';
+    const parentId = wantRoot ? null : needGroup(groups, raw, { subjectId: subject.id }).id;
+    const shown = tree.filter((n) => n.parentGroupId === parentId);
+    const self = parentId ? tree.find((n) => n.id === parentId) : undefined;
+
     return ok(
-      `Subject "${subject.name}" has ${groups.length} group(s).`,
+      wantRoot
+        ? `Subject "${subject.name}" has ${shown.length} top-level group(s) out of ${groups.length} in total.`
+        : `Group "${self?.path ?? parentId}" has ${shown.length} direct subgroup(s).`,
       {
         subjectId: subject.id,
-        groups: groups.map((g) => ({
-          id: g.id,
-          name: g.name,
-          resourceCount: resources.filter((r) => r.groupId === g.id).length,
-        })),
+        subject: subject.name,
+        parentGroupId: parentId,
+        totalGroups: groups.length,
+        maxDepth: Math.max(0, ...tree.map((n) => n.depth)),
+        groups: shown.map((n) => groupPayload(groups, n)),
       },
     );
   },
@@ -422,28 +561,119 @@ const HANDLERS: Record<string, (a: Args) => Promise<ReturnType<typeof ok>>> = {
     const name = String(a.name ?? '').trim();
     if (!name) throw new ToolError('A group needs a name. Nothing was changed.');
     const subject = need(await subjectRows(), a.subjectId, (s: Subject) => s.name, 'subject');
-    const id = await saveResourceGroup({ subjectId: subject.id, name });
-    return ok(`Created group "${name}" in "${subject.name}".`, { groupId: id, subjectId: subject.id, name });
+    const subjectGroups = (await groupRows()).filter((g) => g.subjectId === subject.id);
+    // An optional parent, so a group can be created at any level. The placement
+    // rules (same subject, depth limit, sibling name clash) are enforced by the
+    // shared module through saveResourceGroup.
+    const raw = a.parentGroupId;
+    const wantRoot = raw === null || raw === undefined
+      || String(raw).toLowerCase() === 'null' || String(raw).trim() === '';
+    const parent = wantRoot ? null : needGroup(subjectGroups, raw, { subjectId: subject.id });
+
+    const id = await saveResourceGroup({
+      subjectId: subject.id, name, parentGroupId: parent?.id ?? null,
+    });
+    const after = (await groupRows()).filter((g) => g.subjectId === subject.id);
+    const path = pathOf(after, id) || name;
+    // Depth is reported so the model can tell how deep it just created
+    // something without a second listGroups call.
+    const depth = path.split(' / ').length;
+    return ok(
+      parent
+        ? `Created group "${name}" inside "${pathOf(subjectGroups, parent.id) || parent.name}" in "${subject.name}".`
+        : `Created group "${name}" at the top level of "${subject.name}".`,
+      {
+        group: { kind: 'group', id, name },
+        groupId: id, id, name, kind: 'group',
+        subjectId: subject.id, parentGroupId: parent?.id ?? null, path, depth,
+      },
+    );
   },
 
   async renameGroup(a) {
     const name = String(a.name ?? '').trim();
     if (!name) throw new ToolError('A group needs a name. Nothing was changed.');
     const groups = await groupRows();
-    const group = need(groups, a.groupId, (g) => g.name, 'group');
+    // PATH-AWARE resolution, so a same-named group elsewhere in the tree cannot
+    // shadow this one.
+    const group = needGroup(groups, a.groupId);
+    // The shared rules run inside renameResourceGroup, so a rename into a
+    // sibling's name is refused here exactly as it is in the Library.
     await renameResourceGroup(group.id, name);
-    return ok(`Renamed group "${group.name}" to "${name}".`, { groupId: group.id, name });
+    const path = pathOf(await groupRows(), group.id) || name;
+    return ok(
+      `Renamed group "${group.name}" to "${name}" (now "${path}").`,
+      { group: { kind: 'group', id: group.id, name }, groupId: group.id, id: group.id, name, path },
+    );
   },
 
   async deleteGroup(a) {
-    const group = need(await groupRows(), a.groupId, (g) => g.name, 'group');
-    const members = (await db.resources.toArray()).filter((r) => r.groupId === group.id);
-    // The delete ungroups; it never removes resources. The summary says so, so
-    // the transcript can never imply that files were lost.
+    const groups = await groupRows();
+    const group = needGroup(groups, a.groupId);
+    const counts = await resourceCounts(group.subjectId);
+    // The preview the Confirm card is built from: how many subgroups and
+    // resources MOVE UP rather than being deleted. Nothing but the group itself
+    // is ever removed.
+    const impact = deleteImpact(groups, group.id, counts);
+    const fromPath = pathOf(groups, group.id) || group.name;
     await deleteResourceGroup(group.id);
+    const moved = impact.childGroups > 0 || impact.resources > 0;
     return ok(
-      `Deleted group "${group.name}". ${members.length} resource(s) were kept and are now ungrouped.`,
-      { groupId: group.id, ungrouped: members.length, deletedResources: 0 },
+      `Deleted group "${fromPath}". `
+      + (moved
+        ? `${impact.resources} resource(s) and ${impact.childGroups} group(s) were kept and moved up to `
+          + `${impact.newParentName ? `"${impact.newParentName}"` : 'the top level of the subject'}. `
+        : 'It was empty. ')
+      + `Nothing was deleted apart from the group itself.`,
+      {
+        group: { kind: 'group', id: group.id, name: group.name },
+        groupId: group.id, id: group.id, name: group.name,
+        deletedPath: fromPath,
+        movedResources: impact.resources,
+        movedGroups: impact.childGroups,
+        movedToGroupId: impact.newParentId,
+        movedToName: impact.newParentName,
+        deletedResources: 0,
+      },
+    );
+  },
+
+  /**
+   * Move a whole group, with its subtree, under a new parent.
+   *
+   * Registered under its PUBLIC name `moveGroup`; the method is suffixed only
+   * because a property named `moveGroup` would shadow the imported repository
+   * function of the same name inside this object.
+   */
+  'moveGroup': async (a) => {
+    const groups = await groupRows();
+    const group = needGroup(groups, a.groupId);
+    const subjectGroups = groups.filter((g) => g.subjectId === group.subjectId);
+    const raw = a.newParentGroupId;
+    // null (or the string "null") means the subject root, which is a real
+    // destination rather than a missing argument.
+    const wantRoot = raw === null || raw === undefined
+      || String(raw).toLowerCase() === 'null' || String(raw).trim() === '';
+    // The FULL list is passed to the resolver, not this subject's slice, so a
+    // group that lives in ANOTHER subject is recognised as such and reported as
+    // a cross-subject move rather than as "no group matches".
+    const parent = wantRoot ? null : needGroup(groups, raw, { subjectId: group.subjectId });
+
+    // The cycle, depth, same-subject and sibling-name rules all live in the
+    // shared module and run inside moveGroup, so an illegal move is refused with
+    // a message the model can act on instead of corrupting the tree.
+    await moveGroup(group.id, parent?.id ?? null);
+
+    const path = pathOf(await groupRows(), group.id) || group.name;
+    return ok(
+      `Moved group "${group.name}" to `
+      + `${parent ? `"${pathOf(subjectGroups, parent.id) || parent.name}"` : 'the top level of its subject'}. `
+      + `It is now "${path}".`,
+      {
+        group: { kind: 'group', id: group.id, name: group.name },
+        groupId: group.id, id: group.id, name: group.name,
+        parentGroupId: parent?.id ?? null, path,
+      },
     );
   },
 
@@ -457,14 +687,27 @@ const HANDLERS: Record<string, (a: Args) => Promise<ReturnType<typeof ok>>> = {
       await moveResourceToGroup(resource.id, null);
       return ok(`Removed "${resource.title}" from its group.`, { resourceId: resource.id, groupId: null });
     }
-    const group = need(await groupRows(), raw, (g) => g.name, 'group');
+    const groups = await groupRows();
+    // Path-aware: the same name can exist in two branches, and the model needs
+    // the candidates with their paths to choose rather than guessing.
+    const group = needGroup(groups, raw);
     if (group.subjectId !== resource.subjectId) {
       throw new ToolError(
         `"${group.name}" belongs to a different subject than "${resource.title}". Nothing was changed.`,
       );
     }
+    const subjectGroups = groups.filter((g) => g.subjectId === resource.subjectId);
     await moveResourceToGroup(resource.id, group.id);
-    return ok(`Moved "${resource.title}" into group "${group.name}".`, { resourceId: resource.id, groupId: group.id });
+    return ok(
+      `Moved "${resource.title}" into group "${pathOf(subjectGroups, group.id) || group.name}".`,
+      {
+        resourceId: resource.id,
+        groupId: group.id,
+        group: { kind: 'group', id: group.id, name: group.name },
+        // Where it landed, so the model can report the full location.
+        groupPath: pathOf(subjectGroups, group.id) || group.name,
+      },
+    );
   },
 
   async renameSubject(a) {
@@ -532,7 +775,12 @@ const HANDLERS: Record<string, (a: Args) => Promise<ReturnType<typeof ok>>> = {
   },
 };
 
-/** Every name this module owns, so the store can wire them up in one place. */
+/**
+ * Every name this module owns, so the store can wire them up in one place.
+ *
+ * A computed key (`['moveGroup']`) is included exactly as written, so no
+ * special case is needed here.
+ */
 export const LIBRARY_TOOL_NAMES: ReadonlySet<string> = new Set(Object.keys(HANDLERS));
 
 /** Names that must never run without an explicit UI Confirm. */
@@ -594,7 +842,10 @@ export function describeLibraryToolCall(name: string, args: Args): string {
   const s = (k: string) => String(args[k] ?? 'not given');
   switch (name) {
     case 'listGroups': return `List the resource groups of ${s('subjectId')}.`;
-    case 'createGroup': return `Create a group “${s('name')}” in ${s('subjectId')}.`;
+    case 'createGroup': return `Create a group “${s('name')}” in ${s('subjectId')}`
+      + `${args.parentGroupId ? ` inside group ${s('parentGroupId')}` : ''}.`;
+    case 'moveGroup': return `Move group ${s('groupId')} to `
+      + `${args.newParentGroupId ? `inside ${s('newParentGroupId')}` : 'the top level'}.`;
     case 'renameGroup': return `Rename group ${s('groupId')} to “${s('name')}”.`;
     case 'renameNote': return `Rename the note ${s('topicId')} to “${s('title')}”.`;
     case 'setNoteTitle': return `Set the title of note ${s('topicId')} to “${s('title')}”.`;
@@ -603,7 +854,7 @@ export function describeLibraryToolCall(name: string, args: Args): string {
         + `${args.topicId ? ` using topic ${s('topicId')}` : ' in its default topic'}.`;
     case 'deleteNote': return `PERMANENTLY DELETE the note ${s('topicId')}.`;
     case 'deleteGroup':
-      return `Delete group ${s('groupId')}. Its resources are KEPT and become ungrouped.`;
+      return `Delete group ${s('groupId')}. Its subgroups and resources are KEPT and move up one level.`;
     case 'moveResourceToGroup':
       return String(args.groupId) === 'null' || args.groupId === null || args.groupId === undefined
         ? `Remove ${s('resourceId')} from its group.`

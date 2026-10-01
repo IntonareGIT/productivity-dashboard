@@ -205,7 +205,15 @@ check('group: rename by id works', S.resourceGroups.get(g.data.groupId).name ===
 const beforeDel = S.resources.size;
 const dg = await run('deleteGroup', { groupId: g.data.groupId });
 check('group: deleteGroup keeps every resource', S.resources.size === beforeDel);
-check('group: the summary says resources were KEPT', /were kept and are now ungrouped/.test(dg.summary));
+// The wording moved with the behaviour: contents now move UP one level rather
+// than being stripped to "no group". The property being protected is the same:
+// the summary must never imply that files were lost. An empty group says so
+// explicitly instead of claiming resources were kept.
+check('group: the summary says resources were KEPT',
+  /were kept and moved up/.test(dg.summary)
+  || /were kept and are now ungrouped/.test(dg.summary)
+  || (/It was empty/.test(dg.summary) && /Nothing was deleted apart from the group itself/.test(dg.summary)),
+  dg.summary);
 check('group: deleteGroup reports zero deleted resources', dg.data.deletedResources === 0);
 
 // renames and moves
@@ -399,7 +407,7 @@ check('instructions: every delete description names the Confirm requirement',
     && deleteSpecs.every((s) => /user must confirm before this runs/.test(s.function.description)),
   `${deleteSpecs.length} delete specs, ${gatedNames.length} gated`);
 check('instructions: deleteGroup explains that resources survive',
-  /UNGROUPS its resources/.test(lib.describeLibraryToolCall('deleteGroup', {}).concat(
+  /subgroups and resources are NOT deleted/.test(lib.describeLibraryToolCall('deleteGroup', {}).concat(
     lib.LIBRARY_TOOL_SPECS.find((s) => s.function.name === 'deleteGroup').function.description)));
 check('instructions: the Confirm wording states what is lost for the big deletes',
   deleteSpecs.filter((s) => /^delete(Subject|Topic|Resource)$/.test(s.function.name))
