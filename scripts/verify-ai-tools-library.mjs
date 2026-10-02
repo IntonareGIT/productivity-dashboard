@@ -421,7 +421,14 @@ check('instructions: the Confirm wording states what is lost for the big deletes
 // The LIVE toolbar is the one inside the Tiptap editor. The old `NoteToolbar.tsx`
 // is dead code left for reference, so asserting against it would have kept
 // "passing" while guarding code nothing renders.
-const toolbar = readFileSync('src/features/library/noteEditor/NoteEditor.tsx', 'utf8');
+// The toolbar SURFACE spans two modules now: the buttons live in NoteEditor, and
+// the shared popover (which owns `keepSelection` and the palette items) lives in
+// AnchoredPopover. The assertions below are about the behaviour of the toolbar as
+// a whole, so both files are read.
+const toolbar = [
+  readFileSync('src/features/library/noteEditor/NoteEditor.tsx', 'utf8'),
+  readFileSync('src/features/library/noteEditor/AnchoredPopover.tsx', 'utf8'),
+].join('\n');
 const keepCount = (toolbar.match(/onMouseDown=\{keepSelection\}/g) || []).length;
 check('p3 every formatting button prevents mousedown default', keepCount >= 5, `${keepCount} buttons`);
 // The palette swatches live in a portal and use pointerdown, so both must be
@@ -429,8 +436,12 @@ check('p3 every formatting button prevents mousedown default', keepCount >= 5, `
 check('p3 the colour swatches prevent default too',
   (toolbar.match(/onPointerDown=\{keepSelection\}/g) || []).length >= 2,
   `${(toolbar.match(/onPointerDown=\{keepSelection\}/g) || []).length} swatches`);
+// `keepSelection` now also accepts a PointerEvent, because the shared popover
+// items call it from `onPointerDown` as well as `onMouseDown`. The behaviour
+// under test is unchanged: it must preventDefault at press time so the selection
+// survives the button press.
 check('p3 keepSelection calls preventDefault on mousedown, not on click',
-  /const keepSelection = \(e: React\.MouseEvent\) => e\.preventDefault\(\);/.test(toolbar));
+  /const keepSelection = \(e: React\.(MouseEvent|PointerEvent)( \| React\.(MouseEvent|PointerEvent))?\) => e\.preventDefault\(\);/.test(toolbar));
 check('p3 the reason is documented at the fix', /collapses the selection/i.test(toolbar));
 // The render path must still carry color through (it was never the bug). The
 // editor now shares this helper via `noteFormatShared`, so assert on the live one.

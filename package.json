@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "generate:icons": "node scripts/generate-icons.mjs",
-    "verify": "node scripts/verify-theme-persistence.mjs && node scripts/verify-app-invariants.mjs && node scripts/verify-jsx-comments.mjs && node scripts/verify-history-normalizer.mjs && node scripts/verify-about-help.mjs && node scripts/verify-resource-form.mjs && node scripts/verify-resource-groups.mjs && node scripts/verify-groups-ui.mjs && node scripts/verify-note-titles.mjs && node scripts/verify-note-formatting.mjs && node scripts/verify-resource-preview.mjs && node scripts/verify-split-view.mjs && node scripts/verify-extended-tools.mjs && node scripts/verify-ai-tools-library.mjs && node scripts/verify-chat-history.mjs && node scripts/verify-thought-signature.mjs && node scripts/verify-thinking.mjs",
+    "verify": "node scripts/verify-theme-persistence.mjs && node scripts/verify-app-invariants.mjs && node scripts/verify-jsx-comments.mjs && node scripts/verify-history-normalizer.mjs && node scripts/verify-about-help.mjs && node scripts/verify-resource-form.mjs && node scripts/verify-resource-groups.mjs && node scripts/verify-groups-ui.mjs && node scripts/verify-note-titles.mjs && node scripts/verify-note-formatting.mjs && node scripts/verify-note-media.mjs && node scripts/verify-resource-preview.mjs && node scripts/verify-split-view.mjs && node scripts/verify-extended-tools.mjs && node scripts/verify-ai-tools-library.mjs && node scripts/verify-chat-history.mjs && node scripts/verify-thought-signature.mjs && node scripts/verify-thinking.mjs",
     "verify:editor": "node scripts/verify-note-editor-browser.mjs",
     "verify:composer": "node scripts/verify-composer-browser.mjs",
     "verify:dialog": "node scripts/verify-subject-dialog-browser.mjs",
@@ -29,6 +29,8 @@
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
     "@tiptap/extension-color": "^3.31.3",
+    "@tiptap/extension-highlight": "^3.31.3",
+    "@tiptap/extension-image": "^3.31.3",
     "@tiptap/extension-text-align": "^3.31.3",
     "@tiptap/extension-text-style": "^3.31.3",
     "@tiptap/extension-underline": "^3.31.3",

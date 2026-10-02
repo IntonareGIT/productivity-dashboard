@@ -246,7 +246,14 @@ check('unwrap: a lone closing tag is removed', unwrapFormatting('x</span>') === 
   // The LIVE toolbar is inside the Tiptap editor. `components/NoteToolbar.tsx` is
   // the old textarea toolbar, kept only for reference: asserting against it
   // would pass while guarding a component nothing renders any more.
-  const toolbar = readFileSync('src/features/library/noteEditor/NoteEditor.tsx', 'utf8');
+  // The toolbar SURFACE is no longer one file. The dropdown panels were moved into
+// `AnchoredPopover.tsx` so the five palettes share one implementation, so both
+// are read: the assertion is about what the toolbar renders, not about which
+// module happens to render it.
+const toolbar = [
+  readFileSync('src/features/library/noteEditor/NoteEditor.tsx', 'utf8'),
+  readFileSync('src/features/library/noteEditor/AnchoredPopover.tsx', 'utf8'),
+].join('\n');
   const md = readFileSync('src/features/library/components/MarkdownNotes.tsx', 'utf8');
 
   check('themes: all 8 palette colors are defined', NOTE_COLORS.every((c) => new RegExp(`--note-c-${c}:`).test(themes)));

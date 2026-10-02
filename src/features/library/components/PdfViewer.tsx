@@ -6,6 +6,9 @@ import {
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { useZoomAnchor, advanceGestureScale, normalizeWheelDelta, pinchSensitivityFor, useTouchZoomHandlers, VIEWER_TOUCH_ACTION } from '../useZoomAnchor';
+import { PdfTextLayer } from './PdfTextLayer';
+import { PdfSnippetLayer } from './PdfSnippetLayer';
+import { Scissors } from 'lucide-react';
 
 // Register the worker once, at module load. Vite rewrites the `?url` import to
 // a hashed asset URL, so this works in both dev and the production build.
@@ -260,6 +263,77 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // One canvas ref per page in the render window, so React can keep each
   // mounted and we paint into the right element.
   const canvasRefs = useRef<Map<number, HTMLCanvasElement>>(new Map());
+
+  /**
+   * Snippet tool state.
+   *
+   * `snippetOn` arms the crop tool; `snippetPage` is the single page it is armed
+   * ON. The overlay is deliberately limited to one page at a time: a crop is a
+   * deliberate act on a specific region, and an armed drag surface over every
+   * visible page would swallow the normal scroll-and-select gesture across the
+   * whole document.
+   */
+  const [snippetOn, setSnippetOn] = useState(false);
+  const [snippetPage, setSnippetPage] = useState(1);
+  /** Bumped when a page's bitmap is replaced, to force the text layer to redraw. */
+  const [textLayerGen, setTextLayerGen] = useState(0);
+
+  /**
+   * Page proxies and the viewport each was last rendered at, so the text layer
+   * can be built for exactly the geometry the canvas is showing. The map is in a
+   * ref and mirrored into state, because the overlay needs to re-render when a
+   * viewport changes but the render pipeline itself must not re-run because a
+   * ref changed.
+   */
+  const pageProxies = useRef(new Map<number, pdfjsLib.PDFPageProxy>());
+  const pageViewports = useRef(new Map<number, pdfjsLib.PageViewport>());
+
+  /**
+   * Builds a pdf.js text layer for one page.
+   *
+   * `PdfViewer` is the ONLY module in the project that imports `pdfjs-dist`, so
+   * that the worker is registered once and the library has a single owner. The
+   * text layer is therefore constructed here and handed to `PdfTextLayer`,
+   * which owns only the lifecycle.
+   */
+  const createTextLayer = useCallback<import('./PdfTextLayer').TextLayerFactory>(
+    (container, page, viewport) => new pdfjsLib.TextLayer({
+      textContentSource: (page as pdfjsLib.PDFPageProxy).streamTextContent(),
+      container,
+      viewport: viewport as pdfjsLib.PageViewport,
+    }),
+    [],
+  );
+
+  /**
+   * Copy a cropped snippet to the clipboard.
+   *
+   * `ClipboardItem` with an image/png entry is the only way to put a picture on
+   * the clipboard in a modern browser. The write is wrapped because the
+   * clipboard is permission-gated and a denied write must not surface as an
+   * unhandled rejection; the user still has the drag rectangle as feedback.
+   */
+  const onSnippetCrop = useCallback((blob: Blob | null) => {
+    // SINGLE-USE. Disarm FIRST and unconditionally, before any clipboard work.
+    //
+    // Doing it only on the success path left the tool armed after a cancelled
+    // drag, a pointer-cancel, or a mis-tap under the minimum size — the cursor
+    // stayed a crosshair and the drag surface kept swallowing scroll gestures.
+    // `blob` may legitimately be null for all three of those cases, so the
+    // disarming cannot be conditional on it.
+    setSnippetOn(false);
+
+    // No blob means the user cancelled or mis-tapped. Nothing is copied, and the
+    // guard is silent rather than an error: a cancelled drag is not a failure.
+    if (!blob) return;
+
+    // `ClipboardItem` with an image/png entry is the only way to put a picture on
+    // the clipboard in a modern browser. The write is wrapped because the
+    // clipboard is permission-gated and a denied write must not surface as an
+    // unhandled rejection.
+    const item = new ClipboardItem({ 'image/png': blob });
+    void navigator.clipboard.write([item]).catch(() => { /* permission denied */ });
+  }, []);
 
   // ---- Commit hand-off: render off-screen, then swap ------------------
   //
@@ -1144,6 +1218,14 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
       const viewport = pdfPage.getViewport({ scale: geo.viewportScale, rotation });
 
+      // Record the geometry the text layer must align to. This happens BEFORE
+      // the await: the text layer does not care whether the bitmap finished
+      // painting, and building it here means the text is selectable a frame
+      // earlier. The generation bump is what tells React to rebuild the overlay.
+      pageProxies.current.set(n, pdfPage);
+      pageViewports.current.set(n, viewport);
+      setTextLayerGen((g) => g + 1);
+
       const task = pdfPage.render({ canvas, canvasContext: context, viewport });
       renderTasksRef.current.set(n, task);
       try {
@@ -1168,6 +1250,24 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   }, [zoom, rotation, pageGeometry]);
 
   const windowKey = renderWindow.join(',');
+
+  // Escape disarms. Without this, a pointer-cancel that never delivered a
+  // `pointerup` would leave the overlay armed with no way out of it except
+  // finding the toolbar button again.
+  useEffect(() => {
+    if (!snippetOn) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSnippetOn(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [snippetOn]);
+
+  // The snippet overlay follows the current page, so changing pages moves the
+  // armed drag surface with it rather than leaving it stranded on the old page.
+  useEffect(() => {
+    if (snippetOn) setSnippetPage(page);
+  }, [snippetOn, page]);
 
   // Render only the pages near the current one, so a long document does not
   // allocate a canvas per page. Canvases that scroll out of range are simply
@@ -1443,6 +1543,17 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
       <span className={sep} aria-hidden="true" />
 
+      {/* Snippet tool. Arms a drag-to-crop on the CURRENT page; the crop is
+          copied to the clipboard as a PNG. It is a toggle rather than a momentary
+          button because the user has to scroll and aim before dragging, and
+          arming it for the whole document would block text selection. */}
+      <button
+        onClick={() => setSnippetOn((v) => !v)}
+        aria-pressed={snippetOn}
+        aria-label="Crop a snippet from this page"
+        className={`${ctrl} px-2 ${snippetOn ? 'text-content-primary bg-bg-elevated' : ''}`}
+      ><Scissors className="w-4 h-4" /></button>
+
       <button onClick={() => setRotation((r) => (r + 90) % 360)} aria-label={`Rotate, currently ${rotation} degrees`} className={`${ctrl} flex-shrink-0 whitespace-nowrap`}>
         <RotateCw className="w-4 h-4" />
       </button>
@@ -1614,19 +1725,50 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
                 <div
                   key={n}
                   ref={setPageEl(n)}
+                  // `relative` so the text layer and the snippet overlay can be
+                  // positioned over this canvas rather than over the whole
+                  // document stack.
                   className="absolute inset-x-0 flex justify-center px-0"
                   style={{ top: `${entry.top}px` }}
                 >
-                  <canvas
-                    ref={setCanvas(n)}
-                    className="block rounded-lg bg-white shadow-sm shrink-0"
-                    // Width and height together, from one measurement. The
-                    // canvas keeps its intrinsic aspect ratio at every zoom
-                    // level; it is never squeezed by max-width and never
-                    // stretched to fill its band.
-                    style={{ width: `${entry.width}px`, height: `${entry.height}px` }}
-                    aria-label={title ? `${title} — PDF page ${n} of ${pageCount}` : `PDF page ${n} of ${pageCount}`}
-                  />
+                  {/* The page needs a positioned box for its overlays. It is
+                      exactly the canvas's displayed size, which is what lets the
+                      snippet layer's CSS-pixel coordinates match the canvas. */}
+                  <div className="relative shrink-0" style={{ width: `${entry.width}px`, height: `${entry.height}px` }}>
+                    <canvas
+                      ref={setCanvas(n)}
+                      className="block rounded-lg bg-white shadow-sm shrink-0"
+                      // Width and height together, from one measurement. The
+                      // canvas keeps its intrinsic aspect ratio at every zoom
+                      // level; it is never squeezed by max-width and never
+                      // stretched to fill its band.
+                      style={{ width: `${entry.width}px`, height: `${entry.height}px` }}
+                      // The canvas is the bitmap. The text layer beside it is the
+                      // readable copy, so the canvas is hidden from assistive
+                      // tech rather than both being announced.
+                      aria-hidden="true"
+                    />
+                    {/* Read through `.current` on purpose: `textLayerGen` is bumped
+                          every time a page records a new viewport, and that state
+                          change is what re-renders this subtree. Reading the refs
+                          directly keeps the render pipeline from depending on
+                          them. */}
+                    <PdfTextLayer
+                      page={pageProxies.current.get(n) ?? null}
+                      viewport={pageViewports.current.get(n) ?? null}
+                      createLayer={createTextLayer}
+                      rotation={rotation}
+                      generation={textLayerGen}
+                      snippetOn={snippetOn}
+                    />
+                    {n === snippetPage && (
+                      <PdfSnippetLayer
+                        canvas={canvasRefs.current.get(n) ?? null}
+                        active
+                        onCrop={onSnippetCrop}
+                      />
+                    )}
+                  </div>
                 </div>
               );
             })}

@@ -1,0 +1,241 @@
+/* ============================================================================
+   Note rich media: highlights, callout boxes and responsive images.
+
+   All three render in BOTH the editor surface and the read-only preview, so
+   every rule here is written once against the element itself and scoped only by
+   a container. Nothing depends on which renderer is showing it.
+
+   Colour comes from theme variables rather than inline styles, so a callout and
+   a highlight follow light and dark mode with no duplicated declarations. The
+   sanitizer therefore never has to trust a colour in stored HTML.
+   ========================================================================== */
+
+/* ---- Highlights -------------------------------------------------------- */
+
+mark {
+  /* The background arrives as a token already (the sanitizer only permits the
+     four named ones). `color: inherit` is deliberate: a highlight must never
+     change the text colour, only sit behind it. `border-radius` keeps a long
+     run of highlighted text from looking like a solid bar, and `padding` is
+     vertical-only so a highlighted line does not gain height and shift the
+     surrounding text. */
+  color: inherit;
+  background-color: transparent;
+  border-radius: 3px;
+  padding: 0.08em 0;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* ---- Callout boxes ----------------------------------------------------- */
+
+.note-callout,
+[data-callout] {
+  /* The container itself. `container-type` is what lets the image rule below
+     react to the pane width rather than to the viewport, which is the whole
+     reason a squeezed split-pane column does not produce two-word text columns. */
+  display: block;
+  border-radius: 8px;
+  border-left-width: 4px;
+  border-left-style: solid;
+  padding: 0.65rem 0.9rem;
+  margin: 0.75rem 0;
+  container-type: inline-size;
+}
+
+[data-callout] > :first-child { margin-top: 0; }
+[data-callout] > :last-child { margin-bottom: 0; }
+
+[data-callout='formula'] {
+  border-left-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+}
+
+[data-callout='warning'] {
+  border-left-color: #ef4444;
+  background: color-mix(in srgb, #ef4444 10%, transparent);
+}
+
+[data-callout='note'] {
+  border-left-color: #3b82f6;
+  background: color-mix(in srgb, #3b82f6 10%, transparent);
+}
+
+/* ---- Images ------------------------------------------------------------ */
+
+/* Inline by default.
+   The image is an INLINE-LEVEL box so it can sit inside a sentence without
+   forcing a paragraph break. `vertical-align: middle` stops a tall image from
+   being clipped by the line box it shares with the text beside it. */
+.note-body img,
+.note-editor-surface img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* ---- Square text wrap -------------------------------------------------- */
+
+/* A FLOAT promotes an inline-level box to block-level formatting, which is how
+   square wrap is expressed in CSS: the paragraph flow continues down the side.
+   The margin is what separates the text from the image edge. */
+img[data-align='left'] {
+  float: left;
+  margin: 0.5rem 1rem 0.5rem 0;
+}
+
+img[data-align='right'] {
+  float: right;
+  margin: 0.5rem 0 0.5rem 1rem;
+}
+
+/* A floated image is out of flow, so a following block shorter than the image
+   would carry on down the side. This makes the wrapped block clear the float
+   instead, which is what a reader expects and costs nothing otherwise. */
+.note-body img[data-align]::after,
+.note-editor-surface img[data-align]::after {
+  content: '';
+  display: block;
+  clear: both;
+}
+
+/* THE RESPONSIVE SAFEGUARD — unchanged in intent, and still active.
+
+   Below ~420px of CONTAINER width a 45% float leaves roughly 220px of text,
+   which is two words per line. Below this width every float reverts to inline so
+   the text is never squeezed into an unreadable ribbon.
+
+   A CONTAINER query rather than a media query is the important part: the split
+   pane can be dragged narrow on a wide monitor, where a viewport query would
+   happily keep the float. The media query alongside it protects the standalone
+   Library editor and any full-width note view. */
+@container (max-width: 420px) {
+  img[data-align] {
+    float: none !important;
+    max-width: 100% !important;
+    margin: 0.5rem 0 !important;
+  }
+}
+
+@media (max-width: 420px) {
+  img[data-align] {
+    float: none !important;
+    max-width: 100% !important;
+    margin: 0.5rem 0 !important;
+  }
+}
+
+/* Inside a callout an image is always inline: a float would fight the box's own
+   padding and could push its text outside the border. */
+[data-callout] img,
+[data-callout] img[data-align] {
+  float: none;
+  max-width: 100%;
+  margin: 0.4rem 0;
+}
+
+/* ---- Nested list hierarchy --------------------------------------------- */
+
+/* A nested list needs a DIFFERENT bullet at every level, otherwise a child and
+   its parent are visually identical and the hierarchy is unreadable. The
+   progression disc -> circle -> square is the conventional one and is the only
+   cue available once the text itself is indented.
+
+   The reset is required because the stylesheet's global reset sets
+   `list-style: none`, which would otherwise leave every level with no marker at
+   all. Markers are also restored inside a callout, which inherits the same
+   reset. */
+.note-body ul,
+.note-editor-surface .ProseMirror ul {
+  list-style-type: disc;
+}
+
+.note-body ul ul,
+.note-editor-surface .ProseMirror ul ul {
+  list-style-type: circle;
+}
+
+.note-body ul ul ul,
+.note-editor-surface .ProseMirror ul ul ul {
+  list-style-type: square;
+}
+
+.note-body ul ul ul ul,
+.note-editor-surface .ProseMirror ul ul ul ul {
+  /* Deeper than three levels starts repeating, so it returns to the first
+     marker rather than inventing a fourth that means nothing. */
+  list-style-type: disc;
+}
+
+/* Ordered lists keep their own numbering and are not overridden by the above. */
+.note-body ol,
+.note-editor-surface .ProseMirror ol {
+  list-style-type: decimal;
+}
+
+/* A soft break inside a list item must sit on its own line, not run on from the
+   text before it. */
+.note-editor-surface .ProseMirror li > br,
+.note-body li > br {
+  display: block;
+  content: '';
+}
+
+/* ---- Resize handles ---------------------------------------------------- */
+
+/* The wrapper is the positioned box; the image inside it is what scales. */
+.note-img-frame {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
+/* A selected image gets an outline so it is obvious what the handles act on. */
+.note-img-frame.is-selected > img {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+/* Handles are INERT unless the node is selected. Without this, eight invisible
+   boxes sit permanently over the prose around every image and a stray click
+   starts a resize. */
+.note-img-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  background: var(--accent-primary);
+  border: 1px solid var(--bg-surface);
+  border-radius: 2px;
+  display: none;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.note-img-frame.is-selected > .note-img-handle {
+  display: block;
+  pointer-events: auto;
+}
+
+/* The handle positions. `left`/`top` percentages place them on the box, and the
+   negative margin in the shared rule centres each 10px square on that point. */
+.note-img-handle-topLeft { left: 0; top: 0; cursor: nwse-resize; }
+.note-img-handle-top { left: 50%; top: 0; cursor: ns-resize; }
+.note-img-handle-topRight { left: 100%; top: 0; cursor: nesw-resize; }
+.note-img-handle-right { left: 100%; top: 50%; cursor: ew-resize; }
+.note-img-handle-bottomRight { left: 100%; top: 100%; cursor: nwse-resize; }
+.note-img-handle-bottom { left: 50%; top: 100%; cursor: ns-resize; }
+.note-img-handle-bottomLeft { left: 0; top: 100%; cursor: nesw-resize; }
+.note-img-handle-left { left: 0; top: 50%; cursor: ew-resize; }
+
+/* While a drag is in progress the outline would be redrawn on every pointer
+   move and the text cursor would flicker, so both are suppressed. */
+.note-img-frame.is-resizing {
+  user-select: none;
+}
+
+.note-img-frame.is-resizing > img {
+  outline: none;
+}

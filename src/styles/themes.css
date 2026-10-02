@@ -169,6 +169,10 @@ html[data-theme="playing"].light {
    staying legible; the darker `.light` blend (60%) is needed because light
    backgrounds lose contrast much faster than dark ones. */
 :root {
+  /* RED, and it is genuinely red.
+   * `rose` below is hue 225, which is blue; the name was misleading and the
+   * palette therefore had no red at all. This entry is the real one. */
+  --note-hue-red: 0 72% 52%;
   --note-hue-rose: 225 25% 62%;
   --note-hue-orange: 25 80% 60%;
   --note-hue-amber: 40 85% 55%;
@@ -178,6 +182,7 @@ html[data-theme="playing"].light {
   --note-hue-purple: 270 50% 66%;
   --note-hue-gray: 220 8% 68%;
 
+  --note-c-red: hsl(var(--note-hue-red) / 82%);
   --note-c-rose: hsl(var(--note-hue-rose) / 78%) ;
   --note-c-orange: hsl(var(--note-hue-orange) / 78%);
   --note-c-amber: hsl(var(--note-hue-amber) / 80%);
@@ -189,7 +194,32 @@ html[data-theme="playing"].light {
 }
 
 /* On a light surface, darken every hue toward the theme's dark text color. */
+/* Soft highlight backgrounds.
+
+   These are deliberately NOT opaque. A highlight sits behind already-written
+   text, so a solid background fights the glyphs for contrast and, in dark mode,
+   a solid block is far too loud for a page of notes. The alpha is low enough that
+   the text colour still decides legibility, and the light variant darkens
+   toward the theme text colour for the same reason every other light-mode
+   override here does. */
+:root {
+  --note-hl-yellow: hsl(50 90% 60% / 0.30);
+  --note-hl-red: hsl(0 75% 58% / 0.24);
+  --note-hl-green: hsl(145 50% 50% / 0.26);
+  --note-hl-blue: hsl(210 80% 58% / 0.24);
+}
+
+/* On a light surface the same pastel at the same alpha reads as washed out, so
+   each is deepened rather than made opaque. Text stays crisp either way. */
 html.light {
+  --note-hl-yellow: hsl(48 88% 56% / 0.34);
+  --note-hl-red: hsl(0 70% 52% / 0.22);
+  --note-hl-green: hsl(145 45% 42% / 0.22);
+  --note-hl-blue: hsl(210 70% 50% / 0.20);
+}
+
+html.light {
+  --note-c-red: color-mix(in srgb, hsl(var(--note-hue-red)) 62%, var(--text-primary));
   --note-c-rose: color-mix(in srgb, hsl(var(--note-hue-rose)) 60%, var(--text-primary));
   --note-c-orange: color-mix(in srgb, hsl(var(--note-hue-orange)) 60%, var(--text-primary));
   --note-c-amber: color-mix(in srgb, hsl(var(--note-hue-amber)) 62%, var(--text-primary));

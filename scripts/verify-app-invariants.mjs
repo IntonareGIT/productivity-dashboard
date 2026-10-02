@@ -294,7 +294,7 @@ const renderWith = ({ signedIn, currentUserValue }) => {
     !/this\.version\(15\)[\s\S]{0,1400}?\.delete\(/.test(dbSrc)
     // Every write spreads the whole row and overrides ONLY the title, so
     // `notes` and `contentHtml` survive byte-for-byte.
-    /tx\.table\('topics'\)\.put\(\{ \.\.\.t, title: next/.test(dbSrc));
+    && /tx\.table\('topics'\)\.put\(\{ \.\.\.t, title: next/.test(dbSrc));
   check('8 v11 adds the note fields additively and migrates nothing',
     /this\.version\(11\)[\s\S]{0,200}?topics: 'id, subjectId, status, createdAt, title'/.test(dbSrc)
     && !/this\.version\(11\)[\s\S]{0,400}?\.upgrade\(/.test(dbSrc));

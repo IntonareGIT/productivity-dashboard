@@ -360,7 +360,11 @@ export const MarkdownNotes: React.FC<MarkdownNotesProps> = ({ text, html, hasHtm
 
   return (
     <div
-      className="space-y-2 break-words"
+      // `note-body` is the hook for `noteRichMedia.css`, so a callout, a
+      // highlight and a floated image look identical here and in the editor.
+      // Without it the preview would render the editor's rules against a
+      // wrapper that does not exist and images would lose their layout.
+      className="note-body space-y-2 break-words"
       dangerouslySetInnerHTML={{ __html: body }}
     />
   );
