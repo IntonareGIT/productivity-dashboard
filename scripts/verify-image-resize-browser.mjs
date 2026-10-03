@@ -1,4 +1,6 @@
 /**
+ * Acceptance test for the 8-point image resize, run in a real browser.
+ *
  * Acceptance test for the 8-point image resize.
  *
  * Every handle is exercised in BOTH directions, because the bug that motivated
@@ -7,11 +9,13 @@
  */
 import { chromium } from 'playwright';
 
+// Requires the dev server: `npm run dev`, then `npm run verify:resize`.
+const BASE = process.env.EDITOR_URL ?? 'http://localhost:5173/editor-test.html';
 const b = await chromium.launch();
 const p = await b.newPage({ viewport: { width: 1400, height: 1000 } });
 const errs = [];
 p.on('pageerror', (e) => errs.push(e.message));
-await p.goto('http://localhost:5173/editor-test.html', { waitUntil: 'networkidle' });
+await p.goto(BASE, { waitUntil: 'networkidle' });
 await p.waitForSelector('[contenteditable="true"]');
 
 const b64 = await p.evaluate(() => {
@@ -81,24 +85,30 @@ for (const [dir, v] of Object.entries(HANDLES)) {
 
   // SHRINK — the case that was broken.
   const s = await drag(dir, v.shrink);
-  const shrank = s.w < W && s.h < H;
   if (v.corner) {
+    // A corner moves BOTH axes and locks the ratio.
+    const shrank = s.w < W && s.h < H;
     const kept = Math.abs((s.w / s.h) - r0) < 0.02;
     check(`${dir} shrink keeps ratio`, shrank && kept, `${s.w}x${s.h} ratio=${(s.w / s.h).toFixed(3)}`);
   } else {
+    // An edge moves EXACTLY ONE axis and must leave the other untouched.
+    // Requiring both to change would be wrong: `400x170` is the correct result
+    // of dragging the TOP edge up, because the width is supposed to hold still.
     const oneAxis = (s.w < W) !== (s.h < H);
-    check(`${dir} shrink is single-axis`, shrank && oneAxis, `${s.w}x${s.h}`);
+    const moved = s.w !== W || s.h !== H;
+    check(`${dir} shrink is single-axis`, oneAxis && moved, `${s.w}x${s.h}`);
   }
 
   // GROW
   const g = await drag(dir, v.grow);
-  const grew = g.w > W && g.h > H;
   if (v.corner) {
+    const grew = g.w > W && g.h > H;
     const kept = Math.abs((g.w / g.h) - r0) < 0.02;
     check(`${dir} grow keeps ratio`, grew && kept, `${g.w}x${g.h} ratio=${(g.w / g.h).toFixed(3)}`);
   } else {
     const oneAxis = (g.w > W) !== (g.h > H);
-    check(`${dir} grow is single-axis`, grew && oneAxis, `${g.w}x${g.h}`);
+    const moved = g.w !== W || g.h !== H;
+    check(`${dir} grow is single-axis`, oneAxis && moved, `${g.w}x${g.h}`);
   }
 }
 
