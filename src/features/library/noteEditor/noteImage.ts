@@ -232,10 +232,25 @@ private startDrag(e: PointerEvent, dir: Direction) {
       let w = startW;
       let h = startH;
 
-      if (dir.includes('right')) w = startW + dx;
-      if (dir.includes('left')) w = startW - dx;
-      if (dir.includes('bottom')) h = startH + dy;
-      if (dir.includes('top')) h = startH - dy;
+      // CASE. The direction names are PascalCase ('bottomRight'), so testing them
+      // against lowercase fragments with `includes` silently fails: 'bottomRight'
+      // contains 'Right', NOT 'right', so the horizontal axis never moved at all.
+      //
+      // That is why shrinking did nothing while growing appeared to work. Only
+      // the vertical delta was applied, so for a corner the width stayed put and
+      // became the larger axis — and the proportional branch then used it to
+      // drag the height back to the original value. Shrinking produced exactly
+      // the original size, every time. Growing only appeared to work because
+      // the height overtook the width and the branch derived a larger width from
+      // it, which is the same maths run backwards from a different direction.
+      //
+      // Normalising once here keeps the comparisons obviously correct rather than
+      // relying on every fragment happening to match the casing of the name.
+      const side = dir.toLowerCase();
+      if (side.includes('right')) w = startW + dx;
+      if (side.includes('left')) w = startW - dx;
+      if (side.includes('bottom')) h = startH + dy;
+      if (side.includes('top')) h = startH - dy;
 
       if (isCorner(dir)) {
         // PROPORTIONAL: the larger axis leads and the other follows the ratio.
