@@ -335,6 +335,7 @@ export const App: React.FC = () => {
         configured={assistantConfigured}
         onOpenSettings={openAssistantSettings}
         hidden={!floatingAiVisible}
+        mode={splitOpen ? 'split' : 'standalone'}
       />
           <AssistantPanel onOpenSettings={openAssistantSettings} onExpand={openAssistantPage} />
 

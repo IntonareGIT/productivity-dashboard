@@ -356,7 +356,7 @@ export const PaneContainer: React.FC<PaneHeaderProps & { children: React.ReactNo
         and the standard-property form so the bar stays 44px tall on every
         browser. `min-w-max` on the inner row is what gives the scroller
         something wider than the pane to scroll through. */}
-    <div className="flex-shrink-0 w-full bg-bg-surface text-content-primary border-b border-border overflow-x-auto overscroll-x-contain [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
+    <div data-floating-ai-keepout="pane-header" className="flex-shrink-0 w-full bg-bg-surface text-content-primary border-b border-border overflow-x-auto overscroll-x-contain [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
       <div className="h-11 px-3 flex items-center gap-2 min-w-max justify-between">
         <PaneHeader
           index={index}

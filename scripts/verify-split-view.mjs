@@ -707,11 +707,18 @@ const touchHook = readFileSync('src/features/library/useZoomAnchor.ts', 'utf8');
     // header bar element: the pane now legitimately contains a separate
     // `pointer-events-none` element (the active-pane glow overlay), so testing
     // that token across the whole file would flag correct code.
-    const headerBar = (paneHeader.match(/<div className="flex-shrink-0 w-full bg-bg-surface[^"]*"/) || [''])[0];
+    // `<div[^>]*` before className so extra attributes (such as the
+    // `data-floating-ai-keepout` marker the floating AI button measures) do not
+    // break this. The check is about layout, not about attribute order.
+    const headerBar = (paneHeader.match(/<div[^>]*className="flex-shrink-0 w-full bg-bg-surface[^"]*"/) || [''])[0];
     check('FM the pane header is a flex sibling, not a floating overlay',
       /flex-shrink-0 w-full bg-bg-surface/.test(headerBar) &&
       !/pointer-events-none/.test(headerBar),
       headerBar.slice(0, 60));
+    // The floating AI bubble avoids this bar by measuring it, so it must declare
+    // itself as a keep-out zone rather than the bubble guessing a 44px offset.
+    check('FM the pane header declares itself a floating-AI keep-out zone',
+      /data-floating-ai-keepout="pane-header"/.test(paneHeader));
     check('FM the pane header no longer takes layout height',
       !/border-b border-border bg-bg-elevated\/40 shrink-0/.test(sv));
     check('FM the split container stretches edge to edge',
