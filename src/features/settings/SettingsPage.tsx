@@ -7,6 +7,7 @@ import { WeeklySchedulesSettings } from './components/WeeklySchedulesSettings';
 import { PomodoroSettingsSection } from './components/PomodoroSettingsSection';
 import { AiProvidersSettings } from './components/AiProvidersSettings';
 import { ChatHistorySettings } from './components/ChatHistorySettings';
+import { FloatingAiSettings } from './components/FloatingAiSettings';
 import { SyncSettings } from './components/SyncSettings';
 import { DataBackupSection } from './components/DataBackupSection';
 import type { UserStatus, ThemeMode, ColorScheme } from '../../types';
@@ -53,6 +54,9 @@ export const SettingsPage: React.FC<{ onOpenAbout?: () => void }> = ({ onOpenAbo
 
       {/* Assistant conversation history */}
       <ChatHistorySettings />
+
+      {/* Floating AI button visibility, one switch for both modes */}
+      <FloatingAiSettings />
 
       {/* Cross-device sync (Dexie Cloud) */}
       <SyncSettings />

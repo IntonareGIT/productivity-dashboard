@@ -22,6 +22,9 @@ import { AssistantPanel } from './features/ai/components/AssistantPanel';
 import { AssistantPage } from './features/ai/components/AssistantPage';
 import { providerIsReady } from './features/ai/aiProviderRepo';
 import { useAssistantStore } from './stores/useAssistantStore';
+import { useFloatingAiStore } from './stores/useFloatingAiStore';
+import { useFullScreenStore } from './stores/useFullScreenStore';
+import { shouldShowFloatingAi } from './features/ai/floatingAiVisibility';
 import { useStatusThemeStore } from './stores/useStatusThemeStore';
 import { useThemeStatusMap } from './hooks/useThemeStatusMap';
 import { useUiState } from './hooks/useUiState';
@@ -43,6 +46,10 @@ export const App: React.FC = () => {
   const [paletteOpen, setPaletteOpen] = useState(false);
   // True while the full-page assistant (/assistant) is shown.
   const [assistantPage, setAssistantPage] = useState(false);
+
+  const floatingAiEnabled = useFloatingAiStore((s) => s.enabled);
+  const fullScreenResource = useFullScreenStore((s) => s.fullScreenResource);
+
   // Tab to restore when leaving the full-page assistant.
   const [returnTab, setReturnTab] = useState<NavTab>('dashboard');
   // Bumped whenever "New event" runs from the palette; CalendarPage opens
@@ -54,6 +61,18 @@ export const App: React.FC = () => {
   // closing it, so closing returns to exactly the tab that was showing.
   const [splitState, setSplitState] = useState<SplitState>(initialSplitState);
   const [splitOpen, setSplitOpen] = useState(false);
+  // The floating AI button follows ONE rule, evaluated from the same values the
+  // panes are actually rendered from. Deriving it here, rather than inside the
+  // button, gives the rule exactly one owner and makes it testable without
+  // mounting the app.
+  const floatingAiVisible = shouldShowFloatingAi({
+    splitOpen,
+    panes: splitState.panes,
+    assistantPage,
+    settingEnabled: floatingAiEnabled,
+    fullscreenActive: !!fullScreenResource,
+  });
+
 
   // The top-bar icon is the only generic entry point: it opens an empty split
   // the first time and toggles it closed afterwards.
@@ -308,12 +327,14 @@ export const App: React.FC = () => {
           />
 
           {/* Global AI assistant: floating launcher (every page) + chat panel. */}
-          {/* Hidden in split view: a fixed bottom-right FAB would sit on top of
-          the assistant pane's chat input and the right PDF pane. */}
+          {/* The floating AI button. Its visibility comes from ONE rule
+          (`shouldShowFloatingAi`) rather than from a prop tied directly to
+          whether split view is open, because the rule depends on what the panes
+          are showing, not just on split state. */}
       <AssistantLauncher
         configured={assistantConfigured}
         onOpenSettings={openAssistantSettings}
-        hidden={splitOpen}
+        hidden={!floatingAiVisible}
       />
           <AssistantPanel onOpenSettings={openAssistantSettings} onExpand={openAssistantPage} />
 

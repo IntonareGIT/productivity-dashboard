@@ -719,14 +719,24 @@ const touchHook = readFileSync('src/features/library/useZoomAnchor.ts', 'utf8');
     check('FM the pane clips and the PDF scroll area scrolls',
       /relative flex flex-col overflow-hidden/.test(sv) &&
       /flex h-full min-h-0 min-w-0 w-full flex-col overflow-hidden/.test(paneHeader));
-    // The AI FAB is fixed bottom-right; in split view that is the chat
-    // composer, so it must be docked rather than floating over the input.
+    // The AI FAB used to be fixed bottom-right, which in split view is exactly
+    // where the assistant pane's chat composer sits, so it used to be hidden
+    // whenever split view was open. It is now restored in split view and docked
+    // to a screen edge instead, and the anti-occlusion guarantee is carried by
+    // the visibility rule rather than by "split view hides it". These checks
+    // therefore assert the rule is what governs, and that the blanket
+    // `hidden={splitOpen}` is gone -- that blanket was the original bug, and
+    // `verify-floating-ai-visibility.mjs` covers the rule's behaviour in detail.
     const launcher = readFileSync('src/features/ai/components/AssistantLauncher.tsx', 'utf8');
     const app = readFileSync('src/App.tsx', 'utf8');
-    check('FM the AI launcher can be hidden in split view',
+    check('FM the AI launcher can still be hidden',
       /hidden\?: boolean/.test(launcher) && /if \(hidden\) return null;/.test(launcher));
-    check('FM split view hides the AI launcher',
-      /<AssistantLauncher[\s\S]{0,200}hidden=\{splitOpen\}/.test(app));
+    check('FM the AI launcher is governed by the visibility rule, not by splitOpen',
+      /shouldShowFloatingAi\(\{/.test(app) && /hidden=\{!floatingAiVisible\}/.test(app));
+    check('FM the blanket "split view hides the launcher" rule is gone',
+      !/hidden=\{splitOpen\}/.test(app));
+    check('FM the rule is imported by App so it has exactly one owner',
+      /import \{ shouldShowFloatingAi \} from '\.\/features\/ai\/floatingAiVisibility'/.test(app));
 
     // ---- ONE universal header for every pane kind ----------------------
     // The header used to be a floating overlay for non-PDF panes and part of

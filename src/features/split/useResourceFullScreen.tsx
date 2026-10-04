@@ -1,7 +1,8 @@
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 import { db } from '../../db/db';
 import type { Resource } from '../../types';
 import { FullScreenPreview } from './FullScreenPreview';
+import { useFullScreenStore } from '../../stores/useFullScreenStore';
 
 /**
  * Wires the shared full-screen preview for one host surface.
@@ -14,18 +15,22 @@ import { FullScreenPreview } from './FullScreenPreview';
  * one.
  */
 export function useResourceFullScreen() {
-  const [resource, setResource] = useState<Resource | null>(null);
+  // The state now lives in a shared store rather than in this hook, so the
+  // floating AI bubble can observe it from outside the split view. See
+  // `useFullScreenStore` for why. Nothing else about the hook changes.
+  const fullScreenResource = useFullScreenStore((s) => s.fullScreenResource);
+  const setFullScreenResource = useFullScreenStore((s) => s.setFullScreenResource);
 
   /** Open a resource full screen. Safe to pass straight to the viewer. */
   const openFullScreen = useCallback(async (resourceId?: string) => {
     if (!resourceId) return;
     const r = await db.resources.get(resourceId);
-    if (r) setResource(r);
-  }, []);
+    if (r) setFullScreenResource(r);
+  }, [setFullScreenResource]);
 
-  const closeFullScreen = useCallback(() => setResource(null), []);
+  const closeFullScreen = useCallback(() => setFullScreenResource(null), [setFullScreenResource]);
 
-  return { fullScreenResource: resource, openFullScreen, closeFullScreen };
+  return { fullScreenResource, openFullScreen, closeFullScreen };
 }
 
 /** Renders the shared FullScreenPreview when a host has an open one. */
