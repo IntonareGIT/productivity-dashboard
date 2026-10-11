@@ -87,7 +87,7 @@ function scrub(text: string): string {
 }
 
 export default async function handler(req: AiRequest, res: AiResponse): Promise<void> {
-  setCors(req, res);
+  setCors(req, res, 'POST, OPTIONS');
   if (req.method === 'OPTIONS') {
     res.status(204).end();
     return;
