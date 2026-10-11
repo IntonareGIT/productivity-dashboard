@@ -10,6 +10,7 @@ import { ChatHistorySettings } from './components/ChatHistorySettings';
 import { FloatingAiSettings } from './components/FloatingAiSettings';
 import { SyncSettings } from './components/SyncSettings';
 import { DataBackupSection } from './components/DataBackupSection';
+import { FileMigrationSection } from './components/FileMigrationSection';
 import type { UserStatus, ThemeMode, ColorScheme } from '../../types';
 
 /** Navigation into the About page, so it is reachable where the bottom bar
@@ -151,6 +152,9 @@ export const SettingsPage: React.FC<{ onOpenAbout?: () => void }> = ({ onOpenAbo
 
       {/* Export / import all app data */}
       <DataBackupSection />
+
+      {/* Move stored files into Cloudflare R2, once */}
+      <FileMigrationSection />
 
       {/* About & Help is not in the phone bottom bar (six items is already the
           limit there), so on a phone this is how you reach it. It is a real

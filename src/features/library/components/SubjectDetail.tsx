@@ -106,7 +106,9 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
                     <Columns2 className="w-3 h-3" /> Split with notes
                   </button>
                 )}
-                {resource.blob && <button onClick={onDownload} className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><Download className="w-3 h-3" /> Download</button>}
+                {resource.blob || resource.r2Key ? (
+                  <button onClick={onDownload} className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><Download className="w-3 h-3" /> Download</button>
+                ) : null}
               </div>
             ) : resource.urlOrPath ? (
               isUrl(resource.urlOrPath) ? (
@@ -353,16 +355,34 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
     } catch { /* clipboard unavailable */ }
   };
 
-  const downloadFile = (resource: Resource) => {
-    if (!resource.blob) return;
-    const url = URL.createObjectURL(resource.blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = resource.fileName || resource.title;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  const downloadFile = async (resource: Resource) => {
+    if (resource.blob instanceof Blob) {
+      const url = URL.createObjectURL(resource.blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = resource.fileName || resource.title;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      return;
+    }
+    if (resource.r2Key) {
+      try {
+        const { downloadFromR2 } = await import('../../ai/cloudClient');
+        const blob = await downloadFromR2(resource.r2Key);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = resource.fileName || resource.title;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      } catch {
+        // Fall through: the row simply has no download available right now.
+      }
+    }
   };
 
   return (

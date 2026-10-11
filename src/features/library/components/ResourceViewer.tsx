@@ -83,6 +83,49 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
   // viewer subtree, which is what actually recovers from a crashed canvas.
   const [imgFailKey, setImgFailKey] = useState(0);
   const [pdfFailKey, setPdfFailKey] = useState(0);
+  // A file staged in R2 has no local blob; fetch it on demand and show a
+  // loading state while the gateway hands back a presigned URL.
+  const [remoteUrl, setRemoteUrl] = useState<string | null>(null);
+  const [remoteLoading, setRemoteLoading] = useState(false);
+  const [remoteError, setRemoteError] = useState(false);
+
+  useEffect(() => {
+    if (resource.blob instanceof Blob) {
+      setRemoteUrl(null);
+      setRemoteLoading(false);
+      setRemoteError(false);
+      return;
+    }
+    if (!resource.r2Key) {
+      setRemoteUrl(null);
+      setRemoteLoading(false);
+      setRemoteError(false);
+      return;
+    }
+    let cancelled = false;
+    setRemoteLoading(true);
+    setRemoteError(false);
+    (async () => {
+      try {
+        const { downloadFromR2 } = await import('../../ai/cloudClient');
+        const blob = await downloadFromR2(resource.r2Key!);
+        if (cancelled) return;
+        const url = URL.createObjectURL(blob);
+        setRemoteUrl(url);
+      } catch {
+        if (!cancelled) setRemoteError(true);
+      } finally {
+        if (!cancelled) setRemoteLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      setRemoteUrl((u) => {
+        if (u) URL.revokeObjectURL(u);
+        return null;
+      });
+    };
+  }, [resource.r2Key, resource.blob]);
 
   // Object URL for the stored blob, revoked on unmount so the blob is not
   // pinned in memory for the life of the tab.
@@ -96,16 +139,35 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
     };
   }, [kind, resource.blob]);
 
-  const download = () => {
-    if (!resource.blob) return;
-    const url = URL.createObjectURL(resource.blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = resource.fileName || resource.title;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  const download = async () => {
+    // A local blob is the fast path; an R2-staged file needs the gateway first.
+    if (resource.blob instanceof Blob) {
+      const url = URL.createObjectURL(resource.blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = resource.fileName || resource.title;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      return;
+    }
+    if (resource.r2Key) {
+      try {
+        const { downloadFromR2 } = await import('../../ai/cloudClient');
+        const blob = await downloadFromR2(resource.r2Key);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = resource.fileName || resource.title;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      } catch {
+        // Fall through: the notice below explains why.
+      }
+    }
   };
 
   const openLink = () => {
@@ -116,24 +178,34 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
   const size = resource.fileSize != null ? formatBytes(resource.fileSize) : null;
   const typeLabel = fileTypeLabel(resource);
   const driveEmbed = kind === 'drive' ? googleDriveEmbedUrl(resource.urlOrPath ?? '') : null;
+  // A file staged in R2 has no local blob; the fetched object URL becomes the
+  // source for both the image and the PDF viewer.
+  const srcUrl = (resource.blob instanceof Blob ? undefined : remoteUrl) ?? undefined;
 
   const body = (
       <div className="space-y-4 flex-1 min-h-0 min-w-0 w-full flex flex-col overflow-hidden">
-        {kind === 'image' && resource.blob && !imgFailed && (
+        {kind === 'image' && !imgFailed && (
           <ViewerErrorBoundary
             label="image viewer"
             reloadKey={imgFailKey}
             onReload={() => setImgFailKey((k) => k + 1)}
           >
-            {imgUrl ? (
+            {imgUrl || srcUrl ? (
               <ImageViewer
                 key={`img-${imgFailKey}`}
-                src={imgUrl}
+                src={imgUrl ?? srcUrl!}
                 alt={resource.title}
                 onDownload={download}
                 onRegisterControls={embedded ? onRegisterImageControls : undefined}
                 onError={() => setImgFailed(true)}
               />
+            ) : remoteLoading ? (
+              <div className="flex items-center justify-center gap-2 rounded-xl border border-border bg-bg-elevated/40 py-12">
+                <Loader2 className="w-4 h-4 animate-spin text-content-secondary" />
+                <span className="text-xs text-content-secondary">Fetching image from cloud…</span>
+              </div>
+            ) : remoteError ? (
+              <Notice title="Could not fetch this image." body="The cloud copy could not be loaded. Try again shortly." />
             ) : (
               <div className="py-10 text-center text-xs text-content-tertiary">Preparing image…</div>
             )}
@@ -146,7 +218,7 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
 
         {/* The image's own zoom/rotate/download controls now live in the shared
             ImageViewer, so only the "open the original" action is left here. */}
-        {kind === 'image' && resource.blob && resource.urlOrPath && (
+        {kind === 'image' && resource.urlOrPath && (
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button onClick={openLink} className={`${btn} border border-border text-content-secondary hover:text-content-primary hover:bg-bg-elevated`}>
               <ExternalLink className="w-4 h-4" /> Open original
@@ -154,21 +226,33 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
           </div>
         )}
 
-        {kind === 'pdf' && resource.blob && (
+        {kind === 'pdf' && (
           <ViewerErrorBoundary
             label="PDF viewer"
             reloadKey={pdfFailKey}
             onReload={() => setPdfFailKey((k) => k + 1)}
           >
             <Suspense fallback={<PdfLoading />}>
-              <PdfViewer
-                key={`pdf-${pdfFailKey}`}
-                blob={resource.blob}
-                title={resource.title}
-                variant={embedded ? 'standalone' : 'inline'}
-                onDownload={resource.blob ? download : undefined}
-                onRegisterControls={onRegisterPdfControls}
-              />
+              {srcUrl || resource.blob ? (
+                <PdfViewer
+                  key={`pdf-${pdfFailKey}`}
+                  blob={srcUrl ? null : resource.blob}
+                  url={srcUrl ?? undefined}
+                  title={resource.title}
+                  variant={embedded ? 'standalone' : 'inline'}
+                  onDownload={download}
+                  onRegisterControls={onRegisterPdfControls}
+                />
+              ) : remoteLoading ? (
+                <div className="flex items-center justify-center gap-2 rounded-xl border border-border bg-bg-elevated/40 py-12">
+                  <Loader2 className="w-4 h-4 animate-spin text-content-secondary" />
+                  <span className="text-xs text-content-secondary">Fetching PDF from cloud…</span>
+                </div>
+              ) : remoteError ? (
+                <Notice title="Could not fetch this PDF." body="The cloud copy could not be loaded. Try again shortly." />
+              ) : (
+                <PdfLoading />
+              )}
             </Suspense>
           </ViewerErrorBoundary>
         )}

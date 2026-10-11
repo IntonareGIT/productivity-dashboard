@@ -95,6 +95,17 @@ export interface Resource {
   mimeType?: string | null;// Upload MIME (files)
   fileSize?: number | null;// Upload bytes (files)
   blob?: Blob | null;      // File bytes stored in Dexie (files; excluded from JSON backup)
+  /**
+   * Cloudflare R2 object key, when the file has been moved to the cloud.
+   * `blob` and `r2Key` are mutually exclusive: a row either holds the bytes
+   * locally or a pointer to the cloud object, never both.
+   */
+  r2Key?: string | null;
+  /**
+   * Where the raw file lives in a ZIP export, so re-import can find it.
+   * Set by exportAllDataZip; absent when the row was never exported that way.
+   */
+  blobFileName?: string | null;
   tags: string[];          // Tag strings
   dueDate?: string | null; // ISO 8601 YYYY-MM-DD
   completed?: boolean;

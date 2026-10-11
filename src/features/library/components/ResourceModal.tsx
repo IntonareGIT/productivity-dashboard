@@ -58,7 +58,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
       setError('A URL or file path is required.');
       return;
     }
-    if (kind === 'file' && !file && !resource?.blob) {
+    if (kind === 'file' && !file && !resource?.r2Key && !resource?.blob) {
       setError('Choose a file to upload.');
       return;
     }
@@ -80,6 +80,17 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
           groupId: groupId || null,
         });
       } else {
+        // A new file goes to R2 first; only then is the row written, so a
+        // failed upload never leaves a dangling record behind.
+        let r2Key = resource?.r2Key ?? null;
+        if (file) {
+          const { uploadToR2, currentUserId } = await import('../../../features/ai/cloudClient');
+          const userId = currentUserId();
+          if (!userId) throw new Error('Sign in to Dexie Cloud to upload files.');
+          const key = `${userId}/${file.name}`;
+          await uploadToR2(key, file, file.type || undefined);
+          r2Key = key;
+        }
         await saveResource({
           id: resource?.id,
           subjectId,
@@ -88,10 +99,11 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
           title,
           // Uploads carry no URL. Only keep a previous value when editing.
           urlOrPath: resource?.urlOrPath ?? '',
-          blob: file ?? undefined,
-          fileName: file?.name,
-          mimeType: file?.type,
-          fileSize: file?.size,
+          blob: undefined,
+          r2Key,
+          fileName: file?.name ?? resource?.fileName,
+          mimeType: file?.type ?? resource?.mimeType,
+          fileSize: file?.size ?? resource?.fileSize,
           tags,
           dueDate: dueDate || null,
           groupId: groupId || null,

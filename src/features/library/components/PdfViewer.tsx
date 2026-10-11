@@ -15,8 +15,14 @@ import { Scissors } from 'lucide-react';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 interface PdfViewerProps {
-  /** The stored PDF bytes. */
-  blob: Blob;
+  /** The stored PDF bytes. Mutually exclusive with `url`. */
+  blob?: Blob;
+  /**
+   * A remote URL to load instead of a blob. Used for files staged in Cloudflare
+   * R2, where the viewer never sees the bytes — the host fetches a presigned
+   * URL through the gateway and hands it here.
+   */
+  url?: string;
   /** Accessible label, e.g. the resource title. */
   title?: string;
   /** `inline` sits in the Library modal; `standalone` fills its host height. */
@@ -144,7 +150,7 @@ const isCancel = (e: unknown) =>
  * lands after a newer render has started.
  */
 export const PdfViewer: React.FC<PdfViewerProps> = ({
-  blob, title, variant = 'inline', onDownload, onRegisterControls,
+  blob, url, title, variant = 'inline', onDownload, onRegisterControls,
 }) => {
   const docRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
   // In pdf.js v6 destroy() lives on the loading task, so the task is what we
@@ -812,8 +818,11 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     (async () => {
       try {
         // pdf.js takes ownership of the buffer, so hand it a private copy.
-        const buf = await blob.arrayBuffer();
-        const task = pdfjsLib.getDocument({ data: new Uint8Array(buf) });
+        // A remote URL (R2-staged file) is loaded straight from the address —
+        // pdf.js streams it, so no local copy is ever needed.
+        const task = blob
+          ? pdfjsLib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) })
+          : pdfjsLib.getDocument({ url: url! });
         taskRef.current = task;
         const doc = await task.promise;
         if (cancelled) { void task.destroy(); return; }
@@ -834,7 +843,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       docRef.current = null;
       void task?.destroy();
     };
-  }, [blob]);
+  }, [blob, url]);
 
   const goToPage = useCallback((n: number) => {
     const total = pageCount || 1;

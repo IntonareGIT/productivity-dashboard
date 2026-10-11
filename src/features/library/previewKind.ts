@@ -69,10 +69,10 @@ export function effectiveMime(resource: Pick<Resource, 'mimeType' | 'fileName' |
 /**
  * Decide how one resource should be previewed.
  *
- * File blobs are NOT synced (per the backup/sync decision), so a file resource
- * can legitimately have no blob on this device. That is reported as `none` for
- * uploads, so the viewer can say "not available on this device" instead of
- * showing a broken viewer.
+ * A file resource may hold its bytes locally (pre-migration), in Cloudflare
+ * R2 (post-migration), or neither yet. Both are previewable; only the "no
+ * bytes anywhere" case is reported as `none`, so the viewer can say "not
+ * available on this device" instead of showing a broken viewer.
  */
 export function previewKindFor(resource: Resource): PreviewKind {
   if (resource.kind === 'link') {
@@ -82,7 +82,8 @@ export function previewKindFor(resource: Resource): PreviewKind {
   }
 
   // kind === 'file'
-  if (!resource.blob) return 'none';
+  const hasBlob = Boolean(resource.blob);
+  if (!hasBlob && !resource.r2Key) return 'none';
   const mime = effectiveMime(resource);
   if (mime === 'application/pdf' || PDF_EXT.test(resource.fileName ?? '')) return 'pdf';
   if (mime.startsWith('image/jpeg') || mime.startsWith('image/png')) return 'image';

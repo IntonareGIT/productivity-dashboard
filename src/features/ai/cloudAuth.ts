@@ -30,6 +30,26 @@ export function getCloudAccessToken(): string | null {
 }
 
 /**
+ * The signed-in user's Dexie Cloud id, or null when signed out.
+ *
+ * The same `currentUser` row that carries the access token also carries the
+ * user id (`userId`), which is exactly the value the R2 functions require as
+ * the `{userId}/` prefix on every object key. Read defensively like the token:
+ * anything missing is "not signed in", never a crash.
+ */
+export function getCloudUserId(): string | null {
+  try {
+    const user = (db as {
+      cloud?: { currentUser?: { value?: { userId?: unknown } } };
+    }).cloud?.currentUser?.value;
+    const id = user?.userId;
+    return typeof id === 'string' && id.trim() ? id.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Whether a cloud token is REQUIRED for the assistant.
  *
  * True whenever the Dexie Cloud addon is attached to the database, which in

@@ -1,6 +1,15 @@
 import type { Table } from 'dexie';
 import { format } from 'date-fns';
+import JSZip from 'jszip';
 import { db } from './db';
+
+/** Minimal shape of a resource row, used only to type the zip export loop. */
+interface ResourceRow {
+  id: string;
+  kind: string;
+  fileName?: string | null;
+  blob?: Blob | null;
+}
 
 /** Every table in the Dexie schema (v10) — must match PROJECT.md. */
 export const BACKUP_TABLES = [
@@ -33,6 +42,67 @@ export interface BackupPayload {
 export interface ImportResult {
   counts: Record<string, number>;
   total: number;
+}
+
+/**
+ * Serialize every table and trigger a ZIP download. The JSON payload is
+ * written at the archive root; every file blob is written alongside it under
+ * `files/`, named `{resourceId}-{originalName}` so the row can be found again.
+ *
+ * Blobs are NOT included in the JSON — the row keeps `blob: undefined` and the
+ * raw bytes live in the zip instead, which keeps the JSON portable and the
+ * archive self-contained for re-import.
+ */
+export async function exportAllDataZip(): Promise<void> {
+  const data: Record<string, unknown[]> = {};
+  const zip = new JSZip();
+  const filesFolder = zip.folder('files')!;
+  for (const table of BACKUP_TABLES) {
+    const rows = await (db.table(table) as Table).toArray();
+    if (table === 'resources') {
+      data[table] = (rows as Record<string, unknown>[]).map((r) => {
+        const { blob: _blob, ...rest } = r;
+        void _blob;
+        // Remember where the raw file ended up in the zip, so re-import can
+        // find it again without guessing.
+        if (rest.kind === 'file' && rest.fileName) {
+          rest.blobFileName = `${rest.id}-${rest.fileName}`;
+        }
+        return rest;
+      });
+      for (const r of rows as ResourceRow[]) {
+        if (r.kind === 'file' && r.blob instanceof Blob && r.fileName) {
+          filesFolder.file(`${r.id}-${r.fileName}`, r.blob);
+        }
+      }
+    } else if (table === 'aiProviders') {
+      data[table] = (rows as Record<string, unknown>[]).map((r) => ({ ...r, apiKey: '' }));
+    } else {
+      data[table] = rows;
+    }
+  }
+  const payload: BackupPayload = {
+    app: 'personal-productivity-dashboard',
+    schemaVersion: 7,
+    exportedAt: new Date().toISOString(),
+    data,
+  };
+  zip.file('backup.json', JSON.stringify(payload, null, 2));
+  const blob = await zip.generateAsync(
+    { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+    (meta) => {
+      // Export is a one-shot user action; progress is a courtesy, not a contract.
+      void meta;
+    },
+  );
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `productivity-backup-${format(new Date(), 'yyyy-MM-dd')}.zip`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 /** Serialize every table and trigger a JSON file download. Blobs stripped. */

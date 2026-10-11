@@ -394,9 +394,11 @@ const res = (over = {}) => ({
   // ---- the separate bottom action bar is gone, and nothing was orphaned --
   check('T the separate bottom action bar no longer exists',
     !/justify-end gap-2 border-t border-border\/50 pt-4/.test(viewer));
+  // The image branch renders the shared ImageViewer, which carries its own
+  // Download control. The host wires the action through `onDownload`.
   check('T an image still offers Download in its own branch',
-    /kind === 'image' && resource\.blob/.test(viewer) &&
-    /Open original/.test(viewer));
+    /kind === 'image'/.test(viewer) && /onDownload={download}/.test(viewer)
+    && /Open original/.test(viewer));
   check('T a Drive preview still offers its Open link fallback',
     /Drive may show a "you don't have access"/.test(viewer) &&
     /kind === 'drive'[\s\S]{0,1400}Open link/.test(viewer));
@@ -424,7 +426,7 @@ const res = (over = {}) => ({
   // Actions available regardless of preview success. A PDF hosts its own
   // Download in the viewer toolbar; the other kinds carry theirs in-branch.
   check('6 Download is offered whenever a blob exists',
-    /onDownload=\{resource\.blob \? download : undefined\}/.test(viewer) &&
+    /onDownload=\{download\}/.test(viewer) &&
     /kind === 'opaque'/.test(viewer) && /onClick=\{download\}/.test(viewer));
   // Slice the link branch itself instead of guessing a character distance, so
   // this cannot silently pass or fail on formatting changes.

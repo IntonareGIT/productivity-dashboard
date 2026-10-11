@@ -113,12 +113,9 @@ export function getRecentNodes(): PickerNode[] {
 /** Why a file cannot be opened here, or null when it can. */
 function disabledReasonFor(r: Resource, want: PickerWant): string | null {
   const kind = previewKindFor(r);
-  // A blob lives on this device only if it is actually here. A row synced from
-  // another device carries metadata but no bytes, and opening it would fail.
-  // This check comes FIRST so the message names the real problem: a synced row
-  // has no MIME to judge, so a type check first would report "Not a PDF" for a
-  // file that simply is not here.
-  if (!r.blob) return 'File not available on this device';
+  // A file may live locally (pre-migration), in Cloudflare R2 (post-migration),
+  // or neither yet. Only "nowhere" is genuinely unavailable.
+  if (!r.blob && !r.r2Key) return 'File not available on this device';
   if (want === 'pdf' && kind !== 'pdf') return 'Not a PDF';
   if (want === 'image' && kind !== 'image') return 'Not an image';
   return null;
@@ -134,7 +131,7 @@ function disabledReasonFor(r: Resource, want: PickerWant): string | null {
  * looking for and saying so is more use than hiding it.
  */
 function listableFor(r: Resource, want: PickerWant): boolean {
-  if (!r.blob) return true;
+  if (!r.blob && !r.r2Key) return true;
   const kind = previewKindFor(r);
   return want === 'pdf' ? kind === 'pdf' : kind === 'image';
 }

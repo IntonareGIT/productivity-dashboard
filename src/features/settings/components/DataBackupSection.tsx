@@ -1,13 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Download, HardDriveDownload, Upload } from 'lucide-react';
+import { Download, HardDriveDownload, Upload, Archive } from 'lucide-react';
 import { Card } from '../../../components/ui/Card';
 import { db } from '../../../db/db';
-import { exportAllData, importAllData, BACKUP_TABLES } from '../../../db/backup';
+import { exportAllData, exportAllDataZip, importAllData, BACKUP_TABLES } from '../../../db/backup';
 
 /**
- * Data section (Phase 6): export every Dexie table to one JSON file and
- * import a backup to restore on another device (each device's IndexedDB is
- * separate — this is the primary way to move data).
+ * Data section (Phase 6): export every Dexie table to a JSON file or a ZIP
+ * that also carries every file blob, and import a backup to restore on
+ * another device (each device's IndexedDB is separate — this is the primary
+ * way to move data).
  */
 export const DataBackupSection: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -34,7 +35,7 @@ export const DataBackupSection: React.FC = () => {
     };
   }, [status]);
 
-  const handleExport = async () => {
+  const handleExportJson = async () => {
     setBusy(true);
     setStatus({ kind: 'info', text: '' });
     try {
@@ -44,6 +45,22 @@ export const DataBackupSection: React.FC = () => {
       setStatus({
         kind: 'error',
         text: e instanceof Error ? e.message : 'Export failed.',
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleExportZip = async () => {
+    setBusy(true);
+    setStatus({ kind: 'info', text: 'Building zip with file blobs…' });
+    try {
+      await exportAllDataZip();
+      setStatus({ kind: 'ok', text: 'Backup downloaded as ZIP (JSON + files).' });
+    } catch (e) {
+      setStatus({
+        kind: 'error',
+        text: e instanceof Error ? e.message : 'Zip export failed.',
       });
     } finally {
       setBusy(false);
@@ -75,7 +92,7 @@ export const DataBackupSection: React.FC = () => {
   return (
     <Card
       title="Data & Backup"
-      subtitle="Export all app data to JSON, or restore a backup on another device"
+      subtitle="Export all app data to JSON or ZIP, or restore a backup on another device"
     >
       <div className="space-y-4">
         {/* Row counts */}
@@ -91,12 +108,21 @@ export const DataBackupSection: React.FC = () => {
 
         <div className="flex flex-col sm:flex-row gap-3">
           <button
-            onClick={handleExport}
+            onClick={handleExportZip}
             disabled={busy}
             className="flex items-center justify-center gap-2 px-4 min-h-[48px] rounded-xl bg-accent hover:bg-accent-hover text-white text-sm font-semibold transition-colors disabled:opacity-60"
           >
+            <Archive className="w-4 h-4" />
+            Export all data (ZIP + files)
+          </button>
+
+          <button
+            onClick={handleExportJson}
+            disabled={busy}
+            className="flex items-center justify-center gap-2 px-4 min-h-[48px] rounded-xl border border-border bg-bg-elevated/50 text-content-primary hover:border-border-strong text-sm font-semibold transition-colors disabled:opacity-60"
+          >
             <Download className="w-4 h-4" />
-            Export all data (JSON)
+            Export as JSON only
           </button>
 
           <div className="flex flex-col gap-1.5">
@@ -125,7 +151,7 @@ export const DataBackupSection: React.FC = () => {
             <input
               ref={fileInputRef}
               type="file"
-              accept="application/json,.json"
+              accept="application/json,.json,.zip"
               className="hidden"
               onChange={(e) => {
                 handleFile(e.target.files?.[0]);

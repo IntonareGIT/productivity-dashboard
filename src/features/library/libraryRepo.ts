@@ -342,6 +342,12 @@ export interface ResourceInput {
   mimeType?: string | null;
   fileSize?: number | null;
   blob?: Blob | null;
+  /**
+   * When set, the file lives in Cloudflare R2 under this key and the row
+   * carries no blob. `blob` and `r2Key` are mutually exclusive: a row either
+   * holds the bytes locally or a pointer to the cloud object.
+   */
+  r2Key?: string | null;
   tags?: string[];
   dueDate?: string | null;
   completed?: boolean;
@@ -403,6 +409,7 @@ export async function saveResource(input: ResourceInput): Promise<string> {
         mimeType: input.mimeType !== undefined ? input.mimeType : existing.mimeType,
         fileSize: input.fileSize !== undefined ? input.fileSize : existing.fileSize,
         blob: input.blob !== undefined ? input.blob : existing.blob,
+        r2Key: input.r2Key !== undefined ? input.r2Key : existing.r2Key,
         tags,
         dueDate,
         completed: input.completed ?? existing.completed ?? false,
@@ -424,6 +431,7 @@ export async function saveResource(input: ResourceInput): Promise<string> {
     mimeType: input.mimeType ?? null,
     fileSize: input.fileSize ?? null,
     blob: input.blob ?? null,
+    r2Key: input.r2Key ?? null,
     tags,
     dueDate,
     completed: input.completed ?? false,
@@ -433,11 +441,46 @@ export async function saveResource(input: ResourceInput): Promise<string> {
   return record.id;
 }
 
+/**
+ * Where a file resource's bytes actually live.
+ *
+ * After the one-time migration, every uploaded file is in R2 and the row
+ * carries no blob. This helper says which one to use so callers do not have
+ * to branch on `kind === 'file'` everywhere.
+ */
+export function fileLocation(resource: Resource): { kind: 'blob' | 'r2' | 'none' } {
+  if (resource.blob && resource.blob instanceof Blob) return { kind: 'blob' };
+  if (resource.r2Key) return { kind: 'r2' };
+  return { kind: 'none' };
+}
+
+/** True when this file resource has no bytes available on this device. */
+export function fileUnavailable(resource: Resource): boolean {
+  return fileLocation(resource).kind === 'none';
+}
+
 export function resourceObjectUrl(resource: Resource): string | null {
+  // A cloud-staged file has no local blob; the caller must resolve the R2 key.
   if (resource.blob && typeof Blob !== 'undefined' && resource.blob instanceof Blob) {
     return URL.createObjectURL(resource.blob);
   }
   if (resource.urlOrPath && resource.urlOrPath.trim()) return resource.urlOrPath;
+  return null;
+}
+
+/**
+ * Resolve the bytes for a file resource, regardless of where they live.
+ *
+ * Local blobs are returned as-is; R2-staged files are fetched through the
+ * gateway, which verifies the Dexie Cloud token and returns a 5-minute
+ * presigned URL. Callers should treat a thrown promise as "not available".
+ */
+export async function loadFileBytes(resource: Resource): Promise<Blob | null> {
+  if (resource.blob && resource.blob instanceof Blob) return resource.blob;
+  if (resource.r2Key) {
+    const { downloadFromR2 } = await import('../../features/ai/cloudClient');
+    return downloadFromR2(resource.r2Key);
+  }
   return null;
 }
 

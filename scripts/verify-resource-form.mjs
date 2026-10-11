@@ -181,7 +181,7 @@ const SUBJECT = 'sub-1';
     calls.map((c) => (/kind,/.test(c) ? 'ok' : 'MISSING')).join(','));
   check('5 the link branch still sends urlOrPath', /kind === 'link'[\s\S]*?urlOrPath/.test(src));
   check('5 the upload branch requires a file, not a URL',
-    /kind === 'file' && !file && !resource\?\.blob/.test(src));
+    /kind === 'file' && !file && !resource\?\.r2Key && !resource\?\.blob/.test(src));
   check('5 the upload branch does not require a URL',
     !/kind === 'file'[\s\S]{0,200}urlOrPath\.trim\(\)/.test(src));
 }
