@@ -31,7 +31,7 @@ import {
   verifyDexieToken,
   type ApiRequest,
   type ApiResponse,
-} from './_dexie';
+} from './_dexie.js';
 
 export const maxDuration = 30;
 

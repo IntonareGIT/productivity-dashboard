@@ -39,7 +39,7 @@ import {
   verifyDexieToken,
   type ApiRequest as AiRequest,
   type ApiResponse as AiResponse,
-} from './_dexie';
+} from './_dexie.js';
 
 /** Longer chats with tool rounds need more than the bare default. */
 export const maxDuration = 60;
