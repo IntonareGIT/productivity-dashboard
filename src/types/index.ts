@@ -222,7 +222,7 @@ export interface AiProvider {
   id: string;          // UUID primary key
   label: string;       // Display name, e.g. "Gemini Flash", "OpenRouter Free"
   baseUrl: string;     // OpenAI-compatible base URL (no trailing /chat/completions)
-  apiKey: string;      // Secret key; empty = not configured yet
+  apiKey: string;      // LEGACY: always '' — keys live server-side (see api/ai.ts); kept so the schema is unchanged
   modelName: string;   // Model id sent in the request body
   isDefault: boolean;  // Exactly one provider is default at a time
   /**

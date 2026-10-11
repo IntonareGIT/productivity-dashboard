@@ -1,20 +1,21 @@
 import { db } from '../../db/db';
 import type { AiProvider } from '../../types';
 import { newId } from '../../utils/id';
+import { cloudAuthRequired, getCloudAccessToken } from './cloudAuth';
 
 /**
  * Configurable AI provider storage (schema v6).
  *
- * IMPORTANT: every AI feature resolves its endpoint through
- * `getDefaultProvider()` — no vendor is hardcoded anywhere in feature code,
- * so switching providers is a Settings-only change.
+ * IMPORTANT: provider rows describe WHICH MODEL the assistant should use —
+ * they never carry credentials. Every request goes to the `/api/ai` gateway
+ * (see `api/ai.ts`), which verifies the user's Dexie Cloud sign-in and adds a
+ * server-side key. No AI feature calls a vendor directly.
  */
 
 export interface AiProviderInput {
   id?: string; // present = update
   label: string;
   baseUrl: string;
-  apiKey: string;
   modelName: string;
   /** Optional second model tried once if the primary is overloaded. Off if blank. */
   fallbackModel?: string;
@@ -24,7 +25,9 @@ function normalize(input: AiProviderInput) {
   return {
     label: input.label.trim(),
     baseUrl: stripChatCompletionsSuffix(input.baseUrl.trim()),
-    apiKey: input.apiKey.trim(),
+    // The client must never hold a provider key: rows synced or restored from
+    // older builds are wiped to '' on the next save.
+    apiKey: '',
     modelName: input.modelName.trim(),
     // Stored as '' rather than undefined when cleared, so "off" and "never
     // configured" cannot drift apart across saves.
@@ -44,7 +47,17 @@ export function buildChatCompletionsUrl(baseUrl: string): string {
 }
 
 export function providerIsReady(provider: AiProvider | null | undefined): boolean {
-  return Boolean(provider && provider.baseUrl.trim() && provider.apiKey.trim() && provider.modelName.trim());
+  // Ready = a model is chosen. Credentials live server-side (see api/ai.ts),
+  // and sign-in state is enforced separately where the cloud addon is live.
+  return Boolean(provider && provider.baseUrl.trim() && provider.modelName.trim());
+}
+
+/**
+ * Which gateway upstream a provider row points at. Gemini by default; a base
+ * URL on groq.com selects Groq. The gateway strips this hint before forward.
+ */
+export function gatewayProviderFor(baseUrl: string): 'gemini' | 'groq' {
+  return /groq\.com/i.test(baseUrl) ? 'groq' : 'gemini';
 }
 
 export async function listProviders(): Promise<AiProvider[]> {
@@ -122,28 +135,32 @@ export interface ConnectionTestResult {
 }
 
 /**
- * "Test Connection" for a provider: one tiny OpenAI-compatible chat request.
- * Never throws — returns a human-readable verdict for the Settings UI.
+ * "Test Connection" for a provider: one tiny chat request through the same
+ * `/api/ai` gateway the assistant uses, so the verdict covers the real path —
+ * cloud sign-in, token verification and the upstream model. Never throws —
+ * returns a human-readable verdict for the Settings UI.
  */
 export async function testProviderConnection(provider: AiProvider): Promise<ConnectionTestResult> {
   const started = Date.now();
   if (!provider.baseUrl.trim()) {
     return { ok: false, latencyMs: 0, message: 'Base URL is empty.' };
   }
-  if (!provider.apiKey.trim()) {
-    return { ok: false, latencyMs: 0, message: 'API key is empty — add one to enable AI features.' };
-  }
   if (!provider.modelName.trim()) {
     return { ok: false, latencyMs: 0, message: 'Model name is empty.' };
   }
+  const token = getCloudAccessToken();
+  if (cloudAuthRequired() && !token) {
+    return { ok: false, latencyMs: 0, message: 'Not signed in to Dexie Cloud — sign in from Settings → Sync first.' };
+  }
   try {
-    const res = await fetch(buildChatCompletionsUrl(provider.baseUrl), {
+    const res = await fetch('/api/ai', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${provider.apiKey}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({
+        provider: gatewayProviderFor(provider.baseUrl),
         model: provider.modelName,
         messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
         max_tokens: 8,

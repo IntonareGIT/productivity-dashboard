@@ -53,9 +53,9 @@ export const QUICK_START: HelpBullet[] = [
       + 'and the focus timer, so the app changes to match what you are doing.',
   },
   {
-    text: 'Optional: add an AI provider in Settings, then open the assistant to '
+    text: 'Optional: sign in to Dexie Cloud in Settings, then open the assistant to '
       + 'search your library and create things by asking. The app is fully usable '
-      + 'with no provider configured.',
+      + 'without it.',
   },
 ];
 
@@ -246,10 +246,10 @@ export const HELP_SECTIONS: HelpSection[] = [
   {
     id: 'ai',
     title: 'AI assistant',
-    summary: 'Optional. Talks to a model you configure yourself, and can act on your data.',
+    summary: 'Optional. Talks to a hosted model through the app gateway, and can act on your data.',
     bullets: [
-      { lead: 'It is optional', text: 'Every feature works without it. Nothing is sent anywhere unless you configure a provider and start a conversation.' },
-      { lead: 'Your provider, your key', text: "Settings → AI Providers takes a label, a base URL, an API key and a model name, and it speaks the OpenAI-style /chat/completions format. Any service offering that endpoint works, including Google's Gemini models. One provider is marked as the default; the rest are kept so you can switch." },
+      { lead: 'It is optional', text: 'Every feature works without it. Nothing is sent anywhere unless you are signed in and start a conversation.' },
+      { lead: 'Models, not keys', text: "Settings → AI Providers picks the model the assistant uses (a label, a base URL and a model name). API keys are never entered in the app: requests go through the app's /api/ai gateway, which verifies your Dexie Cloud sign-in and attaches the server's key — Gemini by default, Groq as an alternative. One provider is marked as the default; the rest are kept so you can switch." },
       { lead: 'Your data, on request', text: 'The assistant reads your library and calendar when a question needs it, and writes only when you ask it to. Anything destructive — deleting an event, logging time off, changing a shift — asks you to confirm first.' },
       { lead: 'Thinking shown', text: "When a model returns its reasoning, it appears in a collapsible block above the answer rather than being hidden or mixed into the reply." },
       { lead: 'Writing a message', text: 'The box grows as you type, up to about six lines, then it scrolls so it never swallows the conversation. Enter sends. Shift+Enter starts a new line. On a phone, Enter starts a new line and you tap Send, because a soft keyboard has no reliable way to tell a deliberate send apart from a newline. If an input method is mid-composition, such as while picking a Chinese or Japanese character, Enter will not send.' },
@@ -290,7 +290,7 @@ export const HELP_SECTIONS: HelpSection[] = [
       { lead: 'What syncs', text: 'When signed in, all of it: subjects, topics, notes, resources, groups, assessments, calendar events, shift rosters and overrides, focus sessions, themes, settings, your assistant conversations, and your AI provider details.' },
       { lead: 'Uploaded files', text: 'Uploaded file bytes are offloaded to cloud storage the first time a file syncs, so an upload is available on your other device too. That first upload is what takes time with a large file, which is why the app warns above 20 MB.' },
       { lead: 'Worth knowing', text: "A file you upload is stored in your own cloud account, not only on the device that added it. If you would rather keep uploads on one device, stay signed out — the app keeps working locally." },
-      { lead: 'AI provider keys', text: 'Provider records, including the API key, sync with the rest of your data. They stay inside your own account, and nothing syncs at all while you are signed out.' },
+      { lead: 'AI requests', text: "The assistant is authenticated with your Dexie Cloud sign-in: every chat goes through the app's /api/ai gateway, which verifies your token with Dexie Cloud before adding a model key server-side. No API key is stored in the app." },
       { lead: 'Export and import', text: 'Settings has a backup section that exports your data to a JSON file and imports it back.' },
     ],
   },

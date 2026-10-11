@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { format } from 'date-fns';
 import { chatCompletion, friendlyError } from '../features/ai/aiClient';
 import { getDefaultProvider, providerIsReady } from '../features/ai/aiProviderRepo';
+import { CLOUD_SIGN_IN_REQUIRED, cloudAuthRequired, getCloudAccessToken } from '../features/ai/cloudAuth';
 import { NOT_EXECUTED } from '../features/ai/historyNormalizer';
 import {
   DEFAULT_TITLE,
@@ -261,6 +262,23 @@ interface AssistantState {
   selectSession: (id: string) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
+  /**
+   * Unsent composer text, held in the store rather than in `AssistantChat`.
+   *
+   * The floating panel unmounts its chat when closed, so a `useState` draft is
+   * destroyed on every close and reopen. Typing a question, closing the panel to
+   * check something in a pane, and coming back is a normal thing to do, so the
+   * text has to outlive the component. `AssistantChat` still owns the input
+   * element and the auto-grow behaviour; only the value is lifted.
+   */
+  draft: string;
+  setDraft: (text: string) => void;
+  /**
+   * Transcript scroll offset, likewise lifted so reopening returns the user to
+   * the same place in a long conversation instead of the bottom.
+   */
+  listScrollTop: number;
+  setListScrollTop: (top: number) => void;
 }
 
 const WELCOME: AssistantViewMsg[] = [
@@ -300,8 +318,13 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
   async function resolveProvider(): Promise<{ provider: AiProvider | null; error: string | null }> {
     const provider = await getDefaultProvider();
     if (!provider || !providerIsReady(provider)) {
-      const msg = 'No AI provider is configured yet. Open Settings → AI Providers, add a provider (or paste an API key).';
+      const msg = 'No AI model is configured yet. Open Settings → AI Providers to add one.';
       return { provider: null, error: msg };
+    }
+    // The gateway only trusts Dexie Cloud sessions: a model row without a
+    // sign-in cannot answer, so say so before any request is issued.
+    if (cloudAuthRequired() && !getCloudAccessToken()) {
+      return { provider: null, error: CLOUD_SIGN_IN_REQUIRED };
     }
     return { provider, error: null };
   }
@@ -448,6 +471,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
   return {
     open: false,
     busy: false,
+    // Lifted so the floating panel can unmount its chat without discarding the
+    // unsent composer text or the transcript scroll position.
+    draft: '',
+    listScrollTop: 0,
     providerLabel: null,
     providerReady: false,
     providerError: null,
@@ -523,10 +550,24 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       set({ sessions: await listSessions() });
     },
 
+    // Plain setters: the values are UI-local state, not persisted chat history,
+    // so they deliberately stay out of Dexie and out of the backup.
+    setDraft: (draft) => set({ draft }),
+    setListScrollTop: (listScrollTop) => set({ listScrollTop }),
+
     clearChat: async () => {
       const current = get().sessionId;
       if (current) await deleteSession(current);
-      set({ sessionId: null, view: WELCOME, pending: null, sessions: await listSessions() });
+      // The draft and the scroll offset describe the conversation being cleared,
+      // so they are reset with it rather than being carried into an empty view.
+      set({
+        sessionId: null,
+        view: WELCOME,
+        pending: null,
+        sessions: await listSessions(),
+        draft: '',
+        listScrollTop: 0,
+      });
     },
 
 
@@ -854,15 +895,19 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
 
     refreshProvider: async () => {
       const provider = await getDefaultProvider();
-      if (provider && providerIsReady(provider)) {
-        set({ providerLabel: provider.label, providerReady: true, providerError: null });
+      if (!provider || !providerIsReady(provider)) {
+        set({
+          providerLabel: provider?.label ?? null,
+          providerReady: false,
+          providerError: 'No AI model is configured yet. Open Settings → AI Providers to add one.',
+        });
         return;
       }
-      const reason =
-        provider && !provider.apiKey.trim()
-          ? 'The default provider is missing its API key. Open Settings → AI Providers to add one.'
-          : 'No AI provider is configured yet. Open Settings → AI Providers to add one.';
-      set({ providerLabel: provider?.label ?? null, providerReady: false, providerError: reason });
+      if (cloudAuthRequired() && !getCloudAccessToken()) {
+        set({ providerLabel: provider.label, providerReady: false, providerError: CLOUD_SIGN_IN_REQUIRED });
+        return;
+      }
+      set({ providerLabel: provider.label, providerReady: true, providerError: null });
     },
   };
 });

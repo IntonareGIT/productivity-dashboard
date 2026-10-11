@@ -662,7 +662,7 @@ export interface AiProvider {
   id: string;
   label: string;        // User-facing name, e.g. "Gemini Flash"
   baseUrl: string;      // OpenAI-compatible root, no /chat/completions suffix
-  apiKey: string;       // Empty on first run — user must paste a key
+  apiKey: string;       // LEGACY, always '' — keys live server-side (api/ai.ts); field kept for schema stability
   modelName: string;    // e.g. 'gemini-3.1-flash-lite'
   isDefault: boolean;   // Exactly one provider is default at a time
   createdAt: string;    // ISO 8601
@@ -670,10 +670,22 @@ export interface AiProvider {
 }
 ```
 
-**No vendor is hardcoded in feature code.** Every AI feature resolves its
-endpoint through `getDefaultProvider()` in
-`src/features/ai/aiProviderRepo.ts`, which returns the `isDefault` row (falling
-back to the oldest row). Switching providers is therefore a Settings-only
+**No key ever lives in the browser.** Every AI feature posts its chat payload to
+the `/api/ai` gateway (`api/ai.ts`) with the user's Dexie Cloud access token in
+`Authorization: Bearer <token>`. The gateway verifies the token against Dexie
+Cloud's `GET /token/validate` endpoint (200 `{ valid: true }` or 401, nothing
+forwarded otherwise), then forwards the OpenAI-compatible body to Gemini by
+default (or Groq when the row's base URL is on groq.com) using `GEMINI_API_KEY`
+/ `GROQ_API_KEY` from the deployment env, and returns the model's response —
+with both keys scrubbed from the text. There is no API key field in the
+Settings UI, and `providerIsReady()` treats a row as ready when it names a base
+URL and model; sign-in state (`getCloudAccessToken()`) gates the assistant
+separately, in the store resolver, `refreshProvider()` and `App.tsx`'s launcher
+flag (which also subscribes to `db.cloud.currentUser` so sign-in flips it).
+
+Every AI feature resolves which model to ask for through `getDefaultProvider()`
+in `src/features/ai/aiProviderRepo.ts`, which returns the `isDefault` row
+(falling back to the oldest row). Switching models is therefore a Settings-only
 change — no code edits. `buildChatCompletionsUrl()` appends
 `/chat/completions` and `stripChatCompletionsSuffix()` tolerates a pasted URL
 that already includes it.
@@ -681,13 +693,15 @@ that already includes it.
 On first run `initializeDatabaseDefaults()` seeds exactly one default row
 pointing at Gemini's OpenAI-compatible endpoint
 (`https://generativelanguage.googleapis.com/v1beta/openai`, model
-`gemini-3.1-flash-lite`) with an **empty apiKey**, so the assistant stays disabled
-until the user supplies a key. Any OpenAI-compatible endpoint (OpenRouter,
-Groq, Ollama, LM Studio, …) can be added via "+ Add model".
+`gemini-3.1-flash-lite`) with an apiKey that is ALWAYS empty, so the assistant
+stays disabled until the user SIGNS IN to Dexie Cloud (Settings → Sync). A
+Groq row (base URL on groq.com) can be added via "+ Add model"; the gateway
+routes it to Groq instead.
 
-`providerIsReady()` requires base URL, API key and model name to be non-empty;
-when it returns false the launcher/panel are disabled with a pointer to
-Settings. Keys are stored in plain IndexedDB like all other local data.
+`providerIsReady()` requires base URL and model name to be non-empty; when it
+returns false — or no Dexie Cloud token is present — the launcher/panel are
+disabled with a pointer to Settings. No provider credential is stored in
+IndexedDB, in backups (still stripped), or anywhere in the client.
 
 ---
 

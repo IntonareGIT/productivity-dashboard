@@ -18,14 +18,11 @@ export const DEXIE_CLOUD_URL = 'https://zmofmso62.dexie.cloud';
  * Tables that must never leave the device.
  *
  * Currently EMPTY: every table, including `aiProviders`, now syncs to the
- * user's Dexie Cloud account. Provider records (label, baseUrl, apiKey,
- * modelName, isDefault, supportsImages) are therefore available on every
- * signed-in device.
- *
- * This is a deliberate change: `aiProviders` was previously excluded here so
- * API keys could not reach the cloud. The account is per-user, and the addon
- * already requires sign-in before anything syncs, so the key stays within the
- * user's own account. Settings states this plainly under AI Providers.
+ * user's Dexie Cloud account. Provider rows carry only model details (label,
+ * baseUrl, modelName, isDefault) — API keys are no longer entered, shown or
+ * stored in the app at all. Chat requests go to the `/api/ai` gateway (see
+ * `api/ai.ts`), which verifies the Dexie Cloud sign-in and attaches a
+ * server-side key (Gemini by default, Groq as an alternative).
  *
  * Kept as an export (rather than deleted) so the exclusion point stays visible
  * and a future table can be opted out in one place.

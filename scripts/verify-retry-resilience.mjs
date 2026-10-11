@@ -20,6 +20,24 @@ const outFile = join(outDir, 'aiClient.mjs');
 await build({
   entryPoints: ['src/features/ai/aiClient.ts'],
   outfile: outFile, bundle: true, format: 'esm', platform: 'node', logLevel: 'silent',
+  plugins: [{
+    name: 'cloud-auth-stub',
+    setup(b) {
+      // The real client reads the Dexie Cloud token from the database; these
+      // tests drive the retry loop, not sign-in, so hand it a fake token.
+      b.onLoad({ filter: /.*/ }, (args) => {
+        if (args.path.replace(/\\/g, '/').endsWith('/src/features/ai/cloudAuth.ts')) {
+          return {
+            contents: `export const getCloudAccessToken = () => 'test-token';
+export const cloudAuthRequired = () => true;
+export const CLOUD_SIGN_IN_REQUIRED = 'sign in';`,
+            loader: 'js',
+          };
+        }
+        return undefined;
+      });
+    },
+  }],
 });
 const client = await import(`file://${outFile.replace(/\\/g, '/')}`);
 const {

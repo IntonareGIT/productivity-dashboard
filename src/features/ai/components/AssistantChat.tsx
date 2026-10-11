@@ -55,10 +55,38 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
   const confirmPending = useAssistantStore((s) => s.confirmPending);
   const cancelPending = useAssistantStore((s) => s.cancelPending);
 
-  const [draft, setDraft] = useState('');
+  const draft = useAssistantStore((s) => s.draft);
+  const setDraft = useAssistantStore((s) => s.setDraft);
   const [showDetails, setShowDetails] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  /**
+   * Restore the transcript scroll position after a remount.
+   *
+   * The panel unmounts this whole component when it closes, so the browser's
+   * scroll position is destroyed with it. Without this, reopening a long
+   * conversation dumps the user back at the very top of their own transcript.
+   * The offset is only restored once the messages have actually rendered, or
+   * the list would be empty and the assignment would be a no-op.
+   */
+  useEffect(() => {
+    const el = listRef.current;
+    const top = useAssistantStore.getState().listScrollTop;
+    if (!el || top <= 0) return;
+    // After paint, so the transcript has its final height.
+    const raf = requestAnimationFrame(() => {
+      if (listRef.current) listRef.current.scrollTop = top;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [view.length]);
+
+  /** Remember the offset as the user scrolls, so the restore above has something. */
+  const onScroll = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    useAssistantStore.getState().setListScrollTop(el.scrollTop);
+  }, []);
 
   /**
    * Grow with the content, up to ~6 lines, then scroll.
@@ -175,7 +203,7 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
         </button>
       )}
 
-      <div ref={listRef} className={`flex-1 overflow-y-auto px-3 py-3 space-y-2.5 min-h-[180px] ${className}`}>
+      <div ref={listRef} onScroll={onScroll} className={`flex-1 overflow-y-auto px-3 py-3 space-y-2.5 min-h-[180px] ${className}`}>
         {view.map((msg) => (
           <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div

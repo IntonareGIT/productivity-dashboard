@@ -79,7 +79,7 @@ export function readSafeInsets(): { top: number; right: number; bottom: number; 
 interface AssistantLauncherProps {
   /** Jump to Settings when AI is not configured yet. */
   onOpenSettings: () => void;
-  /** True when a default provider exists with a non-empty API key. */
+  /** True when a model row is configured AND the user is signed in to Dexie Cloud. */
   configured: boolean;
   /**
    * Hide the launcher. Owned by `shouldShowFloatingAi`, which is the single rule

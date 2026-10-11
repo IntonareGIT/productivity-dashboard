@@ -20,27 +20,28 @@ const inputCls =
 interface FormState {
   label: string;
   baseUrl: string;
-  apiKey: string;
   modelName: string;
   /** Optional second model tried once if the primary is overloaded. Blank = off. */
   fallbackModel: string;
 }
 
-const EMPTY_FORM: FormState = { label: '', baseUrl: '', apiKey: '', modelName: '', fallbackModel: '' };
+const EMPTY_FORM: FormState = { label: '', baseUrl: '', modelName: '', fallbackModel: '' };
 
 function toForm(p?: AiProvider | null): FormState {
   return {
     label: p?.label ?? '',
     baseUrl: p?.baseUrl ?? '',
-    apiKey: p?.apiKey ?? '',
     modelName: p?.modelName ?? '',
     fallbackModel: p?.fallbackModel ?? '',
   };
 }
 
 /**
- * Settings › AI Providers (schema v6): manage OpenAI-compatible endpoints,
- * pick the single default every AI feature reads, and test connections.
+ * Settings › AI Providers (schema v6): choose which MODEL the assistant uses
+ * and pick the single default every AI feature reads.
+ *
+ * Deliberately no API key field: requests go through the `/api/ai` gateway,
+ * which verifies the Dexie Cloud sign-in and attaches a server-side key.
  */
 export const AiProvidersSettings: React.FC = () => {
   const providers = useLiveQuery(() => db.aiProviders.toArray()) ?? [];
@@ -49,7 +50,6 @@ export const AiProvidersSettings: React.FC = () => {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
-  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [testing, setTesting] = useState<string | null>(null);
@@ -78,7 +78,6 @@ export const AiProvidersSettings: React.FC = () => {
         id: editingId ?? undefined,
         label: form.label,
         baseUrl: form.baseUrl,
-        apiKey: form.apiKey,
         modelName: form.modelName,
         fallbackModel: form.fallbackModel,
       };
@@ -103,12 +102,10 @@ export const AiProvidersSettings: React.FC = () => {
     }
   };
 
-  const mask = (key: string) => (key.length <= 8 ? '••••' : `${key.slice(0, 3)}…${key.slice(-4)}`);
-
   return (
     <Card
       title="AI Providers"
-      subtitle="Pick any OpenAI-compatible endpoint. All AI features use the default."
+      subtitle="Pick the model the assistant uses. No keys here — they live on the server."
       action={
         <button
           onClick={openAdd}
@@ -119,24 +116,22 @@ export const AiProvidersSettings: React.FC = () => {
       }
     >
       <p className="text-xs text-content-tertiary mb-4 -mt-1">
-        The assistant stays disabled until the default provider has an API key.
+        The assistant works once a model is configured and you are signed in to Dexie Cloud.
       </p>
       <p className="text-xs text-content-secondary bg-accent-subtle border border-border rounded-xl px-3 py-2.5 mb-4">
-        Provider details, <strong>including the API key</strong>, now sync to your account and
-        are available on every signed-in device. While you are signed out they stay on this
-        device only. Keys are stripped from JSON backups.
+        Chat requests go through the app&apos;s /api/ai gateway: it verifies your Dexie Cloud
+        sign-in, then attaches the server&apos;s key (Gemini by default, Groq as an
+        alternative). No API key is entered, shown or stored in this app.
       </p>
 
       {sorted.length === 0 ? (
         <p className="text-xs text-content-tertiary text-center py-4 border-t border-border/50">
-          No providers yet — add your first model (e.g. Gemini or OpenRouter).
+          No models yet — add your first one (e.g. Gemini Flash or Groq Llama).
         </p>
       ) : (
         <div className="border-t border-border/50 divide-y divide-border/40">
           {sorted.map((p) => {
-            const revealed = showKeys[p.id] ?? false;
             const result = results[p.id];
-            const keyMissing = !p.apiKey.trim();
             return (
               <div key={p.id} className="py-3.5 flex flex-col gap-2.5">
                 <div className="flex items-center justify-between gap-2">
@@ -173,12 +168,6 @@ export const AiProvidersSettings: React.FC = () => {
                 {deleteId === p.id && <p className="text-[11px] text-rose-500 font-semibold">Tap delete again to confirm.</p>}
 
                 <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <button
-                    onClick={() => setShowKeys((s) => ({ ...s, [p.id]: !revealed }))}
-                    className="px-2.5 py-1.5 rounded-lg border border-border text-content-secondary hover:text-content-primary transition-colors font-mono"
-                  >
-                    {revealed ? p.apiKey || '(empty)' : keyMissing ? '(no key set)' : mask(p.apiKey)}
-                  </button>
                   {!p.isDefault && (
                     <button
                       onClick={() => void setDefaultProvider(p.id)}
@@ -195,7 +184,6 @@ export const AiProvidersSettings: React.FC = () => {
                     <PlugZap className="w-3.5 h-3.5" />
                     {testing === p.id ? 'Testing…' : 'Test Connection'}
                   </button>
-                  {keyMissing && <span className="text-amber-500 font-semibold">API key needed — AI is disabled for this provider.</span>}
                 </div>
 
                 {result && (
@@ -215,7 +203,7 @@ export const AiProvidersSettings: React.FC = () => {
           open
           onClose={() => setModalOpen(false)}
           title={editingId ? 'Edit Model' : 'Add Model'}
-          subtitle="Any OpenAI-compatible endpoint (Gemini, OpenRouter, Ollama, …)"
+          subtitle="Any OpenAI-compatible endpoint (Gemini, Groq, …)"
         >
           <div className="space-y-3">
             <label className="block">
@@ -224,11 +212,10 @@ export const AiProvidersSettings: React.FC = () => {
             </label>
             <label className="block">
               <span className="block text-xs text-content-secondary mb-1">Base URL</span>
-              <input value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} placeholder="https://…/v1" spellCheck={false} className={`${inputCls} font-mono`} />
-            </label>
-            <label className="block">
-              <span className="block text-xs text-content-secondary mb-1">API key</span>
-              <input value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} placeholder="paste key here" type="password" autoComplete="off" spellCheck={false} className={`${inputCls} font-mono`} />
+              <input value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} placeholder="https://…/v1beta/openai" spellCheck={false} className={`${inputCls} font-mono`} />
+              <span className="block text-[11px] text-content-tertiary mt-1">
+                Points the request at Gemini by default, or at Groq when the URL is on groq.com.
+              </span>
             </label>
             <label className="block">
               <span className="block text-xs text-content-secondary mb-1">Model name</span>

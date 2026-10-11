@@ -319,12 +319,17 @@ check('registry: every spec has a description and a params object',
   check('note: createNote stores the content it was given',
     madeWithBody?.data?.topicId ? S.topics.get(madeWithBody.data.topicId).notes === '# hi' : false);
 
-  // Capture the size immediately before this call: the two createNote calls
-  // above each added a row, so comparing against the stale `before` was wrong.
+  // createNote no longer REQUIRES a title: with none given it is named after its
+  // subject, exactly as a note created in the UI is. The size must grow and the
+  // generated title must be the subject's default, not a blank row.
   const sizeBeforeNoTitle = S.topics.size;
-  const noTitle = await fails('createNote', { subjectId: 's9', title: '' });
-  check('note: createNote without a title changes nothing',
-    !!noTitle && S.topics.size === sizeBeforeNoTitle, String(noTitle));
+  const noTitle = await run('createNote', { subjectId: 's9' });
+  const noTitleId = noTitle?.data?.topicId;
+  check('note: createNote without a title creates a note',
+    !!noTitle && S.topics.size === sizeBeforeNoTitle + 1, String(noTitle));
+  check('note: createNote without a title names it after the subject',
+    noTitleId ? S.topics.get(noTitleId).title === "Chemistry's Notes" : false,
+    noTitleId ? String(S.topics.get(noTitleId)?.title) : 'no id');
 
   // createNote must refuse to put a note in a topic belonging to another subject.
   const crossSubject = await fails('createNote', { subjectId: 's1', topicId: 'Acids', title: 'Nope' });

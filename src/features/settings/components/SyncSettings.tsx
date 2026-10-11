@@ -17,7 +17,8 @@ export const SyncSettings: React.FC = () => (
       </p>
     ) : (
       <p className="text-[11px] text-content-tertiary">
-        Everything syncs, including your AI providers and their API keys.
+        Everything syncs, including your AI providers. The assistant signs each chat request
+        with your Dexie Cloud session — no API keys are stored in the app.
       </p>
     )}
   </SyncAccountPanel>

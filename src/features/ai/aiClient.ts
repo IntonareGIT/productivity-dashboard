@@ -1,14 +1,21 @@
 import type { AiProvider } from '../../types';
-import { buildChatCompletionsUrl } from './aiProviderRepo';
+import { gatewayProviderFor } from './aiProviderRepo';
+import { cloudAuthRequired, getCloudAccessToken } from './cloudAuth';
 import { normalizeHistoryForProvider, logRepair } from './historyNormalizer';
 import type { ChatMessage, ToolCall, ToolSpec } from './types';
 
 /**
  * Minimal OpenAI-compatible chat client with function calling.
  *
- * Provider-agnostic by design: the endpoint, key and model all come from the
- * `AiProvider` row the user marked as default (see aiProviderRepo.ts).
+ * The app talks to models through its own `/api/ai` gateway, never to a
+ * provider directly: the endpoint, key and upstream choice all live on the
+ * server (see `api/ai.ts`). The browser sends the chat payload plus a
+ * gateway-only `provider` hint, authenticated with the user's Dexie Cloud
+ * access token — no API key ever leaves the server.
  */
+
+/** The serverless gateway every chat request goes through. */
+export const AI_GATEWAY_PATH = '/api/ai';
 
 export class AiRequestError extends Error {
   status?: number;
@@ -122,7 +129,7 @@ export function friendlyError(err: unknown): { message: string; retryable: boole
       };
     }
     if (err.status === 401 || err.status === 403) {
-      return { message: 'The provider rejected the API key. Check it in Settings.', retryable: false };
+      return { message: 'Your Dexie Cloud sign-in could not be verified. Sign in again from Settings → Sync.', retryable: false };
     }
     if (err.status === 404) {
       return { message: 'The provider does not recognize that model name. Check it in Settings.', retryable: false };
@@ -354,13 +361,24 @@ async function attemptCompletion(
   body: string,
   signal?: AbortSignal,
 ): Promise<Response> {
+  // The gateway only trusts Dexie Cloud sessions. When the addon is attached
+  // (the shipping app, always) a missing token means "signed out" and must
+  // fail fast with the sign-in message — not burn retries against a 401.
+  const token = getCloudAccessToken();
+  if (cloudAuthRequired() && !token) {
+    throw new AiRequestError(
+      'Not signed in to Dexie Cloud. Sign in from Settings → Sync to use the assistant.',
+      401,
+      { retryable: false },
+    );
+  }
   let res: Response;
   try {
-    res = await fetch(buildChatCompletionsUrl(provider.baseUrl), {
+    res = await fetch(AI_GATEWAY_PATH, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${provider.apiKey}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body,
       signal,
@@ -478,6 +496,10 @@ export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatC
   const buildBodyFrom = (msgs: ChatMessage[], model: string) =>
     JSON.stringify({
       model,
+      // Gateway-only hint (Gemini default, Groq on request) — the server
+      // strips it before forwarding. Derived from the row's base URL so the
+      // user's model choice keeps working exactly as before.
+      provider: gatewayProviderFor(provider.baseUrl),
       messages: toWire(msgs),
       tools: tools && tools.length > 0 ? tools : undefined,
       tool_choice: tools && tools.length > 0 ? 'auto' : undefined,

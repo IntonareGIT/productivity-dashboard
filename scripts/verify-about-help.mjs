@@ -126,7 +126,7 @@ check('sync page does NOT wrongly claim uploads stay local',
 check('sync page says everything is local and unsynced when signed out', /entirely local/.test(syncSection));
 check('sync page mentions the 20 MB warning the code actually has',
   /20 MB/.test(syncSection) && /LARGE_BLOB_WARNING_BYTES = 20 \* 1024 \* 1024/.test(read('src/db/cloudConfig.ts')));
-check('sync page states the AI provider key also syncs', /including the API key/.test(syncSection));
+check('sync page states no API key is stored in the app', /No API key is stored in the app/.test(syncSection));
 
 console.log(`\nabout-help: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

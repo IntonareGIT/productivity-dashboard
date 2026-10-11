@@ -37,9 +37,12 @@ export const defaultThemeStatusMappings: ThemeStatusMapping[] = [
 
 
 /**
- * First-run AI provider (schema v6): Gemini's OpenAI-compatible endpoint with
- * an EMPTY apiKey. The assistant stays disabled until the user pastes a key
- * (or swaps in any other OpenAI-compatible provider) under Settings.
+ * First-run AI provider (schema v6): Gemini's OpenAI-compatible endpoint, with
+ * an apiKey that is ALWAYS empty — there is deliberately no key field in the
+ * UI anymore. Chat requests carry the Dexie Cloud access token to `/api/ai`,
+ * which verifies it and attaches the server-side key. The assistant therefore
+ * stays disabled until the user SIGN INs (Settings → Sync), not until they
+ * paste a key.
  */
 export function makeDefaultAiProvider(): AiProvider {
   const now = new Date().toISOString();
