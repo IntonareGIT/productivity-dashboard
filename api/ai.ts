@@ -151,6 +151,7 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
   try {
     const record = await kvGet(userId, providerName);
     if (!record) {
+      console.log(`redis read: not found, key=keys:${userId}:${providerName}`);
       json(res, 403, {
         error: 'no_key',
         provider: providerName,
@@ -158,8 +159,11 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
       });
       return;
     }
+    console.log(`redis read: found, key=keys:${userId}:${providerName}, fields=${Object.keys(record).join(',')}`);
     apiKey = decrypt(record);
-  } catch {
+    console.log('decrypt: ok');
+  } catch (e) {
+    console.log(`decrypt: failed: ${e instanceof Error ? e.name : String(e)}`);
     json(res, 503, {
       error: 'key_unavailable',
       message: 'Could not load your API key. Try again or re-save it in Settings.',
