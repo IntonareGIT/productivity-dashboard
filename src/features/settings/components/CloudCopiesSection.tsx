@@ -100,28 +100,56 @@ export const CloudCopiesSection: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-2">
-          {orphans.map((o) => (
-            <div key={o.key} className="flex items-center gap-2 rounded-xl border border-border bg-bg-elevated/40 p-2.5">
-              <Cloud className="w-4 h-4 text-content-tertiary shrink-0" />
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-mono text-content-primary truncate">{o.key}</p>
+          {orphans.map((o) => {
+            const picking = reAddKey === o.key;
+            return (
+              <div key={o.key} className="flex items-center gap-2 rounded-xl border border-border bg-bg-elevated/40 p-2.5">
+                <Cloud className="w-4 h-4 text-content-tertiary shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-mono text-content-primary truncate">{o.key}</p>
+                  {picking && (
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <span className="text-[11px] text-content-tertiary">Put it in:</span>
+                      <select
+                        value={reAddSubjectId ?? ''}
+                        onChange={(e) => setReAddSubjectId(e.target.value || null)}
+                        className="flex-1 min-w-0 bg-bg-elevated border border-border rounded-lg px-2 py-1 text-xs text-content-primary outline-none focus:border-accent"
+                      >
+                        <option value="">Select a subject…</option>
+                        {subjects.map((s) => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => { setReAddKey(null); setReAddSubjectId(null); }}
+                        className="px-2 min-h-[36px] rounded-lg text-xs text-content-secondary hover:text-content-primary"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {picking ? (
+                  <span className="text-[11px] text-content-tertiary">Pick a subject above</span>
+                ) : (
+                  <button
+                    onClick={() => reAdd(o.key)}
+                    disabled={working}
+                    className="flex items-center gap-1.5 px-2.5 min-h-[40px] rounded-lg text-xs font-semibold text-accent hover:bg-accent-subtle transition-colors disabled:opacity-60"
+                  >
+                    <HardDriveDownload className="w-3.5 h-3.5" /> Re-add
+                  </button>
+                )}
+                <button
+                  onClick={() => fullyDelete(o.key)}
+                  disabled={working}
+                  className="flex items-center gap-1.5 px-2.5 min-h-[40px] rounded-lg text-xs font-semibold text-rose-500 hover:bg-rose-500/10 transition-colors disabled:opacity-60"
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Delete
+                </button>
               </div>
-              <button
-                onClick={() => reAdd(o.key)}
-                disabled={working}
-                className="flex items-center gap-1.5 px-2.5 min-h-[40px] rounded-lg text-xs font-semibold text-accent hover:bg-accent-subtle transition-colors disabled:opacity-60"
-              >
-                <HardDriveDownload className="w-3.5 h-3.5" /> Re-add
-              </button>
-              <button
-                onClick={() => fullyDelete(o.key)}
-                disabled={working}
-                className="flex items-center gap-1.5 px-2.5 min-h-[40px] rounded-lg text-xs font-semibold text-rose-500 hover:bg-rose-500/10 transition-colors disabled:opacity-60"
-              >
-                <Trash2 className="w-3.5 h-3.5" /> Delete
-              </button>
-            </div>
-          ))}
+            );
+          })}
           {working && (
             <div className="flex items-center gap-2 text-xs text-content-secondary">
               <Loader2 className="w-3.5 h-3.5 animate-spin" /> Working…
