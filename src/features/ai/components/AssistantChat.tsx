@@ -50,7 +50,8 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
   const failure = useAssistantStore((s) => s.failure);
   const fallbackNotice = useAssistantStore((s) => s.fallbackNotice);
   const providerLabel = useAssistantStore((s) => s.providerLabel);
-  const selectedModels = useAssistantStore((s) => s.selectedModels);
+  const models = useAssistantStore((s) => s.models);
+  const selectedModelId = useAssistantStore((s) => s.selectedModelId);
   const setModel = useAssistantStore((s) => s.setModel);
   const setOpen = useAssistantStore((s) => s.setOpen);
   const send = useAssistantStore((s) => s.send);
@@ -189,31 +190,21 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-content-primary leading-tight">Assistant</p>
           <p className="text-[11px] text-content-tertiary truncate">
-            {configured ? 'Connected — can act on your data' : 'Needs an AI provider'}
+            {configured ? 'Connected — can act on your data' : 'Needs an AI model'}
           </p>
         </div>
-        {configured && providerLabel && (
+        {configured && models.length > 0 && (
           <select
-            value={selectedModels[providerLabel] ?? ''}
-            onChange={(e) => setModel(providerLabel, e.target.value)}
+            value={selectedModelId ?? ''}
+            onChange={(e) => setModel(e.target.value)}
             className="ml-auto mr-2 bg-bg-elevated border border-border text-content-primary text-xs rounded-xl px-2 py-1.5 outline-none focus:border-accent cursor-pointer min-w-[160px]"
             aria-label="Select model"
           >
-            {providerLabel.toLowerCase().includes('gemini') ? (
-              <>
-                <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
-                <option value="gemini-3.1-flash">Gemini 3.1 Flash</option>
-                <option value="gemini-3.1-pro">Gemini 3.1 Pro</option>
-              </>
-            ) : providerLabel.toLowerCase().includes('groq') ? (
-              <>
-                <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
-                <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
-                <option value="mixtral-8x7b-32768">Mixtral 8x7B</option>
-              </>
-            ) : (
-              <option value="">Select a model</option>
-            )}
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.displayName}
+              </option>
+            ))}
           </select>
         )}
         {headerExtra}
@@ -226,7 +217,7 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
         >
           <TriangleAlert className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
           <span className="text-xs text-content-primary">
-            AI is disabled. <span className="font-semibold underline">Add a provider in Settings → AI Providers</span> to enable it.
+            AI is disabled. <span className="font-semibold underline">Add a model in Settings → AI Models</span> to enable it.
           </span>
         </button>
       )}

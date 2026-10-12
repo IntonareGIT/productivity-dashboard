@@ -247,6 +247,46 @@ export interface AiProvider {
 }
 
 /**
+ * A user-added AI model (replaces the old AiProvider + AiKeys split).
+ *
+ * Stored on the server in Upstash Redis under "models:{userId}:{id}".
+ * The browser never sends baseUrl or adapter to /api/ai — only the modelId.
+ * The server looks up the rest.
+ */
+export interface UserModel {
+  id: string;              // UUID, generated server-side
+  displayName: string;     // User-friendly name, e.g. "My Gemini Flash"
+  adapter: 'gemini' | 'openai-compatible';
+  baseUrl: string;         // Required for openai-compatible (e.g. "https://api.groq.com/openai/v1"), empty for gemini
+  modelId: string;         // Exact provider model name (e.g. "gemini-3.1-flash-lite", "llama-3.3-70b-versatile")
+  capabilities: {
+    chat: boolean;         // Can be used for chat
+    acceptsPdf: boolean;   // Can accept PDF files
+    acceptsImages: boolean; // Can accept images
+  };
+  hasKey: boolean;         // Whether an API key is saved (key itself never returned to client)
+  createdAt: string;       // ISO 8601
+  updatedAt: string;       // ISO 8601
+}
+
+/**
+ * Input for creating/updating a user model.
+ * apiKey is optional on update (omit to keep existing key).
+ */
+export interface UserModelInput {
+  displayName: string;
+  adapter: 'gemini' | 'openai-compatible';
+  baseUrl: string;
+  modelId: string;
+  capabilities: {
+    chat: boolean;
+    acceptsPdf: boolean;
+    acceptsImages: boolean;
+  };
+  apiKey?: string;         // Required on create, optional on update
+}
+
+/**
  * A chat conversation with the assistant (schema v7).
  *
  * `providerId` pins the session to the provider that produced it. Gemini's

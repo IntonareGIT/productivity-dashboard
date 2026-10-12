@@ -3,7 +3,7 @@ import { db } from '../../db/db';
 import type { CalendarEvent, EventKind, Resource, Topic } from '../../types';
 import { deleteEvent, saveEvent } from '../calendar/eventsRepo';
 import { PERIODS, normalizePeriod, periodByNumber, usesPeriod } from '../calendar/categories';
-import { saveAssessment, saveResource, saveSubject, saveTopic } from '../library/libraryRepo';
+import { saveAssessment, saveResource, saveSubject, saveTopic, loadFileBytes, fileLocation } from '../library/libraryRepo';
 import { DEFAULT_SUBJECT_COLOR, SUBJECT_PALETTE } from '../library/palette';
 import { buildShiftContext, dayEndTime, getWeekDays, resolveDay, toDateKey } from '../shifts/shiftLogic';
 import { setOverrideForDate } from '../shifts/shiftsRepo';
@@ -324,6 +324,22 @@ export const EXTENDED_TOOL_SPECS: ToolSpec[] = [
   },
 
   /* ---------- Files and extraction ---------- */
+  {
+    type: 'function',
+    function: {
+      name: 'searchFiles',
+      description:
+        'Search files by name case-insensitively with partial matches across all subjects. Returns matching files with their location (local/cloud). If more than one file matches, returns the list — does not guess.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query (partial, case-insensitive).' },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      },
+    },
+  },
   {
     type: 'function',
     function: {
@@ -1101,6 +1117,54 @@ async function deleteCalendarEvent(args: Record<string, unknown>): Promise<ToolE
 
 /* ---------------- Files and extraction ---------------- */
 
+async function searchFiles(args: Record<string, unknown>): Promise<ToolExecution> {
+  const query = requireString(args, 'query').toLowerCase().trim();
+  if (!query) throw new ToolError('Search query cannot be empty.');
+
+  const resources = await db.resources.where('kind').equals('file').toArray();
+  
+  const matches = resources
+    .filter((r) => r.title.toLowerCase().includes(query))
+    .map((r) => {
+      const location = fileLocation(r);
+      return {
+        id: r.id,
+        title: r.title,
+        type: r.mimeType ?? 'application/octet-stream',
+        location: location.kind === 'none' ? 'none' : location.kind,
+        subjectId: r.subjectId,
+      };
+    });
+
+  if (matches.length === 0) {
+    return {
+      ok: true,
+      summary: `No files found matching "${query}".`,
+      data: { query, files: [] },
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      summary: `"${query}" matches ${matches.length} files. Please specify which one to use.`,
+      data: {
+        error: 'ambiguous_file',
+        query,
+        candidates: matches.map((m) => ({ id: m.id, title: m.title, type: m.type, location: m.location })),
+      },
+    };
+  }
+
+  // Single match
+  const match = matches[0];
+  return {
+    ok: true,
+    summary: `Found "${match.title}" (${match.location}).`,
+    data: { query, file: match },
+  };
+}
+
 async function listFiles(args: Record<string, unknown>): Promise<ToolExecution> {
   const filter = (String(args.filter ?? 'all') as 'all' | 'ready' | 'missing' | 'failed');
   const resources = await db.resources.where('kind').equals('file').toArray();
@@ -1265,11 +1329,24 @@ async function readFilePages(args: Record<string, unknown>): Promise<ToolExecuti
   if (!resource) throw new ToolError(`File "${fileId}" not found.`);
   if (resource.kind !== 'file') throw new ToolError(`Resource "${fileId}" is not a file.`);
 
+  const location = fileLocation(resource);
+  if (location.kind === 'none') {
+    throw new ToolError('This file has no local copy or cloud copy.');
+  }
+
+  // Load the file bytes (from local blob or cloud via R2)
+  const blob = await loadFileBytes(resource);
+  if (!blob) {
+    throw new ToolError('This file has no local copy or cloud copy.');
+  }
+
+  const source = location.kind === 'blob' ? 'local' : 'cloud';
+  
   // TODO: Implement sending specific pages to model
   return {
     ok: true,
-    summary: `Sent pages ${pages.join(', ')} of "${resource.title}" to the model. This uses your AI quota.`,
-    data: { fileId: resource.id, title: resource.title, pages, status: 'sent' },
+    summary: `Sent pages ${pages.join(', ')} of "${resource.title}" to the model (from ${source}). This uses your AI quota.`,
+    data: { fileId: resource.id, title: resource.title, pages, status: 'sent', source },
     toast: { kind: 'info', title: 'Pages sent to model', description: resource.title },
   };
 }
@@ -1457,6 +1534,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => Promise<ToolEx
   addOneOffShiftException,
   deleteCalendarEvent,
   // Files and extraction
+  searchFiles,
   listFiles,
   getExtractionStatus,
   startExtraction,
@@ -1528,6 +1606,8 @@ export function describeExtendedToolCall(name: string, args: Record<string, unkn
     case 'getCurrentStatus':
       return 'Read the current status and theme.';
     // Files and extraction
+    case 'searchFiles':
+      return `Search files for "${s('query')}".`;
     case 'listFiles':
       return `List files (filter: ${s('filter')}).`;
     case 'getExtractionStatus':

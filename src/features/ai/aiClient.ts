@@ -1,5 +1,3 @@
-import type { AiProvider } from '../../types';
-import { gatewayProviderFor } from './aiProviderRepo';
 import { cloudAuthRequired, getCloudAccessToken } from './cloudAuth';
 import { normalizeHistoryForProvider, logRepair } from './historyNormalizer';
 import type { ChatMessage, ToolCall, ToolSpec } from './types';
@@ -153,7 +151,7 @@ export function friendlyError(err: unknown): { message: string; retryable: boole
 }
 
 export interface ChatCompletionOptions {
-  provider: AiProvider;
+  modelId: string;
   messages: ChatMessage[];
   tools?: ToolSpec[];
   temperature?: number;
@@ -168,8 +166,6 @@ export interface ChatCompletionOptions {
   onRetry?: (info: { attempt: number; max: number; delayMs: number; error: AiRequestError }) => void;
   /** Model tried once if every retry of the primary model fails. Off by default. */
   fallbackModel?: string | null;
-  /** Override the provider's default model for this request. */
-  model?: string;
 }
 
 /** A sleep that rejects as soon as the turn is aborted. */
@@ -368,7 +364,6 @@ function readThoughtsArray(message: Record<string, unknown>): string {
  * every provider, every caller and every tool round shares one policy.
  */
 async function attemptCompletion(
-  provider: AiProvider,
   body: string,
   signal?: AbortSignal,
 ): Promise<Response> {
@@ -490,8 +485,8 @@ export function simplifyHistoryForRetry(messages: ChatMessage[]): ChatMessage[] 
 }
 
 export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatCompletionResult> {
-  const { provider, tools, temperature = 0.2, maxTokens = 4096 } = opts;
-  const { signal, onRetry, fallbackModel, model } = opts;
+  const { modelId, tools, temperature = 0.2, maxTokens = 4096 } = opts;
+  const { signal, onRetry, fallbackModel } = opts;
 
   // EVERY request goes through the one normalizer, here, so the main path, each
   // retry, the fallback model and every tool round are covered by construction
@@ -501,17 +496,11 @@ export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatC
   logRepair(normalized.report);
   const messages = normalized.messages as ChatMessage[];
 
-  // A thinking model draws its reasoning from the SAME `max_tokens` budget as
-  // the answer, so a tight cap is spent on thinking and the reply comes back
-  // empty or truncated. The budget has to cover both.
-  const effectiveModel = model ?? provider.modelName;
-  const buildBodyFrom = (msgs: ChatMessage[], mdl: string) =>
+  // The server expects `modelId` (our user model ID) and will look up the
+  // actual provider model name from the stored record.
+  const buildBodyFrom = (msgs: ChatMessage[]) =>
     JSON.stringify({
-      model: mdl,
-      // Gateway-only hint (Gemini default, Groq on request) — the server
-      // strips it before forwarding. Derived from the row's base URL so the
-      // user's model choice keeps working exactly as before.
-      provider: gatewayProviderFor(provider.baseUrl),
+      modelId,  // Gateway-only: our user model ID
       messages: toWire(msgs),
       tools: tools && tools.length > 0 ? tools : undefined,
       tool_choice: tools && tools.length > 0 ? 'auto' : undefined,
@@ -521,7 +510,7 @@ export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatC
 
   // The buildBody above is the normal path; this is the same body built from an
   // arbitrary message list, used only by the turn-order safety net.
-  const buildBody = (mdl: string) => buildBodyFrom(messages, mdl);
+  const buildBody = () => buildBodyFrom(messages);
 
   // Retry the REQUEST, never the turn. The transcript, the stored session rows
   // and any tool results already recorded are untouched by this loop, so a
@@ -536,7 +525,7 @@ export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatC
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
     let res: Response;
     try {
-      res = await attemptCompletion(provider, buildBody(effectiveModel), signal);
+      res = await attemptCompletion(buildBody(), signal);
     } catch (e) {
       const err = e instanceof AiRequestError ? e : new AiRequestError(String(e));
 
@@ -548,7 +537,7 @@ export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatC
         repairedConversation = true;
         const simplified = simplifyHistoryForRetry(messages);
         try {
-          const retry = await attemptCompletion(provider, buildBodyFrom(simplified, effectiveModel), signal);
+          const retry = await attemptCompletion(buildBodyFrom(simplified), signal);
           const payload = await retry.json();
           return { ...readCompletion(payload), conversationRepaired: true };
         } catch {
@@ -577,11 +566,19 @@ export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatC
   }
 
   // Every retry of the primary model failed. Try the optional fallback ONCE,
-  // with no further retries: it is a different model, not a fresher attempt at
+  // with no further retries: it is a different user model ID, not a fresher attempt at
   // the same one, so backing off again would only multiply the wait.
   const fallback = (fallbackModel ?? '').trim();
   if (fallback && !signal?.aborted) {
-    const res = await attemptCompletion(provider, buildBody(fallback), signal);
+    const fallbackBody = JSON.stringify({
+      modelId: fallback,
+      messages: toWire(messages),
+      tools: tools && tools.length > 0 ? tools : undefined,
+      tool_choice: tools && tools.length > 0 ? 'auto' : undefined,
+      temperature,
+      max_tokens: maxTokens,
+    });
+    const res = await attemptCompletion(fallbackBody, signal);
     const payload = await res.json();
     return { ...readCompletion(payload), answeredByFallback: fallback };
   }

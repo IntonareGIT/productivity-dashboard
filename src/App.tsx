@@ -20,7 +20,6 @@ import { AboutPage } from './features/about/AboutPage';
 import { AssistantLauncher } from './features/ai/components/AssistantLauncher';
 import { AssistantPanel } from './features/ai/components/AssistantPanel';
 import { AssistantPage } from './features/ai/components/AssistantPage';
-import { providerIsReady } from './features/ai/aiProviderRepo';
 import { getCloudAccessToken } from './features/ai/cloudAuth';
 import { useAssistantStore } from './stores/useAssistantStore';
 import { useFloatingAiStore } from './stores/useFloatingAiStore';
@@ -139,32 +138,30 @@ export const App: React.FC = () => {
     setActiveTab(tab);
   }, [activeTab]);
   const loadPomodoroSettings = usePomodoroStore((s) => s.loadSettings);
-  const refreshAssistantProvider = useAssistantStore((s) => s.refreshProvider);
   // Live status -> theme mapping (synced); re-applies the theme when it changes.
   useThemeStatusMap();
   // Live synced UI state (current status + theme override).
   useUiState();
 
-  // Reactive: true once a default provider row names a model AND the user is
+  // Reactive: true once a model with a key exists AND the user is
   // signed in to Dexie Cloud (the /api/ai gateway authenticates every chat
   // request with the cloud token). Keeps the launcher/panel disabled-state
   // correct after Settings edits AND after sign-in / sign-out.
   const [assistantConfigured, setAssistantConfigured] = useState(false);
-  const providers = useLiveQuery(() => db.aiProviders.toArray());
+  const { models: assistantModels } = useAssistantStore();
   useEffect(() => {
     const evaluate = () => {
-      const flagged = (providers ?? []).find((p) => p.isDefault) ?? (providers ?? [])[0];
-      setAssistantConfigured(providerIsReady(flagged) && !!getCloudAccessToken());
-      void refreshAssistantProvider();
+      const hasModelWithKey = (assistantModels ?? []).some((m) => m.hasKey);
+      setAssistantConfigured(hasModelWithKey && !!getCloudAccessToken());
     };
     evaluate();
     // Flip the flag when the session changes: sign-in completes AFTER the
-    // provider rows are already loaded, so the rows alone cannot drive this.
+    // models are already loaded, so the models alone cannot drive this.
     const sub = (db as {
       cloud?: { currentUser?: { subscribe?: (fn: () => void) => { unsubscribe(): void } } };
     }).cloud?.currentUser?.subscribe?.(evaluate);
     return () => sub?.unsubscribe?.();
-  }, [providers, refreshAssistantProvider]);
+  }, [assistantModels]);
 
   // The assistant's "not configured" affordances jump straight to Settings.
   const openAssistantSettings = useCallback(() => {

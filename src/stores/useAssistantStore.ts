@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import { format } from 'date-fns';
 import { chatCompletion, friendlyError } from '../features/ai/aiClient';
-import { getDefaultProvider, providerIsReady } from '../features/ai/aiProviderRepo';
 import { CLOUD_SIGN_IN_REQUIRED, cloudAuthRequired, getCloudAccessToken } from '../features/ai/cloudAuth';
 import { NOT_EXECUTED } from '../features/ai/historyNormalizer';
 import {
@@ -33,7 +32,7 @@ import { WEEK_STARTS_ON } from '../features/calendar/categories';
 import type { AssistantViewMessage } from '../features/ai/chatRepo';
 import { describeDeleteCounts } from '../features/ai/toolsLibrary';
 import type { ChatMessage, ToolSpec } from '../features/ai/types';
-import type { AiProvider, ChatSession } from '../types';
+import type { ChatSession, UserModel } from '../types';
 import { newId } from '../utils/id';
 import { toast } from './useToastStore';
 
@@ -225,6 +224,10 @@ interface AssistantState {
    * get stuck on screen if a tool throws.
    */
   activeTool: { name: string; label: string } | null;
+  /**
+   * Display name of the currently selected model (for the header).
+   * Null when no model is selected.
+   */
   providerLabel: string | null;
   providerReady: boolean;
   providerError: string | null;
@@ -242,13 +245,15 @@ interface AssistantState {
   failure: { message: string; details: string; retryable: boolean; noKeyProvider?: string } | null;
   /** Set when the last answer came from the configured fallback model. */
   fallbackNotice: string | null;
-  /** Sessions this provider can safely continue (v7). */
+  /** Sessions this model can safely continue (v7). */
   sessions: ChatSession[];
   sessionId: string | null;
   view: AssistantViewMsg[];
   pending: PendingCall | null;
-  // Per-provider model selection.
-  selectedModels: Record<string, string>;
+  // User's AI models (fetched from server)
+  models: UserModel[];
+  // Currently selected model ID (from user's models with keys)
+  selectedModelId: string | null;
 
   setOpen: (open: boolean) => void;
   ask: (text: string) => void;
@@ -260,7 +265,8 @@ interface AssistantState {
   confirmPending: () => Promise<void>;
   cancelPending: () => void;
   clearChat: () => Promise<void>;
-  refreshProvider: () => Promise<void>;
+  /** Fetch user's models from the server. */
+  fetchModels: () => Promise<void>;
   loadSessions: () => Promise<void>;
   newSession: () => Promise<void>;
   selectSession: (id: string) => Promise<void>;
@@ -273,7 +279,8 @@ interface AssistantState {
   setDraft: (text: string) => void;
   listScrollTop: number;
   setListScrollTop: (top: number) => void;
-  setModel: (providerId: string, model: string) => void;
+  /** Select a model for chat. */
+  setModel: (modelId: string) => void;
 }
 
 const WELCOME: AssistantViewMsg[] = [
@@ -313,18 +320,30 @@ const isStopped = (err: unknown): boolean =>
   (err instanceof Error && (err.name === 'AbortError' || err.message === 'Stopped'));
 
 export const useAssistantStore = create<AssistantState>((set, get) => {
-  async function resolveProvider(): Promise<{ provider: AiProvider | null; error: string | null }> {
-    const provider = await getDefaultProvider();
-    if (!provider || !providerIsReady(provider)) {
-      const msg = 'No AI model is configured yet. Open Settings → AI Providers to add one.';
-      return { provider: null, error: msg };
+  async function resolveModel(): Promise<{ model: UserModel | null; error: string | null }> {
+    // Ensure models are fetched
+    const { models, selectedModelId, fetchModels } = get();
+    if (models.length === 0) {
+      await fetchModels();
+    }
+    const refreshedModels = get().models;
+    if (refreshedModels.length === 0) {
+      const msg = 'No AI model with a saved key is configured. Open Settings → AI Models to add one.';
+      return { model: null, error: msg };
     }
     // The gateway only trusts Dexie Cloud sessions: a model row without a
     // sign-in cannot answer, so say so before any request is issued.
     if (cloudAuthRequired() && !getCloudAccessToken()) {
-      return { provider: null, error: CLOUD_SIGN_IN_REQUIRED };
+      return { model: null, error: CLOUD_SIGN_IN_REQUIRED };
     }
-    return { provider, error: null };
+    // Use selected model, or first available
+    const modelId = selectedModelId ?? refreshedModels[0].id;
+    const model = refreshedModels.find((m) => m.id === modelId);
+    if (!model) {
+      // Fallback to first model
+      return { model: refreshedModels[0], error: null };
+    }
+    return { model, error: null };
   }
 
   function pushView(msg: Omit<AssistantViewMsg, 'id'>): string {
@@ -336,25 +355,24 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
   /**
    * Resolve the session to write into.
    *
-   * Sessions are pinned to a provider. If the user switched the default
-   * provider, the old session's messages (with Gemini-specific
-   * `extra_content`) must never be replayed against the new one, so we start a
-   * fresh session instead.
+   * Sessions are pinned to a model. If the user switched the model,
+   * the old session's messages (with provider-specific fields) must never
+   * be replayed against the new one, so we start a fresh session instead.
    */
-  async function ensureSession(provider: AiProvider): Promise<string> {
+  async function ensureSession(model: UserModel): Promise<string> {
     const current = get().sessionId;
     if (current) {
       const session = (await listSessions()).find((s) => s.id === current);
-      if (session && session.providerId === provider.id) return current;
+      if (session && session.providerId === model.id) return current;
     }
-    // Reuse an existing session for this provider when one is idle.
-    const mine = (await listSessions()).find((s) => s.providerId === provider.id);
+    // Reuse an existing session for this model when one is idle.
+    const mine = (await listSessions()).find((s) => s.providerId === model.id);
     if (mine) {
       const rows = await listMessages(mine.id);
       set({ sessionId: mine.id, view: rows.length ? toViewMessages(rows) : WELCOME, pending: null });
       return mine.id;
     }
-    const created = await createSession(provider.id);
+    const created = await createSession(model.id);
     set({ sessionId: created.id, view: WELCOME, pending: null });
     return created.id;
   }
@@ -418,7 +436,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
   }
 
   /**
-   * One provider request, with the retry status wired to the UI.
+   * One model request, with the retry status wired to the UI.
    *
    * Every request in a turn goes through here, which is what makes the retry
    * policy single-sourced: the status line, the abort signal, the fallback
@@ -429,18 +447,17 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
    * failed, so it can never be left on screen after the turn is over.
    */
   async function request(
-    provider: AiProvider,
+    model: UserModel,
     messages: ChatMessage[],
-    opts: { tools?: ToolSpec[]; model?: string } = {},
+    opts: { tools?: ToolSpec[] } = {},
   ) {
     try {
       return await chatCompletion({
-        provider,
+        modelId: model.id,
         messages,
         tools: opts.tools,
         signal: turnController?.signal,
-        fallbackModel: provider.fallbackModel ?? null,
-        model: opts.model,
+        // fallbackModel is now per-model, stored on the server
         onRetry: ({ attempt, max }) => {
           set({ retryStatus: `Model is busy, retrying (${attempt}/${max})...` });
         },
@@ -486,13 +503,38 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     view: WELCOME,
     pending: null,
     activeTool: null,
-    // Per-provider model selection, persisted in localStorage.
-    selectedModels: {} as Record<string, string>,
+    // User's AI models (fetched from server)
+    models: [] as UserModel[],
+    // Currently selected model ID (from user's models with keys)
+    selectedModelId: null as string | null,
+
+    // Fetch user's models from the server
+    fetchModels: async () => {
+      const token = getCloudAccessToken();
+      if (!token) return;
+      try {
+        const res = await fetch('/api/models', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const { models } = await res.json();
+          // Only models with keys can be used for chat
+          const withKeys = models.filter((m: UserModel) => m.hasKey);
+          set({ models: withKeys });
+          // If no model selected yet, pick the first one
+          if (withKeys.length > 0 && !get().selectedModelId) {
+            set({ selectedModelId: withKeys[0].id });
+          }
+        }
+      } catch {
+        // Ignore - models will be empty
+      }
+    },
 
     setOpen: (open) => {
       set({ open });
       if (open) {
-        void get().refreshProvider();
+        void get().fetchModels();
         // Do NOT load sessions or select a session here.
         // The assistant should always open with an empty new conversation (WELCOME).
         // Past conversations are loaded only when the user explicitly opens them
@@ -502,24 +544,27 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
 
     ask: (text) => {
       set({ open: true });
-      void get().refreshProvider();
+      void get().fetchModels();
       const trimmed = text.trim();
       if (trimmed) void get().send(trimmed);
     },
 
+    // Select a model for chat
+    setModel: (modelId: string) => set({ selectedModelId: modelId }),
+
     loadSessions: async () => {
-      const provider = await getDefaultProvider();
+      const { selectedModelId } = get();
       const all = await listSessions();
-      // Only sessions belonging to the active provider are replayable.
-      const mine = provider ? all.filter((s) => s.providerId === provider.id) : [];
+      // Only sessions belonging to the active model are replayable.
+      const mine = selectedModelId ? all.filter((s) => s.providerId === selectedModelId) : [];
       set({ sessions: mine });
       // Do NOT auto-select a session. The assistant opens with WELCOME.
       // The user can select a past session from the history list.
     },
 
     newSession: async () => {
-      const provider = await getDefaultProvider();
-      const created = await createSession(provider ? provider.id : null);
+      const { selectedModelId } = get();
+      const created = await createSession(selectedModelId ?? null);
       set({ sessionId: created.id, view: WELCOME, pending: null, sessions: await listSessions() });
     },
 
@@ -552,10 +597,6 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     // so they deliberately stay out of Dexie and out of the backup.
     setDraft: (draft) => set({ draft }),
     setListScrollTop: (listScrollTop) => set({ listScrollTop }),
-    setModel: (providerId: string, model: string) =>
-      set((s) => ({
-        selectedModels: { ...s.selectedModels, [providerId]: model },
-      })),
 
     clearChat: async () => {
       const current = get().sessionId;
@@ -590,22 +631,22 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       turnController = new AbortController();
       lastUserPrompt = prompt;
       try {
-        const { provider, error } = await resolveProvider();
-        if (!provider) {
-          pushView({ role: 'assistant', text: error ?? 'No AI provider configured.', error: true });
+        const { model, error } = await resolveModel();
+        if (!model) {
+          pushView({ role: 'assistant', text: error ?? 'No AI model configured.', error: true });
           set({ providerReady: false, providerError: error });
           return;
         }
-        set({ providerLabel: provider.label, providerReady: true, providerError: null });
+        set({ providerLabel: model.displayName, providerReady: true, providerError: null });
 
-        // A provider switch starts a fresh session, so nothing from the old
-        // provider (Gemini extra_content) is ever replayed to the new one.
-        const sessionId = await ensureSession(provider);
+        // A model switch starts a fresh session, so nothing from the old
+        // model (provider-specific fields) is ever replayed to the new one.
+        const sessionId = await ensureSession(model);
         await autoTitle(sessionId, prompt);
 
         // Typing a new message while a confirmation is still open would store
         // a user turn directly after that unanswered assistant tool_calls turn.
-        // Gemini rejects the resulting sequence with HTTP 400, so the pending
+        // The provider rejects the resulting sequence with HTTP 400, so the pending
         // call is resolved as declined first — the write never happened, so this
         // is also the honest record of what occurred.
         const stale = get().pending;
@@ -640,10 +681,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
           // the user asked for it to stop.
           if (turnController?.signal.aborted) throw new TurnStopped();
 
-          const result = await request(provider, [
+          const result = await request(model, [
             { role: 'system', content: systemPrompt(new Date()) },
             ...transcript,
-          ], { tools: TOOL_SPECS, model: get().selectedModels[provider.id] });
+          ], { tools: TOOL_SPECS });
 
           if (result.answeredByFallback) {
             set({ fallbackNotice: `Answered by fallback model ${result.answeredByFallback}` });
@@ -729,10 +770,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         // final answer here cannot introduce an HTTP 400.
         if (!answered) {
           if (turnController?.signal.aborted) throw new TurnStopped();
-          const closing = await request(provider, [
+          const closing = await request(model, [
             { role: 'system', content: systemPrompt(new Date()) },
             ...transcript,
-          ], { model: get().selectedModels[provider.id] });
+          ], { tools: [] });
           const raw = closing.content.trim() ||
             'I reached the limit on how many actions I can take in one go. Here is where things stand — tell me what to do next.';
           transcript = [...transcript, { role: 'assistant', content: raw }];
@@ -815,9 +856,9 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       if (!pending || get().busy) return;
       set({ pending: null, busy: true });
       try {
-        const { provider, error } = await resolveProvider();
-        if (!provider) {
-          pushView({ role: 'assistant', text: error ?? 'No AI provider configured.', error: true });
+        const { model, error } = await resolveModel();
+        if (!model) {
+          pushView({ role: 'assistant', text: error ?? 'No AI model configured.', error: true });
           return;
         }
         const sessionId = get().sessionId;
@@ -847,7 +888,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
           toolMsg,
         ];
         const followUp = await chatCompletion({
-          provider,
+          modelId: model.id,
           messages: [
             { role: 'system', content: systemPrompt(new Date()) },
             ...transcript,
@@ -856,7 +897,6 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
               content: `The user confirmed. ${pending.description} The action completed with: ${exec.summary}. Confirm the outcome in plain language.`,
             },
           ],
-          model: get().selectedModels[provider.id],
         });
         const reply = followUp.content.trim() || exec.summary;
         const replyMsg: ChatMessage = { role: 'assistant', content: reply, reasoning: followUp.reasoning };
@@ -894,23 +934,6 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       } else {
         pushView({ role: 'tool', toolName: pending.name, text: 'Cancelled — nothing was changed.' });
       }
-    },
-
-    refreshProvider: async () => {
-      const provider = await getDefaultProvider();
-      if (!provider || !providerIsReady(provider)) {
-        set({
-          providerLabel: provider?.label ?? null,
-          providerReady: false,
-          providerError: 'No AI model is configured yet. Open Settings → AI Providers to add one.',
-        });
-        return;
-      }
-      if (cloudAuthRequired() && !getCloudAccessToken()) {
-        set({ providerLabel: provider.label, providerReady: false, providerError: CLOUD_SIGN_IN_REQUIRED });
-        return;
-      }
-      set({ providerLabel: provider.label, providerReady: true, providerError: null });
     },
   };
 });

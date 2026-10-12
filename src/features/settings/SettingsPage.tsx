@@ -5,8 +5,7 @@ import { useStatusThemeStore, defaultMappingFor } from '../../stores/useStatusTh
 import { useThemeStatusMap } from '../../hooks/useThemeStatusMap';
 import { WeeklySchedulesSettings } from './components/WeeklySchedulesSettings';
 import { PomodoroSettingsSection } from './components/PomodoroSettingsSection';
-import { AiProvidersSettings } from './components/AiProvidersSettings';
-import { AiKeysSettings } from './components/AiKeysSettings';
+import { AiModelsSettings } from './components/AiModelsSettings';
 import { ChatHistorySettings } from './components/ChatHistorySettings';
 import { FloatingAiSettings } from './components/FloatingAiSettings';
 import { SyncSettings } from './components/SyncSettings';
@@ -52,11 +51,8 @@ export const SettingsPage: React.FC<{ onOpenAbout?: () => void }> = ({ onOpenAbo
       {/* Pomodoro durations and alerts */}
       <PomodoroSettingsSection />
 
-      {/* AI Providers (configurable OpenAI-compatible models) */}
-      <AiProvidersSettings />
-
-      {/* Per-user encrypted API keys for each provider */}
-      <AiKeysSettings />
+      {/* User AI Models (display name, provider, base URL, model ID, capabilities, encrypted API key) */}
+      <AiModelsSettings />
 
       {/* Assistant conversation history */}
       <ChatHistorySettings />

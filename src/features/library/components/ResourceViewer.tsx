@@ -1,10 +1,12 @@
-import React, { Suspense, lazy, useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { Download, ExternalLink, FileText, HardDriveDownload, Loader2, TriangleAlert } from 'lucide-react';
 import { Modal } from '../../../components/ui/Modal';
 import { ImageViewer } from './ImageViewer';
 import { ViewerErrorBoundary } from './ViewerErrorBoundary';
 import type { Resource } from '../../../types';
 import { fileTypeLabel, googleDriveEmbedUrl, previewKindFor } from '../previewKind';
+import { lazyWithRecovery } from '../../../components/ui/ChunkLoadRecovery';
+import { toast } from '../../../stores/useToastStore';
 
 /**
  * pdf.js is ~400 kB of JS plus a ~1.2 MB worker, so it is code-split and only
@@ -12,8 +14,34 @@ import { fileTypeLabel, googleDriveEmbedUrl, previewKindFor } from '../previewKi
  * the initial bundle and slow down every page of the app, most of which have
  * nothing to do with PDFs.
  */
-const PdfViewer = lazy(() =>
+const PdfViewer = lazyWithRecovery(() =>
   import('./PdfViewer').then((m) => ({ default: m.PdfViewer })),
+  {
+    onChunkLoadFailure: (error) => {
+      // Only handle the specific "Failed to fetch dynamically imported module" error
+      if (!/Failed to fetch dynamically imported module/i.test(error.message)) {
+        return false;
+      }
+      toast('error', 'A new version is available', 'Click to reload and get the latest version.');
+      return true;
+    },
+    onReload: () => {
+      // Clear all caches and reload
+      if ('caches' in window) {
+        caches.keys().then((names) => {
+          names.forEach((name) => caches.delete(name));
+        });
+      }
+      // Unregister all service workers
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then((regs) => {
+          regs.forEach((reg) => reg.unregister());
+        });
+      }
+      // Force reload from network
+      window.location.reload();
+    },
+  },
 );
 
 const PdfLoading = () => (

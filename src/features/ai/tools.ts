@@ -32,7 +32,7 @@ import {
   describeLibraryToolCall,
   executeLibraryTool,
 } from './toolsLibrary';
-import { topicPlainText } from '../library/libraryRepo';
+import { topicPlainText, fileLocation } from '../library/libraryRepo';
 import {
   CALENDAR_CONFIRM_TOOL_NAMES,
   CALENDAR_TOOL_NAMES,
@@ -726,8 +726,9 @@ async function manageSplitScreen(args: Record<string, unknown>): Promise<ToolExe
   let topicId: string | undefined;
   if (viewType === 'pdf') {
     if (!resource) throw new ToolError('A PDF pane needs a "resourceId" — search the library first.');
-    if (!resource.blob) {
-      throw new ToolError(`“${resource.title}” has no stored file on this device, so it cannot be previewed.`);
+    const location = fileLocation(resource);
+    if (location.kind === 'none') {
+      throw new ToolError(`“${resource.title}” has no local copy or cloud copy, so it cannot be previewed.`);
     }
   }
   if (viewType === 'notes') {

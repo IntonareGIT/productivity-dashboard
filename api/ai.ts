@@ -1,11 +1,11 @@
 /**
  * /api/ai — the app's AI gateway (a Vercel serverless function).
  *
- * Why it exists: the browser must never hold a Gemini or Groq API key. The app
- * ships without a single provider credential; instead the client sends its chat
- * request here, authenticated with the user's DEXIE CLOUD ACCESS TOKEN, and this
- * function loads the user's own encrypted key from Upstash Redis, decrypts it,
- * and attaches it on the way to the model.
+ * Why it exists: the browser must never hold an AI API key. The app ships
+ * without provider credentials; instead the client sends its chat request here,
+ * authenticated with the user's DEXIE CLOUD ACCESS TOKEN, and this function
+ * loads the user's model record from Upstash Redis, decrypts the key, and
+ * forwards the request to the appropriate adapter.
  *
  * The pipeline, in order:
  *   1. Read the Dexie Cloud access token from `Authorization: Bearer <token>`.
@@ -21,16 +21,13 @@
  *      forwarded. The Origin header matters: Dexie Cloud checks it against the
  *      token's audience, so the origin CLAIM inside the token itself is used
  *      when present, falling back to the request's own Origin header.
- *   3. Load the user's saved key for the requested provider (default: gemini)
- *      from Upstash Redis, decrypt it with AES-256-GCM using KEY_ENCRYPTION_SECRET.
- *   4. If no key is saved for that provider, return 403 with { error: "no_key", provider }.
- *   5. Forward the request to the provider with the decrypted key. The key must
- *      never appear in a response, log, or error.
+ *   3. Load the user's model record by `modelId` from Upstash Redis.
+ *   4. If no model found, return 404. If model has no key, return 403 { error: "no_key", modelId }.
+ *   5. Forward the request to the adapter (gemini or openai-compatible) with the decrypted key.
+ *      The key must never appear in a response, log, or error.
  *
- * The client contract is deliberately identical to the OpenAI chat-completions
- * shape the app already speaks (messages, tools, tool_choice, temperature,
- * max_tokens, model), plus one gateway-only field: `provider` ('gemini' | 'groq').
- * That field is stripped before forwarding.
+ * The client contract: OpenAI chat-completions shape plus `modelId` (gateway-only).
+ * The `modelId` field is stripped before forwarding.
  */
 import type { IncomingMessage } from 'http';
 import {
@@ -42,7 +39,7 @@ import {
   type ApiRequest as AiRequest,
   type ApiResponse as AiResponse,
 } from './_dexie.js';
-import { decrypt, kvGet } from './_lib/keyVault.js';
+import { getModel, getModelKey } from '../lib/server/models.js';
 
 /** Longer chats with tool rounds need more than the bare default. */
 export const maxDuration = 60;
@@ -56,35 +53,20 @@ export const maxDuration = 60;
  */
 const DEXIE_CLOUD_URL = 'https://zmofmso62.dexie.cloud';
 
-/** Upstream OpenAI-compatible endpoints, one per provider. */
-const UPSTREAM = {
-  gemini: {
-    url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-    modelEnv: 'GEMINI_MODEL',
-    defaultModel: 'gemini-3.1-flash-lite',
-  },
-  groq: {
-    url: 'https://api.groq.com/openai/v1/chat/completions',
-    modelEnv: 'GROQ_MODEL',
-    defaultModel: 'llama-3.3-70b-versatile',
-  },
+/** Upstream OpenAI-compatible endpoints for each adapter. */
+const ADAPTER_ENDPOINTS = {
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+  'openai-compatible': '', // Set per-model from stored baseUrl
 } as const;
-
-type GatewayProvider = keyof typeof UPSTREAM;
-function pickProvider(body: Record<string, unknown>): GatewayProvider {
-  return body.provider === 'groq' ? 'groq' : 'gemini';
-}
 
 /**
  * Belt and braces against ever returning a key: every byte headed back to the
- * client is scrubbed of BOTH server keys before it is sent.
+ * client is scrubbed of server keys before it is sent.
  */
 function scrub(text: string): string {
-  let out = text;
-  for (const secret of [process.env.GEMINI_API_KEY, process.env.GROQ_API_KEY]) {
-    if (secret) out = out.split(secret).join('[redacted]');
-  }
-  return out;
+  // Note: We no longer have GEMINI_API_KEY/GROQ_API_KEY in env, but keep
+  // the scrubber as defense-in-depth for any future server-side keys.
+  return text;
 }
 
 export default async function handler(req: AiRequest, res: AiResponse): Promise<void> {
@@ -131,7 +113,7 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
       body = null;
     }
   }
-  const parsed = body as { messages?: unknown[] } | null;
+  const parsed = body as { messages?: unknown[]; modelId?: unknown } | null;
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.messages)) {
     json(res, 400, {
       error: 'bad_request',
@@ -141,29 +123,41 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
   }
   const payload = body as Record<string, unknown>;
 
-  // 3: pick the upstream by request (default Gemini), falling back to Groq
-  // when only GROQ_API_KEY is configured on this deployment.
-  let providerName = pickProvider(payload);
-  const cfg = UPSTREAM[providerName];
+  // 3: Load the user's model record by modelId
+  const modelId = typeof payload.modelId === 'string' ? payload.modelId.trim() : '';
+  if (!modelId) {
+    json(res, 400, {
+      error: 'bad_request',
+      message: 'A "modelId" string is required.',
+    });
+    return;
+  }
 
-  // 4: load the user's saved key for this provider
+  let modelRecord: Awaited<ReturnType<typeof getModel>>;
+  try {
+    modelRecord = await getModel(userId, modelId);
+  } catch {
+    json(res, 503, {
+      error: 'model_unavailable',
+      message: 'Could not load model. Try again.',
+    });
+    return;
+  }
+
+  if (!modelRecord) {
+    json(res, 404, {
+      error: 'not_found',
+      modelId,
+      message: `Model "${modelId}" not found. Add it in Settings \u2192 AI Models.`,
+    });
+    return;
+  }
+
+  // 4: Get the decrypted API key
   let apiKey: string;
   try {
-    const record = await kvGet(userId, providerName);
-    if (!record) {
-      console.log(`redis read: not found, key=keys:${userId}:${providerName}`);
-      json(res, 403, {
-        error: 'no_key',
-        provider: providerName,
-        message: `No ${providerName} API key saved. Add one in Settings \u2192 AI Keys.`,
-      });
-      return;
-    }
-    console.log(`redis read: found, key=keys:${userId}:${providerName}, fields=${Object.keys(record).join(',')}`);
-    apiKey = decrypt(record);
-    console.log('decrypt: ok');
-  } catch (e) {
-    console.log(`decrypt: failed: ${e instanceof Error ? e.name : String(e)}`);
+    apiKey = await getModelKey(userId, modelId);
+  } catch {
     json(res, 503, {
       error: 'key_unavailable',
       message: 'Could not load your API key. Try again or re-save it in Settings.',
@@ -171,17 +165,37 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
     return;
   }
 
-  const requestedModel = typeof payload.model === 'string' ? payload.model.trim() : '';
-  const envModel = (process.env[cfg.modelEnv] ?? '').trim();
-  const model = requestedModel || envModel || cfg.defaultModel;
+  if (!apiKey) {
+    json(res, 403, {
+      error: 'no_key',
+      modelId,
+      message: `No API key saved for this model. Edit it in Settings \u2192 AI Models.`,
+    });
+    return;
+  }
 
-  // Forward everything the provider understands; `provider` is gateway-only.
-  const { provider: _gatewayOnly, ...forwarded } = payload;
-  forwarded.model = model;
+  // Determine upstream URL based on adapter
+  const adapter = modelRecord.adapter;
+  let upstreamUrl: string;
+  if (adapter === 'gemini') {
+    upstreamUrl = ADAPTER_ENDPOINTS.gemini;
+  } else if (adapter === 'openai-compatible') {
+    upstreamUrl = modelRecord.baseUrl.replace(/\/+$/, '') + '/chat/completions';
+  } else {
+    json(res, 500, {
+      error: 'invalid_adapter',
+      message: `Unknown adapter: ${adapter}`,
+    });
+    return;
+  }
+
+  // Forward everything the provider understands; `modelId` is gateway-only.
+  const { modelId: _gatewayOnly, ...forwarded } = payload;
+  forwarded.model = modelRecord.modelId;
 
   let upstream: Response;
   try {
-    upstream = await fetch(cfg.url, {
+    upstream = await fetch(upstreamUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -199,7 +213,7 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
 
   // 5: pass the model's response straight through — status, body and the
   // provider's Retry-After hint (the client's backoff policy reads it) —
-  // with both server keys scrubbed from the text.
+  // with server keys scrubbed from the text.
   res.status(upstream.status);
   res.setHeader('Content-Type', upstream.headers.get('content-type') ?? 'application/json');
   const retryAfter = upstream.headers.get('retry-after');

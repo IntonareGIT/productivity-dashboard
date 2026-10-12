@@ -30,11 +30,12 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
   const loadSessions = useAssistantStore((s) => s.loadSessions);
   const providerReady = useAssistantStore((s) => s.providerReady);
   const providerLabel = useAssistantStore((s) => s.providerLabel);
-  const selectedModels = useAssistantStore((s) => s.selectedModels);
+  const models = useAssistantStore((s) => s.models);
+  const selectedModelId = useAssistantStore((s) => s.selectedModelId);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
 
-  const model = providerLabel && selectedModels[providerLabel];
+  const model = models.find((m) => m.id === selectedModelId);
 
   // The page owns the conversation even when the bubble is closed.
   React.useEffect(() => {
@@ -73,7 +74,7 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
                   </span>
                   {model && (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-bg-elevated border border-border text-[10px] text-content-secondary">
-                      {model}
+                      {model.modelId}
                     </span>
                   )}
                 </div>
