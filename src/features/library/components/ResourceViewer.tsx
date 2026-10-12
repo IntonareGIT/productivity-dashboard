@@ -302,14 +302,14 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
           </div>
         )}
 
-        {kind === 'none' && (
+{kind === 'none' && (
           <div className="flex flex-col items-center gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-10 text-center">
             <HardDriveDownload className="w-9 h-9 text-amber-500" aria-hidden="true" />
             <div>
               <p className="text-sm font-semibold text-content-primary">File not available on this device</p>
               <p className="mt-1 text-xs text-content-secondary">
                 {resource.kind === 'file'
-                  ? 'Uploaded file contents are stored on the device that added them and are not synced. Add the file again on this device to preview it.'
+                  ? 'This file has no bytes on this device and no cloud copy to fetch. Re-upload it here to preview it.'
                   : 'This resource has no URL or file attached.'}
               </p>
             </div>

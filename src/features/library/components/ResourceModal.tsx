@@ -22,6 +22,27 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** A single 0..1 gauge that moves with the bytes actually uploaded. */
+const UploadGauge: React.FC<{ loaded: number; total: number }> = ({ loaded, total }) => {
+  const pct = total > 0 ? Math.min(1, loaded / total) : 0;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-[11px] text-content-tertiary">
+        <span>Uploading…</span>
+        <span>
+          {formatBytes(loaded)} / {formatBytes(total)}
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-bg-elevated overflow-hidden">
+        <div
+          className="h-full rounded-full bg-accent/70 transition-all"
+          style={{ width: `${Math.round(pct * 100)}%` }}
+        />
+      </div>
+    </div>
+  );
+};
+
 export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId, resource, onClose }) => {
   const [kind, setKind] = useState<ResourceKind>(resource?.kind ?? 'link');
   const [title, setTitle] = useState('');
@@ -31,6 +52,8 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  /** Bytes uploaded during the current file upload, so the user can see it move. */
+  const [uploadProgress, setUploadProgress] = useState<{ loaded: number; total: number } | null>(null);
   /** Groups of this subject, for the picker. */
   const groups = useLiveQuery(
     () => db.resourceGroups.where('subjectId').equals(subjectId).toArray(),
@@ -47,6 +70,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
     setFile(null);
     setError('');
     setGroupId(resource?.groupId ?? '');
+    setUploadProgress(null);
   }, [resource]);
 
   const submit = async () => {
@@ -63,6 +87,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
       return;
     }
     setSaving(true);
+    setUploadProgress(null);
     try {
       const tags = tagsInput.split(',').map((t) => t.trim()).filter(Boolean);
       // `kind` MUST be passed: saveResource defaults it to 'link', which would
@@ -88,7 +113,10 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
           const userId = currentUserId();
           if (!userId) throw new Error('Sign in to Dexie Cloud to upload files.');
           const key = `${userId}/${file.name}`;
-          await uploadToR2(key, file, file.type || undefined);
+          setUploadProgress({ loaded: 0, total: file.size });
+          await uploadToR2(key, file, file.type || undefined, (loaded) => {
+            setUploadProgress({ loaded, total: file.size });
+          });
           r2Key = key;
         }
         await saveResource({
@@ -114,6 +142,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
       setError(e instanceof Error ? e.message : 'Failed to save.');
     } finally {
       setSaving(false);
+      setUploadProgress(null);
     }
   };
 
@@ -172,6 +201,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
                 Large file ({formatBytes(file.size)}) — the first sync may take a while.
               </p>
             )}
+            {uploadProgress && <div className="mt-2"><UploadGauge loaded={uploadProgress.loaded} total={uploadProgress.total} /></div>}
           </label>
         )}
 
@@ -203,7 +233,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
         <div className="flex items-center justify-end gap-2 border-t border-border/50 pt-4">
           <button onClick={onClose} className="px-4 min-h-[44px] rounded-xl text-sm text-content-secondary hover:text-content-primary transition-colors">Cancel</button>
           <button onClick={submit} disabled={saving} className="px-5 min-h-[44px] rounded-xl bg-accent hover:bg-accent-hover text-white text-sm font-semibold transition-colors">
-            {resource ? 'Save' : 'Add resource'}
+            {saving ? (uploadProgress ? 'Uploading…' : 'Saving…') : (resource ? 'Save' : 'Add resource')}
           </button>
         </div>
       </div>

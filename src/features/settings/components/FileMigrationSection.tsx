@@ -79,8 +79,11 @@ export const FileMigrationSection: React.FC = () => {
     >
       <div className="space-y-4">
         <p className="text-xs text-content-secondary">
-          Files you have uploaded are stored locally until this runs. After the migration each row keeps its
-          name, size and type, and the bytes live in R2 under your user id — no other user can reach them.
+          Every file you upload is written straight to Cloudflare R2, so it is reachable from every
+          signed-in device the moment it lands. This migration only exists for files that were added
+          before that change and are still sitting as blobs in IndexedDB — those bytes are not synced
+          and are not reachable from any other device. After the migration each row keeps its name,
+          size and type, and the bytes live in R2 under your user id — no other user can reach them.
         </p>
 
         {pending === 0 && status !== 'running' ? (
