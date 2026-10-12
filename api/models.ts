@@ -203,6 +203,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
 
     // Test the key before saving
     const testResult = await testModelKey(adapter, baseUrl, modelId, apiKey);
+    console.log('[DEBUG] POST /api/models testResult:', { adapter, ok: testResult.ok, message: testResult.message });
     if (!testResult.ok) {
       json(res, 400, { error: 'test_failed', message: testResult.message });
       return;
@@ -218,6 +219,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
         apiKey,
       };
       const model = await createModel(userId, input);
+      console.log('[DEBUG] POST /api/models createModel result:', { id: model.id, displayName: model.displayName, hasKey: model.hasKey });
       json(res, 200, { model });
     } catch {
       serverError(res, 'Model store unavailable');
