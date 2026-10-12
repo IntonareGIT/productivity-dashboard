@@ -66,6 +66,34 @@ function keyPath(userId: string, provider: string): string {
   return `keys:${userId}:${provider}`;
 }
 
+export function parseRecord(value: unknown): EncryptedRecord | null {
+  if (value == null) return null;
+  let parsed: unknown = value;
+  while (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      break;
+    }
+  }
+  if (
+    parsed &&
+    typeof parsed === 'object' &&
+    'iv' in parsed &&
+    'tag' in parsed &&
+    'ciphertext' in parsed &&
+    typeof (parsed as Record<string, unknown>).iv === 'string' &&
+    typeof (parsed as Record<string, unknown>).tag === 'string' &&
+    typeof (parsed as Record<string, unknown>).ciphertext === 'string' &&
+    (parsed as Record<string, unknown>).iv.length > 0 &&
+    (parsed as Record<string, unknown>).tag.length > 0 &&
+    (parsed as Record<string, unknown>).ciphertext.length > 0
+  ) {
+    return parsed as EncryptedRecord;
+  }
+  return null;
+}
+
 export async function kvGet(userId: string, provider: string): Promise<EncryptedRecord | null> {
   assertEnv();
   const res = await fetch(`${KV_URL}/get/${encodeURIComponent(keyPath(userId, provider))}`, {
@@ -74,7 +102,7 @@ export async function kvGet(userId: string, provider: string): Promise<Encrypted
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Upstash GET failed: ${res.status}`);
   const data = await res.json();
-  return data?.result ? data.result : null;
+  return parseRecord(data?.result);
 }
 
 export async function kvSet(userId: string, provider: string, record: EncryptedRecord): Promise<void> {

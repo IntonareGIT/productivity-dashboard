@@ -89,6 +89,8 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     }
     try {
       const record = encrypt(apiKey);
+      const body = JSON.stringify(record);
+      console.log(`redis write: key=keys:${userId}:${provider}, ivLen=${record.iv.length}, tagLen=${record.tag.length}, ciphertextLen=${record.ciphertext.length}`);
       await kvSet(userId, parsed.provider, record);
       json(res, 200, { ok: true });
     } catch {
