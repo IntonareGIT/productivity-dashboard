@@ -11,6 +11,14 @@
  * This is safe to re-run: a row already carrying an `r2Key` is skipped, and a
  * blob is only deleted AFTER its upload reports success. A failed or aborted
  * run leaves the blob in place and the row unchanged.
+ *
+ * "Pending" means file-kind and no r2Key yet — NOT "has a local blob". A file
+ * that arrived via sync carries its row here but not its bytes (Dexie Cloud
+ * only uploads blobs from the device that added them), so filtering on
+ * `blob instanceof Blob` silently skipped exactly the files this migration
+ * exists for. Those rows are listed, and when their bytes cannot be produced
+ * they are reported as failed with a message that says what to do, instead of
+ * being dropped in silence.
  */
 import type { Resource } from '../../types';
 import { db } from '../../db/db';
@@ -18,18 +26,21 @@ import { saveResource } from '../library/libraryRepo';
 import { uploadToR2, currentUserId } from './cloudClient';
 
 export interface MigrationProgress {
-  total: number; // rows that still have a blob to move
+  total: number; // file rows that still need an r2Key
   done: number; // rows whose upload completed
+  doneBytes: number; // bytes uploaded so far, for the in-file gauge
+  totalBytes: number; // bytes still to move
   current: string | null; // title of the row in flight, for the progress line
+  currentPct: number; // 0..1 share of the file currently uploading
   failed: { id: string; title: string; error: string }[];
 }
 
 export type MigrationStatus = 'idle' | 'running' | 'done' | 'aborted';
 
-/** Every file row that still holds its bytes locally. */
+/** Every file row that still needs an r2Key. */
 export async function listPendingMigrations(): Promise<Resource[]> {
   const all = await db.resources.where('kind').equals('file').toArray();
-  return all.filter((r) => r.blob instanceof Blob);
+  return all.filter((r) => !r.r2Key);
 }
 
 /**
@@ -53,21 +64,45 @@ export async function migrateFilesToCloud(
   const progress: MigrationProgress = {
     total: pending.length,
     done: 0,
+    doneBytes: 0,
+    totalBytes: pending.reduce((sum, r) => sum + (r.fileSize ?? 0), 0),
     current: null,
+    currentPct: 0,
     failed: [],
   };
 
+  // Lazy import keeps the R2 client out of the initial bundle until needed.
+  const { loadFileBytes } = await import('../library/libraryRepo');
+
   for (const resource of pending) {
     if (signal?.aborted) break;
-    const blob = resource.blob;
-    if (!(blob instanceof Blob)) continue;
+
+    const blob = await loadFileBytes(resource);
+    if (!(blob instanceof Blob)) {
+      progress.failed.push({
+        id: resource.id,
+        title: resource.title,
+        error:
+          'No bytes available on this device. Open the file once here, then re-run the migration.',
+      });
+      onProgress({ ...progress });
+      continue;
+    }
 
     progress.current = resource.title;
+    progress.currentPct = 0;
     onProgress({ ...progress });
 
     try {
       const key = `${userId}/${resource.id}-${resource.fileName ?? resource.title}`;
-      await uploadToR2(key, blob, resource.mimeType ?? undefined);
+      await uploadToR2(key, blob, resource.mimeType ?? undefined, (loaded, total) => {
+        progress.currentPct = total > 0 ? loaded / total : 0;
+        progress.doneBytes =
+          pending
+            .filter((r) => r.id !== resource.id)
+            .reduce((sum, r) => sum + (r.fileSize ?? 0), 0) + loaded;
+        onProgress({ ...progress });
+      });
       // The blob is gone only once the cloud copy exists. `saveResource`
       // rewrites the row with `blob: undefined` and `r2Key: key`, leaving
       // every other field (subject, topic, group, tags) untouched.
@@ -82,13 +117,18 @@ export async function migrateFilesToCloud(
         mimeType: resource.mimeType,
         fileSize: resource.fileSize,
         r2Key: key,
-        blob: undefined,
+        // `null` (not `undefined`) is deliberate: `saveResource` treats
+        // `undefined` as "keep the existing value", so passing it would leave
+        // the local blob in place and the row would keep growing. `null`
+        // clears it now that the cloud copy exists.
+        blob: null,
         tags: resource.tags,
         dueDate: resource.dueDate,
         completed: resource.completed,
         groupId: resource.groupId ?? null,
       });
       progress.done += 1;
+      progress.doneBytes += blob.size;
     } catch (e) {
       progress.failed.push({
         id: resource.id,
@@ -97,6 +137,7 @@ export async function migrateFilesToCloud(
       });
     } finally {
       progress.current = null;
+      progress.currentPct = 0;
       onProgress({ ...progress });
     }
   }

@@ -9,6 +9,13 @@ import {
   type MigrationStatus,
 } from '../../ai/fileMigration';
 
+/** Compact human-readable byte count for the per-file gauge. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 /**
  * One-time migration: move every file blob out of IndexedDB and into
  * Cloudflare R2, so every signed-in device can reach the same object.
@@ -38,7 +45,7 @@ export const FileMigrationSection: React.FC = () => {
     const ac = new AbortController();
     setController(ac);
     setStatus('running');
-    setProgress({ total: pending, done: 0, current: null, failed: [] });
+    setProgress({ total: pending, done: 0, doneBytes: 0, totalBytes: 0, current: null, currentPct: 0, failed: [] });
     try {
       const result = await migrateFilesToCloud(setProgress, ac.signal);
       setProgress(result);
@@ -84,7 +91,9 @@ export const FileMigrationSection: React.FC = () => {
           <div className="space-y-3">
             <div className="flex items-center justify-between text-xs">
               <span className="text-content-secondary">
-                {progress?.current ? `Uploading "${progress.current}"…` : 'Working…'}
+                {progress?.current
+                  ? `Uploading "${progress.current}"…`
+                  : 'Working…'}
               </span>
               <span className="font-semibold text-content-primary">
                 {done} / {total} ({pct}%)
@@ -96,6 +105,25 @@ export const FileMigrationSection: React.FC = () => {
                 style={{ width: `${pct}%` }}
               />
             </div>
+            {/* Per-file gauge: the overall bar only moves file-to-file, which
+                reads as "nothing happening" on a big file. This one moves with
+                the bytes actually uploaded. */}
+            {progress?.current && progress.totalBytes > 0 && (
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-[11px] text-content-tertiary">
+                  <span>{progress.current}</span>
+                  <span>
+                    {formatBytes(progress.doneBytes)} / {formatBytes(progress.totalBytes)}
+                  </span>
+                </div>
+                <div className="h-1.5 rounded-full bg-bg-elevated overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-accent/70 transition-all"
+                    style={{ width: `${Math.round(progress.currentPct * 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
             {progress?.failed && progress.failed.length > 0 && (
               <ul className="text-[11px] text-rose-500 space-y-1">
                 {progress.failed.map((f) => (
