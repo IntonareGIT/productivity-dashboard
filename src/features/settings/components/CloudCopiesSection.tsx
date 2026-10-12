@@ -31,10 +31,15 @@ export const CloudCopiesSection: React.FC = () => {
 
   const refresh = async () => {
     try {
-      const cached = await db.cloudBlobCache.toArray();
+      // The ledger, not the blob cache: the cache only holds files previewed
+      // here, so a file deleted on the site and never opened on this device
+      // would be invisible to it. The ledger records every r2Key this device
+      // has ever written, including ones whose row was later deleted.
+      const { listKnownCloudKeys } = await import('../../ai/cloudBlobCache');
+      const keys = await listKnownCloudKeys();
       const existing = await db.resources.toArray();
       const existingKeys = new Set(existing.map((r) => r.r2Key).filter(Boolean) as string[]);
-      setOrphans(cached.filter((row) => !existingKeys.has(row.key)));
+      setOrphans(keys.filter((k) => !existingKeys.has(k)).map((key) => ({ key, cachedAt: 0 })));
     } catch {
       setOrphans([]);
     }
@@ -48,8 +53,12 @@ export const CloudCopiesSection: React.FC = () => {
     setWorking(true);
     try {
       await deleteCloudObject(key);
+      // The blob cache, the blob-cache row, and the ledger entry all go
+      // together: the ledger is what makes orphan detection work, so it only
+      // makes sense to drop it once the cloud copy is actually gone.
       forgetCloudBlob(key);
-      await db.cloudBlobCache.delete(key);
+      const { forgetCloudKey } = await import('../../ai/cloudBlobCache');
+      await forgetCloudKey(key);
       toast('success', 'Deleted from the cloud', 'The copy in Cloudflare R2 is gone.');
     } catch (e) {
       toast('error', 'Could not delete from the cloud', e instanceof Error ? e.message : 'Unknown error.');

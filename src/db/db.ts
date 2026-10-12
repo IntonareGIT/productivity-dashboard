@@ -68,6 +68,14 @@ export class ProductivityDB extends Dexie {
    * does not re-download it. See cloudBlobCache.ts.
    */
   cloudBlobCache!: Table<{ key: string; blob: Blob; cachedAt: number }, string>;
+  /**
+   * Every r2Key this device has ever written to a resource row. Separate from
+   * the blob cache on purpose: the cache only holds files previewed here, so a
+   * file deleted on the site and never opened on this device would be
+   * invisible to orphan detection. This ledger is what makes "files in R2
+   * with no row here" actually detectable. See cloudBlobCache.ts.
+   */
+  knownCloudKeys!: Table<{ key: string; recordedAt: number }, string>;
 
   constructor() {
     // The Dexie Cloud addon is attached here; without it db.cloud is undefined.
@@ -440,20 +448,31 @@ export class ProductivityDB extends Dexie {
       });
 
     /**
-     * v16: index `resources.kind`.
+     * v16: index `resources.kind`, the `cloudBlobCache` table, and the
+     * `knownCloudKeys` ledger.
      *
-     * The library filters resources by kind ('link' vs 'file') in several
-     * places, and `listPendingMigrations` does `where('kind').equals('file')`.
-     * Without an index that query throws SchemaError ("KeyPath kind on object
-     * store resources is not indexed"), which made the migration silently
-     * report "nothing to migrate" — the exact symptom of a run that never
-     * actually ran. Adding an index is a pure schema change: no row is read or
-     * rewritten, so the upgrade is empty.
+     * The `kind` index fixes a SchemaError that made `listPendingMigrations`
+     * throw ("KeyPath kind on object store resources is not indexed"), which in
+     * turn made the migration section report "nothing to migrate" — the exact
+     * symptom of a run that never actually ran.
+     *
+     * `cloudBlobCache` is a local convenience cache for R2 blobs, so re-opening
+     * a file in the same session (or after a reload) does not re-download it.
+     *
+     * `knownCloudKeys` records every r2Key this device has ever written to a
+     * resource row, including ones whose row was later deleted. It is separate
+     * from the blob cache on purpose: the cache only holds files previewed
+     * here, so a file deleted on the site and never opened on this device
+     * would be invisible to orphan detection. The ledger is what makes "files
+     * in R2 with no row here" actually detectable.
+     *
+     * All three are pure schema changes: no row is read or rewritten.
      */
     this.version(16)
       .stores({
         resources: 'id, subjectId, topicId, title, dueDate, createdAt, groupId, kind',
         cloudBlobCache: 'key, cachedAt',
+        knownCloudKeys: 'key, recordedAt',
       });
   }
 }

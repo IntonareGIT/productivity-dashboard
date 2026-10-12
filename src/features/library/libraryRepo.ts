@@ -397,6 +397,7 @@ export async function saveResource(input: ResourceInput): Promise<string> {
       // re-homed within the Library.
       const subjectChanged = existing.subjectId !== input.subjectId;
       const groupId = subjectChanged ? null : (input.groupId !== undefined ? input.groupId : existing.groupId ?? null);
+      const r2Key = input.r2Key !== undefined ? input.r2Key : existing.r2Key;
       await db.resources.put({
         ...existing,
         subjectId: input.subjectId,
@@ -409,11 +410,19 @@ export async function saveResource(input: ResourceInput): Promise<string> {
         mimeType: input.mimeType !== undefined ? input.mimeType : existing.mimeType,
         fileSize: input.fileSize !== undefined ? input.fileSize : existing.fileSize,
         blob: input.blob !== undefined ? input.blob : existing.blob,
-        r2Key: input.r2Key !== undefined ? input.r2Key : existing.r2Key,
+        r2Key,
         tags,
         dueDate,
         completed: input.completed ?? existing.completed ?? false,
       });
+      // The ledger is what makes orphan detection work: it records every
+      // r2Key this device has ever written, including ones whose row was
+      // later deleted. Without it, a file deleted on the site and never
+      // opened here is invisible to the "Cloud copies" section.
+      if (r2Key) {
+        const { recordCloudKey } = await import('../../features/ai/cloudBlobCache');
+        await recordCloudKey(r2Key);
+      }
       return existing.id;
     }
   }
@@ -438,6 +447,12 @@ export async function saveResource(input: ResourceInput): Promise<string> {
     createdAt: new Date().toISOString(),
   };
   await db.resources.put(record);
+  // Record every r2Key this device writes, so orphan detection does not depend
+  // on the blob cache — which only ever holds files previewed here.
+  if (record.r2Key) {
+    const { recordCloudKey } = await import('../../features/ai/cloudBlobCache');
+    await recordCloudKey(record.r2Key);
+  }
   return record.id;
 }
 
@@ -504,11 +519,21 @@ export async function deleteResource(id: string, opts: { deleteCloud?: boolean }
     // The local cache is keyed by r2Key; a stale entry would serve bytes for a
     // row the user just deleted. Clear it regardless of whether the cloud
     // object is deleted, so a re-add cannot resurrect a phantom.
-    const { forgetCloudBlob } = await import('../../features/ai/cloudBlobCache');
+    const { forgetCloudBlob, forgetCloudKey } = await import('../../features/ai/cloudBlobCache');
     forgetCloudBlob(resource.r2Key);
     if (opts.deleteCloud) {
       const { deleteCloudObject } = await import('../../features/ai/cloudClient');
-      await deleteCloudObject(resource.r2Key).catch(() => {});
+      const { forgetCloudKey } = await import('../../features/ai/cloudBlobCache');
+      try {
+        await deleteCloudObject(resource.r2Key);
+        // Only now the cloud copy is gone, so only now does the ledger entry
+        // make sense to drop. A failed delete leaves it, which is correct: the
+        // "Cloud copies" section should still show the file as an orphan.
+        await forgetCloudKey(resource.r2Key);
+      } catch {
+        // The delete failed; the ledger entry stays so the orphan is still
+        // listed and the user can retry from the Cloud copies section.
+      }
     }
   }
 }

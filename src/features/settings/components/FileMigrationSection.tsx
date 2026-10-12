@@ -54,6 +54,8 @@ export const FileMigrationSection: React.FC = () => {
         toast('success', 'Migration complete', `${result.done} file(s) moved to the cloud.`);
       } else if (result.failed.length > 0) {
         toast('error', 'Migration finished with failures', `${result.failed.length} file(s) could not be moved.`);
+        // The toast is a one-line summary; the card keeps the per-file reasons
+        // so the user can act on them without digging through a console.
       }
     } catch (e) {
       setStatus('idle');
