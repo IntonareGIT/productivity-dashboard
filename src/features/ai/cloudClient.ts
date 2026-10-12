@@ -106,7 +106,18 @@ export async function uploadToR2(
       if (xhr.status >= 200 && xhr.status < 300) resolve(key);
       else reject(new Error(`Upload failed with status ${xhr.status}.`));
     };
-    xhr.onerror = () => reject(new Error('Upload failed: network error.'));
+    xhr.onerror = () => {
+      // A browser PUT to a presigned R2 URL always triggers a CORS preflight
+      // (PUT is never a "simple" request). If the bucket has no CORS rule the
+      // preflight dies before a single byte moves, which reads as a network
+      // error and leaves the object at 0 bytes — that is the usual cause.
+      reject(
+        new Error(
+          'Upload failed: network error. A presigned PUT needs a CORS rule on the R2 bucket ' +
+          '(AllowedMethods: PUT, AllowedHeaders: Content-Type). See DEPLOY.md.',
+        ),
+      );
+    };
     xhr.send(file);
   });
 }

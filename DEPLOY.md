@@ -87,6 +87,39 @@ vercel --prod        # accept defaults; Vite is auto-detected
 > This project uses no client-side router paths (single page), so no SPA
 > rewrite/redirect rules are required.
 
+## 2c. R2 file storage (required for file uploads)
+
+File uploads go to a Cloudflare R2 bucket via presigned PUT URLs. The bucket
+needs CORS rules, otherwise browser PUTs fail with a network error and the
+object lands at 0 bytes — that is the usual cause of "Upload failed: network
+error".
+
+Set these environment variables on the Vercel project (Dashboard → Settings →
+Environment Variables):
+
+| Variable                 | Required | Purpose                                            |
+| ------------------------ | -------- | -------------------------------------------------- |
+| `R2_ACCOUNT_ID`          | yes      | Cloudflare account ID                              |
+| `R2_ACCESS_KEY_ID`       | yes      | R2 access key ID                                   |
+| `R2_SECRET_ACCESS_KEY`   | yes      | R2 secret access key                               |
+| `R2_BUCKET`              | yes      | Bucket name                                        |
+
+Then add this CORS rule to the bucket (via `wrangler` or the R2 dashboard):
+
+```json
+[
+  {
+    "AllowedOrigins": ["*"],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": ["Content-Type", "Range"],
+    "MaxAge": 86400
+  }
+]
+```
+
+`AllowedOrigins: ["*"]` is fine here — the presigned URL itself is the
+authentication, so CORS does not widen access.
+
 ## 3. Install on a phone ("Add to Home Screen")
 
 1. Visit the deployed HTTPS URL in the phone browser
