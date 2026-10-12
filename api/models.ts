@@ -321,11 +321,20 @@ async function testModelKey(
 ): Promise<{ ok: boolean; message: string }> {
   try {
     if (adapter === 'gemini') {
-      // Test with Gemini's generateContent endpoint
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+      // Normalize model ID: trim, remove leading "models/"
+      const normalizedModelId = modelId.trim().replace(/^models\//, '');
+      // Validate: only letters, digits, dots, hyphens
+      if (!/^[a-zA-Z0-9.-]+$/.test(normalizedModelId)) {
+        return { ok: false, message: 'modelId contains invalid characters' };
+      }
+      // Build URL with normalized ID, key in header
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${normalizedModelId}:generateContent`;
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
         body: JSON.stringify({
           contents: [{ parts: [{ text: 'test' }] }],
           generationConfig: { maxOutputTokens: 64 },
