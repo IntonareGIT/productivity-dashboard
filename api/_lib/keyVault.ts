@@ -89,7 +89,7 @@ export function parseRecord(value: unknown): EncryptedRecord | null {
     rec.tag.length > 0 &&
     rec.ciphertext.length > 0
   ) {
-    return rec as EncryptedRecord;
+    return { iv: rec.iv, tag: rec.tag, ciphertext: rec.ciphertext };
   }
   return null;
 }
