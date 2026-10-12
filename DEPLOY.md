@@ -110,12 +110,18 @@ Then add this CORS rule to the bucket (via `wrangler` or the R2 dashboard):
 [
   {
     "AllowedOrigins": ["*"],
-    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedMethods": ["GET", "PUT", "HEAD", "DELETE"],
     "AllowedHeaders": ["Content-Type", "Range"],
     "MaxAge": 86400
   }
 ]
 ```
+
+`DELETE` is required, not optional: deleting a cloud copy sends a presigned
+DELETE, which is never a "simple" request and therefore needs the preflight
+to succeed. Leaving it out is exactly why "Could not delete from the cloud"
+returns `Failed to fetch` — the same CORS failure as uploads, with the object
+sitting at 0 bytes.
 
 `AllowedOrigins: ["*"]` is fine here — the presigned URL itself is the
 authentication, so CORS does not widen access.

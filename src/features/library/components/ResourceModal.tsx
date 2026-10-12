@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { FileUp } from 'lucide-react';
 import { Modal } from '../../../components/ui/Modal';
@@ -9,14 +9,18 @@ import type { Resource, ResourceKind } from '../../../types';
 
 interface ResourceModalProps {
   subjectId: string;
+  subjectName?: string | null;
   topicId: string | null;
   resource: Resource | null;
   /**
-   * When set, the modal opens in "re-add a cloud copy" mode: the row is saved
-   * with this r2Key and no upload, because the bytes are already in R2 (and
-   * cached locally). The label is pre-filled from the key's filename.
+   * When set, the modal opens in "re-upload a cloud copy" mode: the row is
+   * loaded with this key and the file picker is opened immediately, because
+   * the bytes are gone from this device and the only way to move the file is
+   * to pick the original again.
    */
   cloudKey?: string | null;
+  /** Open the file picker on mount, for the re-upload affordance. */
+  forceFile?: boolean;
   onClose: () => void;
 }
 
@@ -49,29 +53,49 @@ const UploadGauge: React.FC<{ loaded: number; total: number }> = ({ loaded, tota
   );
 };
 
-export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId, resource, cloudKey, onClose }) => {
+export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId, resource, cloudKey, forceFile, subjectName, onClose }) => {
   const [kind, setKind] = useState<ResourceKind>(resource?.kind ?? (cloudKey ? 'file' : 'link'));
   const [title, setTitle] = useState(resource?.title ?? (cloudKey ? (cloudKey.split('/').pop() ?? '').replace(/\.[^.]+$/, '') : ''));
-  const [urlOrPath, setUrlOrPath] = useState('');
-  const [tagsInput, setTagsInput] = useState('');
-  const [dueDate, setDueDate] = useState('');
+  const [urlOrPath, setUrlOrPath] = useState(resource?.urlOrPath ?? '');
+  const [fileName, setFileName] = useState(resource?.fileName ?? (cloudKey ? (cloudKey.split('/').pop() ?? null) : null));
+  const [mimeType, setMimeType] = useState(resource?.mimeType ?? null);
+  const [fileSize, setFileSize] = useState(resource?.fileSize ?? null);
+  const [tags, setTags] = useState<string[]>(resource?.tags ?? []);
+  const [dueDate, setDueDate] = useState(resource?.dueDate ?? '');
+  const [groupId, setGroupId] = useState(resource?.groupId ?? '');
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   /** Bytes uploaded during the current file upload, so the user can see it move. */
   const [uploadProgress, setUploadProgress] = useState<{ loaded: number; total: number } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // A cloud key can arrive after this modal mounts (the Settings page stashes
+  // it and the library opens the modal later), so re-sync the label from it
+  // rather than trusting the value captured at mount time.
+  useEffect(() => {
+    if (cloudKey && !resource) {
+      const name = cloudKey.split('/').pop() ?? '';
+      setTitle(name.replace(/\.[^.]+$/, ''));
+      setFileName(name);
+      setKind('file');
+    }
+  }, [cloudKey, resource]);
+
+  useEffect(() => {
+    if (forceFile) fileInputRef.current?.click();
+  }, [forceFile]);
   /** Groups of this subject, for the picker. */
   const groups = useLiveQuery(
     () => db.resourceGroups.where('subjectId').equals(subjectId).toArray(),
     [subjectId],
   ) ?? [];
-  const [groupId, setGroupId] = useState<string>('');
 
   useEffect(() => {
     setKind(resource?.kind ?? 'link');
     setTitle(resource?.title ?? '');
     setUrlOrPath(resource?.urlOrPath ?? '');
-    setTagsInput((resource?.tags ?? []).join(', '));
+    setTags(resource?.tags ?? []);
     setDueDate(resource?.dueDate ?? '');
     setFile(null);
     setError('');
@@ -96,8 +120,6 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
     setUploadProgress(null);
     try {
       const tags = tagsInput.split(',').map((t) => t.trim()).filter(Boolean);
-      // `kind` MUST be passed: saveResource defaults it to 'link', which would
-      // require a URL and reject every upload.
       if (kind === 'link') {
         await saveResource({
           id: resource?.id,
@@ -111,19 +133,25 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
           groupId: groupId || null,
         });
       } else {
-        // A new file goes to R2 first; only then is the row written, so a
+        // A new file goes to R2 first; only then is the row is written, so a
         // failed upload never leaves a dangling record behind.
-        let r2Key = resource?.r2Key ?? (cloudKey ?? null);
-        if (file) {
-          const { uploadToR2, currentUserId } = await import('../../../features/ai/cloudClient');
-          const userId = currentUserId();
-          if (!userId) throw new Error('Sign in to Dexie Cloud to upload files.');
-          const key = `${userId}/${file.name}`;
-          setUploadProgress({ loaded: 0, total: file.size });
-          await uploadToR2(key, file, file.type || undefined, (loaded) => {
-            setUploadProgress({ loaded, total: file.size });
-          });
-          r2Key = key;
+        const { uploadToR2, currentUserId, deleteCloudObject } = await import('../../../features/ai/cloudClient');
+        const { buildCloudKey } = await import('../../../features/ai/cloudKey');
+        const userId = currentUserId();
+        if (!userId) throw new Error('Sign in to Dexie Cloud to upload files.');
+
+        // The subject folder is the organizing unit: every file for a subject
+        // lands under `{userId}/{subject}/`. Re-uploading replaces the old
+        // object rather than leaving a second copy, so the old key is deleted
+        // first — but only after the new one exists, so a failed re-upload
+        // never loses the file.
+        const key = buildCloudKey(userId, subjectId, subjectName, file.name);
+        setUploadProgress({ loaded: 0, total: file.size });
+        await uploadToR2(key, file, file.type || undefined, (loaded) => {
+          setUploadProgress({ loaded, total: file.size });
+        });
+        if (resource?.r2Key && resource.r2Key !== key) {
+          await deleteCloudObject(resource.r2Key).catch(() => {});
         }
         await saveResource({
           id: resource?.id,
@@ -133,11 +161,11 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
           title,
           // Uploads carry no URL. Only keep a previous value when editing.
           urlOrPath: resource?.urlOrPath ?? '',
-          blob: undefined,
-          r2Key,
-          fileName: file?.name ?? resource?.fileName ?? (cloudKey ? cloudKey.split('/').pop() ?? null : null),
-          mimeType: file?.type ?? resource?.mimeType,
-          fileSize: file?.size ?? resource?.fileSize,
+          blob: null,
+          r2Key: key,
+          fileName: file.name,
+          mimeType: file.type || null,
+          fileSize: file.size,
           tags,
           dueDate: dueDate || null,
           groupId: groupId || null,

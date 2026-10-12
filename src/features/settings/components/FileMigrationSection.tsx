@@ -1,7 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Archive, Cloud, HardDriveDownload, Loader2, Pause, Play, X } from 'lucide-react';
+import { Archive, Cloud, FileUp, HardDriveDownload, Loader2, Pause, Play, X } from 'lucide-react';
 import { Card } from '../../../components/ui/Card';
+import { Modal } from '../../../components/ui/Modal';
 import { toast } from '../../../stores/useToastStore';
+import { ResourceModal } from '../../library/components/ResourceModal';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../../../db/db';
+import type { Resource } from '../../../types';
 import {
   listPendingMigrations,
   migrateFilesToCloud,
@@ -38,6 +43,14 @@ export const FileMigrationSection: React.FC = () => {
    */
   const [lastFailures, setLastFailures] = useState<{ id: string; title: string; error: string }[]>([]);
   const [controller, setController] = useState<AbortController | null>(null);
+  /**
+   * A failed row the user asked to re-upload. The bytes are gone from this
+   * device (Dexie Cloud offloaded them), so the only way to move the file is
+   * to pick the original again. The failed row already carries its subject id,
+   * so the add-resource modal can open right here — no cross-screen handoff,
+   * which is exactly why this does not use the zustand store.
+   */
+  const [reUploadingResource, setReUploadingResource] = useState<Resource | null>(null);
 
   // Refresh the pending count whenever the section mounts or the run ends.
   useEffect(() => {
@@ -78,6 +91,16 @@ const start = async () => {
   const stop = () => {
     controller?.abort();
     setStatus('aborted');
+  };
+
+  const reUpload = async (id: string) => {
+    // The failed row already carries its subject id, so the add-resource modal
+    // can open right here — no cross-screen handoff, which is exactly why this
+    // does not use the zustand store. `forceFile` opens the picker on mount,
+    // because the bytes are gone and the only way to move the file is to pick
+    // the original again.
+    const resource = await db.resources.get(id);
+    setReUploadingResource(resource ?? null);
   };
 
   const done = progress?.done ?? 0;
@@ -181,8 +204,15 @@ const start = async () => {
             </p>
             <ul className="text-[11px] text-rose-500/80 space-y-0.5">
               {lastFailures.map((f) => (
-                <li key={f.id}>
-                  <span className="font-medium">{f.title}</span> — {f.error}
+                <li key={f.id} className="flex items-center gap-2">
+                  <span className="font-medium truncate">{f.title}</span>
+                  <span className="shrink-0">— {f.error}</span>
+                  <button
+                    onClick={() => void reUpload(f.id)}
+                    className="shrink-0 ml-auto flex items-center gap-1 px-2 min-h-[36px] rounded-lg text-[11px] font-semibold text-accent hover:bg-accent-subtle transition-colors"
+                  >
+                    <FileUp className="w-3.5 h-3.5" /> Re-upload
+                  </button>
                 </li>
               ))}
             </ul>

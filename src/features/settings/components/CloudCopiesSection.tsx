@@ -5,7 +5,9 @@ import { toast } from '../../../stores/useToastStore';
 import { db } from '../../../db/db';
 import { deleteCloudObject } from '../../ai/cloudClient';
 import { forgetCloudBlob } from '../../ai/cloudBlobCache';
-import { useCloudReAdd } from '../../../stores/useCloudReAddStore';
+import { ResourceModal } from '../../library/components/ResourceModal';
+import { useLiveQuery } from 'dexie-react-hooks';
+import type { Subject } from '../../../types';
 
 /**
  * Orphaned cloud copies: files that live in R2 but have no row in this
@@ -23,11 +25,20 @@ import { useCloudReAdd } from '../../../stores/useCloudReAddStore';
  * The list is derived from the r2Keys the local cache has seen, filtered
  * against the rows that actually exist. It is not a directory listing of the
  * bucket, so it only ever shows files this device knows about.
+ *
+ * Re-add opens the add-resource modal right here, in this section, rather
+ * than handing a key off to the library. The library is a separate screen, so
+ * a cross-screen handoff would be lost whenever the user navigated away — and
+ * the bytes are already cached locally, so the modal previews instantly.
  */
 export const CloudCopiesSection: React.FC = () => {
-  const requestReAdd = useCloudReAdd((s) => s.requestReAdd);
   const [orphans, setOrphans] = useState<{ key: string; cachedAt: number }[]>([]);
   const [working, setWorking] = useState(false);
+  /** Which orphan the user picked to re-add. */
+  const [reAddKey, setReAddKey] = useState<string | null>(null);
+  /** Which subject the user picked for the re-add. */
+  const [reAddSubjectId, setReAddSubjectId] = useState<string | null>(null);
+  const subjects = useLiveQuery(() => db.subjects.toArray(), []) ?? [];
 
   const refresh = async () => {
     try {
@@ -69,8 +80,12 @@ export const CloudCopiesSection: React.FC = () => {
   };
 
   const reAdd = (key: string) => {
-    requestReAdd(key);
-    toast('info', 'Go re-add the file', 'Open the library, pick a subject, and the file will be pre-filled for you.');
+    // Open the add-resource modal right here, in this section, rather than
+    // handing a key off to the library. The library is a separate screen, so
+    // a cross-screen handoff would be lost whenever the user navigated away —
+    // and the bytes are already cached locally, so the modal previews instantly.
+    setReAddKey(key);
+    setReAddSubjectId(null);
   };
 
   return (
@@ -113,6 +128,13 @@ export const CloudCopiesSection: React.FC = () => {
             </div>
           )}
         </div>
+      )}
+      {reAddKey && reAddSubjectId && (
+        <ResourceModal
+          subjectId={reAddSubjectId}
+          cloudKey={reAddKey}
+          onClose={() => { setReAddKey(null); setReAddSubjectId(null); }}
+        />
       )}
     </Card>
   );
