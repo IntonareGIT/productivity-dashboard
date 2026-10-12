@@ -73,23 +73,23 @@ export function parseRecord(value: unknown): EncryptedRecord | null {
     try {
       parsed = JSON.parse(parsed);
     } catch {
-      break;
+      return null;
     }
   }
+  const rec = parsed as Record<string, unknown> | null;
   if (
-    parsed &&
-    typeof parsed === 'object' &&
-    'iv' in parsed &&
-    'tag' in parsed &&
-    'ciphertext' in parsed &&
-    typeof (parsed as Record<string, unknown>).iv === 'string' &&
-    typeof (parsed as Record<string, unknown>).tag === 'string' &&
-    typeof (parsed as Record<string, unknown>).ciphertext === 'string' &&
-    (parsed as Record<string, unknown>).iv.length > 0 &&
-    (parsed as Record<string, unknown>).tag.length > 0 &&
-    (parsed as Record<string, unknown>).ciphertext.length > 0
+    rec &&
+    'iv' in rec &&
+    'tag' in rec &&
+    'ciphertext' in rec &&
+    typeof rec.iv === 'string' &&
+    typeof rec.tag === 'string' &&
+    typeof rec.ciphertext === 'string' &&
+    rec.iv.length > 0 &&
+    rec.tag.length > 0 &&
+    rec.ciphertext.length > 0
   ) {
-    return parsed as EncryptedRecord;
+    return rec as EncryptedRecord;
   }
   return null;
 }
