@@ -102,7 +102,7 @@ Environment Variables):
 | `R2_ACCOUNT_ID`          | yes      | Cloudflare account ID                              |
 | `R2_ACCESS_KEY_ID`       | yes      | R2 access key ID                                   |
 | `R2_SECRET_ACCESS_KEY`   | yes      | R2 secret access key                               |
-| `R2_BUCKET`              | yes      | Bucket name                                        |
+| `R2_BUCKET`              | yes      | Bucket name (`dashboard-files`)                    |
 
 Then add this CORS rule to the bucket (via `wrangler` or the R2 dashboard):
 
