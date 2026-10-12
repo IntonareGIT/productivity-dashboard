@@ -37,16 +37,6 @@ export const FileMigrationSection: React.FC = () => {
    * partial run.
    */
   const [lastFailures, setLastFailures] = useState<{ id: string; title: string; error: string }[]>([]);
-  /**
-   * The last run's failures, kept after the run ends.
-   *
-   * The failed list only renders while `status === 'running'`, so a finished
-   * run with failures would drop the reasons the moment it reported them —
-   * leaving only the one-line toast. Keeping them here means the user can
-   * read why each file failed and act on it, which is the whole point of a
-   * partial run.
-   */
-  const [lastFailures, setLastFailures] = useState<{ id: string; title: string; error: string }[]>([]);
   const [controller, setController] = useState<AbortController | null>(null);
 
   // Refresh the pending count whenever the section mounts or the run ends.
