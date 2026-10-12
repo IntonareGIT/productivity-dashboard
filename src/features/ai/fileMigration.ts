@@ -24,6 +24,7 @@ import type { Resource } from '../../types';
 import { db } from '../../db/db';
 import { saveResource } from '../library/libraryRepo';
 import { uploadToR2, currentUserId } from './cloudClient';
+import { buildCloudKey } from './cloudKey';
 
 export interface MigrationProgress {
   total: number; // file rows that still need an r2Key
@@ -94,7 +95,17 @@ export async function migrateFilesToCloud(
     onProgress({ ...progress });
 
     try {
-      const key = `${userId}/${resource.id}-${resource.fileName ?? resource.title}`;
+      // Same subject-scoped scheme as a fresh upload, so migrated files land
+      // under `{userId}/{subject}/` and the bucket reads as folders. The
+      // subject name is looked up once per row rather than trusted from the
+      // row, because the row may not carry it.
+      const subject = await db.subjects.get(resource.subjectId);
+      const key = buildCloudKey(
+        userId,
+        resource.subjectId,
+        subject?.name ?? null,
+        resource.fileName ?? resource.title,
+      );
       await uploadToR2(key, blob, resource.mimeType ?? undefined, (loaded, total) => {
         progress.currentPct = total > 0 ? loaded / total : 0;
         progress.doneBytes =
@@ -104,7 +115,7 @@ export async function migrateFilesToCloud(
         onProgress({ ...progress });
       });
       // The blob is gone only once the cloud copy exists. `saveResource`
-      // rewrites the row with `blob: undefined` and `r2Key: key`, leaving
+      // rewrites the row with `blob: null` and `r2Key: key`, leaving
       // every other field (subject, topic, group, tags) untouched.
       await saveResource({
         id: resource.id,

@@ -16,7 +16,6 @@ import { AssessmentModal } from './AssessmentModal';
 import { MoveToGroupMenu } from './MoveToGroupMenu';
 import { GroupNameEditor, NewGroupButton } from './ResourceGroups';
 import { GroupTree } from './GroupTree';
-import { useCloudReAdd } from '../../../stores/useCloudReAddStore';
 import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, moveGroup, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes } from '../libraryRepo';
 import type { Assessment, Resource, ResourceGroup, Subject, Topic, TopicStatus } from '../../../types';
 
@@ -195,14 +194,6 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   const [editingTopic, setEditingTopic] = useState<Topic | null>(null);
   const [addingResource, setAddingResource] = useState(false);
   const [editingResource, setEditingResource] = useState<Resource | null>(null);
-  /**
-   * Re-adding a cloud copy: the user picked a file that lives in R2 but has no
-   * row here. The Settings page stashes the key; this component reads it and
-   * opens the add-resource modal with that key pre-filled, reusing the bytes
-   * already cached locally instead of re-uploading.
-   */
-  const pendingCloudKey = useCloudReAdd((s) => s.pendingKey);
-  const consumeCloudKey = useCloudReAdd((s) => s.consume);
   // The resource currently open in the preview modal, if any.
   const [previewingResource, setPreviewingResource] = useState<Resource | null>(null);
   // Real-browser full screen for the preview, wired through the SAME shared
@@ -698,16 +689,15 @@ onDelete={() => {
       {(addingTopic || editingTopic) && (
         <TopicModal subjectId={subject.id} topic={editingTopic} onClose={() => { setEditingTopic(null); setAddingTopic(false); }} />
       )}
-      {(addingResource || editingResource || pendingCloudKey) && (
+      {(addingResource || editingResource) && (
         <ResourceModal
           subjectId={subject.id}
+          subjectName={subject.name}
           topicId={selectedTopic?.id ?? null}
           resource={editingResource}
-          cloudKey={pendingCloudKey}
           onClose={() => {
             setEditingResource(null);
             setAddingResource(false);
-            if (pendingCloudKey) consumeCloudKey();
           }}
         />
       )}

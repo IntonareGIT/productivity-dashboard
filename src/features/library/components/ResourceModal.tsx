@@ -10,13 +10,12 @@ import type { Resource, ResourceKind } from '../../../types';
 interface ResourceModalProps {
   subjectId: string;
   subjectName?: string | null;
-  topicId: string | null;
-  resource: Resource | null;
+  topicId?: string | null;
+  resource?: Resource | null;
   /**
-   * When set, the modal opens in "re-upload a cloud copy" mode: the row is
-   * loaded with this key and the file picker is opened immediately, because
-   * the bytes are gone from this device and the only way to move the file is
-   * to pick the original again.
+   * When set, the modal opens in "re-add a cloud copy" mode: the row is saved
+   * with this r2Key and no upload, because the bytes are already in R2 (and
+   * cached locally). The label is pre-filled from the key's filename.
    */
   cloudKey?: string | null;
   /** Open the file picker on mount, for the re-upload affordance. */
@@ -60,7 +59,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
   const [fileName, setFileName] = useState(resource?.fileName ?? (cloudKey ? (cloudKey.split('/').pop() ?? null) : null));
   const [mimeType, setMimeType] = useState(resource?.mimeType ?? null);
   const [fileSize, setFileSize] = useState(resource?.fileSize ?? null);
-  const [tags, setTags] = useState<string[]>(resource?.tags ?? []);
+  const [tagsInput, setTagsInput] = useState((resource?.tags ?? []).join(', '));
   const [dueDate, setDueDate] = useState(resource?.dueDate ?? '');
   const [groupId, setGroupId] = useState(resource?.groupId ?? '');
   const [file, setFile] = useState<File | null>(null);
@@ -85,6 +84,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
   useEffect(() => {
     if (forceFile) fileInputRef.current?.click();
   }, [forceFile]);
+
   /** Groups of this subject, for the picker. */
   const groups = useLiveQuery(
     () => db.resourceGroups.where('subjectId').equals(subjectId).toArray(),
@@ -95,7 +95,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
     setKind(resource?.kind ?? 'link');
     setTitle(resource?.title ?? '');
     setUrlOrPath(resource?.urlOrPath ?? '');
-    setTags(resource?.tags ?? []);
+    setTagsInput((resource?.tags ?? []).join(', '));
     setDueDate(resource?.dueDate ?? '');
     setFile(null);
     setError('');

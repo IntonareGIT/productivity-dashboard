@@ -1,10 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Archive, Cloud, FileUp, HardDriveDownload, Loader2, Pause, Play, X } from 'lucide-react';
 import { Card } from '../../../components/ui/Card';
-import { Modal } from '../../../components/ui/Modal';
 import { toast } from '../../../stores/useToastStore';
 import { ResourceModal } from '../../library/components/ResourceModal';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../../db/db';
 import type { Resource } from '../../../types';
 import {
@@ -223,6 +221,15 @@ const start = async () => {
           <div className="flex items-center gap-2 text-sm text-emerald-500">
             <Cloud className="w-4 h-4" /> Migration complete — {progress.done} file(s) moved.
           </div>
+        )}
+        {reUploadingResource && (
+          <ResourceModal
+            subjectId={reUploadingResource.subjectId}
+            subjectName={null}
+            resource={reUploadingResource}
+            forceFile
+            onClose={() => setReUploadingResource(null)}
+          />
         )}
       </div>
     </Card>
