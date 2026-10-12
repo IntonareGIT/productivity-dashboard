@@ -132,6 +132,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     }
 
     const testResult = await testModelKey(adapter, baseUrl, modelId, apiKey);
+    console.log('[DEBUG] testModelKey result:', { adapter, status: testResult.ok ? 'ok' : 'fail', message: testResult.message });
     if (!testResult.ok) {
       json(res, 400, { error: 'test_failed', message: testResult.message });
       return;
@@ -328,6 +329,14 @@ async function testModelKey(
           generationConfig: { maxOutputTokens: 64 },
         }),
       });
+      const responseText = await res.text();
+      let data: Record<string, unknown> = {};
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        // ignore parse error
+      }
+      console.log('[DEBUG] Gemini test response:', { status: res.status, keys: Object.keys(data), error: data.error });
       if (res.status === 401 || res.status === 403) {
         return { ok: false, message: 'Invalid key (provider returned 401)' };
       }
@@ -339,7 +348,6 @@ async function testModelKey(
       }
       // Accept any 200 with candidates array as success, even if text is empty
       // (some models use tokens for internal reasoning)
-      const data = await res.json().catch(() => ({}));
       if (Array.isArray(data.candidates) && data.candidates.length > 0) {
         return { ok: true, message: 'Key valid' };
       }
