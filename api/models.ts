@@ -81,6 +81,65 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     return;
   }
 
+  // Test endpoint: POST /api/models/test { adapter, baseUrl, modelId, apiKey }
+  // Returns { ok: true, message } or { ok: false, message }
+  if (req.method === 'POST' && req.url?.includes('/test')) {
+    let body: unknown = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        body = null;
+      }
+    }
+    const parsed = body as Record<string, unknown> | null;
+    if (!parsed || typeof parsed !== 'object') {
+      badInput(res, 'JSON body required');
+      return;
+    }
+
+    const adapter = parsed.adapter;
+    const baseUrl = typeof parsed.baseUrl === 'string' ? parsed.baseUrl.trim() : '';
+    const modelId = typeof parsed.modelId === 'string' ? parsed.modelId.trim() : '';
+    const apiKey = typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : '';
+
+    if (adapter !== 'gemini' && adapter !== 'openai-compatible') {
+      badInput(res, 'adapter must be "gemini" or "openai-compatible"');
+      return;
+    }
+    if (adapter === 'openai-compatible') {
+      if (!baseUrl || !isValidUrl(baseUrl)) {
+        badInput(res, 'baseUrl must be a valid HTTPS URL for openai-compatible adapter');
+        return;
+      }
+    } else {
+      if (baseUrl) {
+        badInput(res, 'baseUrl must be empty for gemini adapter');
+        return;
+      }
+    }
+    if (!modelId) {
+      badInput(res, 'modelId is required');
+      return;
+    }
+    if (!apiKey) {
+      badInput(res, 'apiKey is required');
+      return;
+    }
+    if (apiKey.length > 300) {
+      badInput(res, 'apiKey too long (max 300 characters)');
+      return;
+    }
+
+    const testResult = await testModelKey(adapter, baseUrl, modelId, apiKey);
+    if (!testResult.ok) {
+      json(res, 400, { error: 'test_failed', message: testResult.message });
+      return;
+    }
+    json(res, 200, { ok: true, message: testResult.message });
+    return;
+  }
+
   if (req.method === 'POST') {
     let body: unknown = req.body;
     if (typeof body === 'string') {
@@ -185,8 +244,15 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     return;
   }
 
-  // PATCH for updates (optional, but useful)
+  // PATCH for updates - read id from query parameter, not body
   if (req.method === 'PATCH') {
+    const url = new URL(req.url ?? '', 'http://localhost');
+    const id = url.searchParams.get('id');
+    if (!id) {
+      badInput(res, 'id query parameter is required');
+      return;
+    }
+
     let body: unknown = req.body;
     if (typeof body === 'string') {
       try {
@@ -198,12 +264,6 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     const parsed = body as Record<string, unknown> | null;
     if (!parsed || typeof parsed !== 'object') {
       badInput(res, 'JSON body required');
-      return;
-    }
-
-    const id = typeof parsed.id === 'string' ? parsed.id.trim() : '';
-    if (!id) {
-      badInput(res, 'id is required');
       return;
     }
 
@@ -259,13 +319,13 @@ async function testModelKey(
   try {
     if (adapter === 'gemini') {
       // Test with Gemini's generateContent endpoint
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${encodeURIComponent(apiKey)}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: 'test' }] }],
-          generationConfig: { maxOutputTokens: 1 },
+          generationConfig: { maxOutputTokens: 64 },
         }),
       });
       if (res.status === 401 || res.status === 403) {
@@ -277,7 +337,13 @@ async function testModelKey(
       if (!res.ok) {
         return { ok: false, message: `Provider error (status ${res.status})` };
       }
-      return { ok: true, message: 'Key valid' };
+      // Accept any 200 with candidates array as success, even if text is empty
+      // (some models use tokens for internal reasoning)
+      const data = await res.json().catch(() => ({}));
+      if (Array.isArray(data.candidates) && data.candidates.length > 0) {
+        return { ok: true, message: 'Key valid' };
+      }
+      return { ok: false, message: 'Provider returned unexpected response' };
     } else {
       // Test with OpenAI-compatible chat/completions
       if (!baseUrl) {
@@ -293,7 +359,7 @@ async function testModelKey(
         body: JSON.stringify({
           model: modelId,
           messages: [{ role: 'user', content: 'test' }],
-          max_tokens: 1,
+          max_tokens: 16,
         }),
       });
       if (res.status === 401 || res.status === 403) {

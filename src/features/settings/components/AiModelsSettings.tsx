@@ -168,29 +168,27 @@ export const AiModelsSettings: React.FC = () => {
     setTesting(form.id ?? 'new');
     const token = getCloudAccessToken();
     try {
-      const input: UserModelInput = {
-        displayName: form.displayName.trim(),
+      const input = {
         adapter: form.adapter,
         baseUrl: form.baseUrl.trim() || '',
         modelId: form.modelId.trim(),
-        capabilities: form.capabilities,
         apiKey: form.apiKey.trim(),
       };
 
-      const res = await fetch('/api/models', {
+      const res = await fetch('/api/models/test', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ ...input, test: true }),
+        body: JSON.stringify(input),
       });
 
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
-        toast('success', 'Test passed', data.details ?? 'Model responded successfully.');
+        toast('success', 'Test passed', data.message ?? 'Key valid');
       } else {
-        toast('error', 'Test failed', data.error ?? 'Model did not respond correctly.');
+        toast('error', 'Test failed', data.message ?? 'Model did not respond correctly.');
       }
     } catch {
       toast('error', 'Test failed', 'Network error.');
