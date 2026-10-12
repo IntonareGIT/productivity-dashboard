@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, Compass, Rocket } from 'lucide-react';
+import { ChevronDown, Compass, Rocket, ExternalLink, Server, Database, Cloud, Globe } from 'lucide-react';
 import {
   APP_TAGLINE, APP_VERSION, BUILD_DATE, HELP_FOOTER, HELP_SECTIONS, QUICK_START,
   type HelpBullet,
@@ -26,6 +26,32 @@ const Bullets: React.FC<{ items: HelpBullet[] }> = ({ items }) => (
       </li>
     ))}
   </ul>
+);
+
+const ServiceItem: React.FC<{ icon: React.ReactNode; name: string; description: string; url?: string }> = ({
+  icon,
+  name,
+  description,
+  url,
+}) => (
+  <li className="flex items-start gap-3 text-sm">
+    <span className="text-accent shrink-0 mt-0.5">{icon}</span>
+    <div className="min-w-0">
+      <p className="font-semibold text-content-primary">{name}</p>
+      <p className="text-content-secondary">{description}</p>
+    </div>
+    {url && (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="ml-2 shrink-0 text-content-tertiary hover:text-accent transition-colors"
+        aria-label={`Open ${name} website`}
+      >
+        <ExternalLink className="w-3.5 h-3.5" />
+      </a>
+    )}
+  </li>
 );
 
 /**
@@ -71,7 +97,7 @@ const Section: React.FC<{ section: (typeof HELP_SECTIONS)[number]; defaultOpen: 
 export const AboutPage: React.FC = () => {
   // Library and Notes open by default, because they are what most people open
   // the app for; the rest start collapsed so the page is scannable on a phone.
-  const openByDefault = new Set(['library', 'notes']);
+  const openByDefault = new Set(['library', 'notes', 'about']);
 
   return (
     <div className="max-w-2xl mx-auto space-y-4 pb-6">
@@ -79,13 +105,65 @@ export const AboutPage: React.FC = () => {
       <header className="space-y-1.5">
         <div className="flex items-center gap-2.5">
           <Compass className="w-6 h-6 text-accent shrink-0" />
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-content-primary">About &amp; Help</h1>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-content-primary">About & Help</h1>
         </div>
         <p className="text-sm text-content-secondary leading-relaxed">{APP_TAGLINE}</p>
         <p className="text-[11px] text-content-tertiary">
           Version {APP_VERSION} · built {buildDateLabel(BUILD_DATE)}
         </p>
       </header>
+
+      {/* ---- about the app ---- */}
+      <section id="about" className="rounded-xl border border-border bg-bg-surface p-4">
+        <h2 className="flex items-center gap-2 text-sm font-bold text-content-primary mb-3">
+          <Compass className="w-4 h-4 text-accent shrink-0" />
+          What this app does
+        </h2>
+        <Bullets items={[
+          { text: 'A personal productivity dashboard for students and professionals.' },
+          { text: 'Organize subjects, topics, notes, files, and assessments in a study library.' },
+          { text: 'Plan with a calendar (classes, deadlines, personal events) and a work shift roster.' },
+          { text: 'Track focus time with a Pomodoro timer that logs sessions by subject.' },
+          { text: 'Optional AI assistant that can search your data, create items, and act on your behalf.' },
+          { text: 'Optional PDF extraction to turn documents into searchable markdown notes.' },
+          { text: 'Optional cross-device sync via Dexie Cloud.' },
+          { text: 'Installable as a PWA on phones and desktops, works offline.' },
+        ]} />
+      </section>
+
+      {/* ---- services ---- */}
+      <section id="services" className="rounded-xl border border-border bg-bg-surface p-4">
+        <h2 className="flex items-center gap-2 text-sm font-bold text-content-primary mb-3">
+          <Server className="w-4 h-4 text-accent shrink-0" />
+          Services this app uses
+        </h2>
+        <ul className="space-y-3">
+          <ServiceItem
+            icon={<Database className="w-4 h-4" />}
+            name="Dexie Cloud"
+            description="Accounts, authentication, and real-time sync of all your data across devices."
+            url="https://dexie.org/cloud/"
+          />
+          <ServiceItem
+            icon={<Cloud className="w-4 h-4" />}
+            name="Cloudflare R2"
+            description="File storage for uploaded documents. Files are uploaded from your device to your own R2 bucket."
+            url="https://www.cloudflare.com/developer-platform/r2/"
+          />
+          <ServiceItem
+            icon={<Globe className="w-4 h-4" />}
+            name="Vercel"
+            description="Hosting for the web app and private serverless API functions (AI gateway, file upload/download)."
+            url="https://vercel.com/"
+          />
+          <ServiceItem
+            icon={<Database className="w-4 h-4" />}
+            name="AI Providers (your choice)"
+            description="You choose which AI provider to use (Gemini, Groq, or any OpenAI-compatible endpoint). API keys are stored encrypted on the server, never in your browser."
+            url="https://aistudio.google.com/"
+          />
+        </ul>
+      </section>
 
       {/* ---- quick start ---- */}
       <section className="rounded-xl border border-accent/40 bg-accent-subtle p-4">

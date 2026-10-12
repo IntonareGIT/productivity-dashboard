@@ -1307,7 +1307,9 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     setPageSizes({});
     renderTasksRef.current.clear();
     renderTokensRef.current.clear();
-  }, [blob]);
+    // Disarm snippet tool when the file changes.
+    setSnippetOn(false);
+  }, [blob, url]);
 
   // ---- Continuous scrolling through the page stack -------------------
   // The surface is a real scroll container, so the wheel and touch drags work
@@ -1768,9 +1770,9 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
                       createLayer={createTextLayer}
                       rotation={rotation}
                       generation={textLayerGen}
-                      snippetOn={snippetOn}
+                      snippetOn={snippetOn && n === snippetPage}
                     />
-                    {n === snippetPage && (
+                    {snippetOn && n === snippetPage && (
                       <PdfSnippetLayer
                         canvas={canvasRefs.current.get(n) ?? null}
                         active

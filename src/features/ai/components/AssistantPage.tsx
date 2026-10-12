@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Minimize2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { ArrowLeft, Minimize2, PanelLeftClose, PanelLeftOpen, Bot, Settings, Sparkles } from 'lucide-react';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
 import { AssistantChat } from './AssistantChat';
 import { AssistantSessionList } from './AssistantSessionList';
@@ -28,8 +28,13 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
   const open = useAssistantStore((s) => s.open);
   const setOpen = useAssistantStore((s) => s.setOpen);
   const loadSessions = useAssistantStore((s) => s.loadSessions);
+  const providerReady = useAssistantStore((s) => s.providerReady);
+  const providerLabel = useAssistantStore((s) => s.providerLabel);
+  const selectedModels = useAssistantStore((s) => s.selectedModels);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
+
+  const model = providerLabel && selectedModels[providerLabel];
 
   // The page owns the conversation even when the bubble is closed.
   React.useEffect(() => {
@@ -52,35 +57,66 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
       )}
 
       <div className="flex-1 flex flex-col min-w-0">
+        {/* Compact header with context chip */}
+        <header className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-border/60 bg-bg-elevated/50 shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="flex items-center justify-center w-8 h-8 rounded-xl bg-accent text-white shrink-0">
+              <Bot className="w-4 h-4" />
+            </span>
+            <div className="min-w-0">
+              <h1 className="text-sm font-semibold text-content-primary leading-tight">Assistant</h1>
+              {providerReady && providerLabel && (
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-accent/15 border border-accent/30 text-[10px] font-medium text-accent-text">
+                    <Sparkles className="w-3 h-3" />
+                    {providerLabel}
+                  </span>
+                  {model && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-bg-elevated border border-border text-[10px] text-content-secondary">
+                      {model}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setDrawerOpen((v) => !v)}
+              aria-label="Toggle session list"
+              className="md:hidden p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+            >
+              <PanelLeftOpen className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setRailOpen((v) => !v)}
+              aria-label="Toggle session list"
+              className="hidden md:inline-flex p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+            >
+              {railOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={onOpenSettings}
+              aria-label="Settings"
+              title="Settings"
+              className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+            <button
+              onClick={onCollapse}
+              aria-label="Collapse to bubble"
+              title="Collapse to bubble"
+              className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+            >
+              <Minimize2 className="w-4 h-4" />
+            </button>
+          </div>
+        </header>
+
         <AssistantChat
           onOpenSettings={onOpenSettings}
           className="min-h-0"
-          headerExtra={
-            <>
-              <button
-                onClick={() => setDrawerOpen((v) => !v)}
-                aria-label="Toggle session list"
-                className="md:hidden p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
-              >
-                <PanelLeftOpen className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setRailOpen((v) => !v)}
-                aria-label="Toggle session list"
-                className="hidden md:inline-flex p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
-              >
-                {railOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
-              </button>
-              <button
-                onClick={onCollapse}
-                aria-label="Collapse to bubble"
-                title="Collapse to bubble"
-                className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
-              >
-                <Minimize2 className="w-4 h-4" />
-              </button>
-            </>
-          }
         />
       </div>
 

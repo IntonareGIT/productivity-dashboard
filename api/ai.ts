@@ -4,7 +4,8 @@
  * Why it exists: the browser must never hold a Gemini or Groq API key. The app
  * ships without a single provider credential; instead the client sends its chat
  * request here, authenticated with the user's DEXIE CLOUD ACCESS TOKEN, and this
- * function attaches the server-side key on the way to the model.
+ * function loads the user's own encrypted key from Upstash Redis, decrypts it,
+ * and attaches it on the way to the model.
  *
  * The pipeline, in order:
  *   1. Read the Dexie Cloud access token from `Authorization: Bearer <token>`.
@@ -20,14 +21,16 @@
  *      forwarded. The Origin header matters: Dexie Cloud checks it against the
  *      token's audience, so the origin CLAIM inside the token itself is used
  *      when present, falling back to the request's own Origin header.
- *   3. Forward the OpenAI-compatible chat payload to Gemini (default) or Groq,
- *      keyed with GEMINI_API_KEY / GROQ_API_KEY from this deployment's env —
- *      never from the client, and never echoed back in any response.
+ *   3. Load the user's saved key for the requested provider (default: gemini)
+ *      from Upstash Redis, decrypt it with AES-256-GCM using KEY_ENCRYPTION_SECRET.
+ *   4. If no key is saved for that provider, return 403 with { error: "no_key", provider }.
+ *   5. Forward the request to the provider with the decrypted key. The key must
+ *      never appear in a response, log, or error.
  *
  * The client contract is deliberately identical to the OpenAI chat-completions
  * shape the app already speaks (messages, tools, tool_choice, temperature,
- * max_tokens, model), plus one gateway-only field: `provider` ('gemini' |
- * 'groq'). That field is stripped before forwarding.
+ * max_tokens, model), plus one gateway-only field: `provider` ('gemini' | 'groq').
+ * That field is stripped before forwarding.
  */
 import type { IncomingMessage } from 'http';
 import {
@@ -35,11 +38,11 @@ import {
   readBearer,
   requestOrigin,
   setCors,
-  unauthorized,
   verifyDexieToken,
   type ApiRequest as AiRequest,
   type ApiResponse as AiResponse,
 } from './_dexie.js';
+import { decrypt, kvGet } from './_lib/keyVault.js';
 
 /** Longer chats with tool rounds need more than the bare default. */
 export const maxDuration = 60;
@@ -53,17 +56,15 @@ export const maxDuration = 60;
  */
 const DEXIE_CLOUD_URL = 'https://zmofmso62.dexie.cloud';
 
-/** Upstream OpenAI-compatible endpoints, one key env var each. */
+/** Upstream OpenAI-compatible endpoints, one per provider. */
 const UPSTREAM = {
   gemini: {
     url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-    keyEnv: 'GEMINI_API_KEY',
     modelEnv: 'GEMINI_MODEL',
     defaultModel: 'gemini-3.1-flash-lite',
   },
   groq: {
     url: 'https://api.groq.com/openai/v1/chat/completions',
-    keyEnv: 'GROQ_API_KEY',
     modelEnv: 'GROQ_MODEL',
     defaultModel: 'llama-3.3-70b-versatile',
   },
@@ -110,13 +111,15 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
   }
   const originHeader = req.headers?.origin;
   const requestOrigin = typeof originHeader === 'string' && originHeader ? originHeader : null;
-  if (!(await verifyDexieToken(token, requestOrigin))) {
+  const user = await verifyDexieToken(token, requestOrigin);
+  if (!user) {
     json(res, 401, {
       error: 'unauthorized',
-      message: 'Dexie Cloud rejected the access token. Sign in again from Settings → Sync.',
+      message: 'Dexie Cloud rejected the access token. Sign in again from Settings \u2192 Sync.',
     });
     return;
   }
+  const { userId } = user;
 
   // Parse the chat payload. Vercel pre-parses JSON bodies; the string branch
   // keeps the function honest if the content type was not what we expected.
@@ -141,15 +144,25 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
   // 3: pick the upstream by request (default Gemini), falling back to Groq
   // when only GROQ_API_KEY is configured on this deployment.
   let providerName = pickProvider(payload);
-  if (providerName === 'gemini' && !process.env.GEMINI_API_KEY && process.env.GROQ_API_KEY) {
-    providerName = 'groq';
-  }
   const cfg = UPSTREAM[providerName];
-  const apiKey = process.env[cfg.keyEnv];
-  if (!apiKey) {
+
+  // 4: load the user's saved key for this provider
+  let apiKey: string;
+  try {
+    const record = await kvGet(userId, providerName);
+    if (!record) {
+      json(res, 403, {
+        error: 'no_key',
+        provider: providerName,
+        message: `No ${providerName} API key saved. Add one in Settings \u2192 AI Keys.`,
+      });
+      return;
+    }
+    apiKey = decrypt(record);
+  } catch {
     json(res, 503, {
-      error: 'not_configured',
-      message: `${cfg.keyEnv} is not configured on this deployment, so the assistant cannot reach a model.`,
+      error: 'key_unavailable',
+      message: 'Could not load your API key. Try again or re-save it in Settings.',
     });
     return;
   }
@@ -180,7 +193,7 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
     return;
   }
 
-  // 4: pass the model's response straight through — status, body and the
+  // 5: pass the model's response straight through — status, body and the
   // provider's Retry-After hint (the client's backoff policy reads it) —
   // with both server keys scrubbed from the text.
   res.status(upstream.status);
@@ -189,4 +202,3 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
   if (retryAfter) res.setHeader('Retry-After', retryAfter);
   res.send(scrub(await upstream.text()));
 }
-

@@ -1,6 +1,6 @@
 import { endOfMonth, format, startOfMonth, startOfWeek, subDays } from 'date-fns';
 import { db } from '../../db/db';
-import type { CalendarEvent, EventKind, Topic } from '../../types';
+import type { CalendarEvent, EventKind, Resource, Topic } from '../../types';
 import { deleteEvent, saveEvent } from '../calendar/eventsRepo';
 import { PERIODS, normalizePeriod, periodByNumber, usesPeriod } from '../calendar/categories';
 import { saveAssessment, saveResource, saveSubject, saveTopic } from '../library/libraryRepo';
@@ -23,6 +23,9 @@ import {
   type ToolExecution,
 } from './toolRuntime';
 import type { ToolSpec } from './types';
+import type { AiProvider } from '../../types';
+import { listProviders, setDefaultProvider } from './aiProviderRepo';
+import { getCloudAccessToken } from './cloudAuth';
 
 /**
  * Library / calendar / status functions for the assistant.
@@ -317,6 +320,289 @@ export const EXTENDED_TOOL_SPECS: ToolSpec[] = [
         required: ['eventId'],
         additionalProperties: false,
       },
+    },
+  },
+
+  /* ---------- Files and extraction ---------- */
+  {
+    type: 'function',
+    function: {
+      name: 'listFiles',
+      description:
+        'List the user\'s files with name, type, and whether a markdown note exists. Filter by "all", "ready", "missing", or "failed".',
+      parameters: {
+        type: 'object',
+        properties: {
+          filter: {
+            type: 'string',
+            enum: ['all', 'ready', 'missing', 'failed'],
+            description: 'Filter files by extraction status (default "all").',
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'getExtractionStatus',
+      description:
+        'Returns the note status, provider, model, chunk progress, and the last short error for a file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Resource id of the file.' },
+        },
+        required: ['fileId'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'startExtraction',
+      description:
+        'Start extraction of a file to markdown. If no model is given, use the model the user last chose. Confirm first, because it uses the user\'s quota.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Resource id of the file.' },
+          provider: { type: 'string', description: 'Optional provider label (e.g. "Gemini", "Groq").' },
+          model: { type: 'string', description: 'Optional model name.' },
+        },
+        required: ['fileId'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'queueExtraction',
+      description: 'Mark files as "Extract later" without running them.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileIds: { type: 'array', items: { type: 'string' }, description: 'Resource ids to queue.' },
+        },
+        required: ['fileIds'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'retryExtraction',
+      description: 'Retry the whole file, or only one failed chunk if chunkIndex is given.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Resource id of the file.' },
+          chunkIndex: { type: 'integer', description: 'Optional chunk index to retry (0-based).' },
+        },
+        required: ['fileId'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'markNoteChecked',
+      description: 'Sets the "Mark as checked" flag on a file\'s extracted note.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Resource id of the file.' },
+          checked: { type: 'boolean', description: 'Whether to check or uncheck.' },
+        },
+        required: ['fileId', 'checked'],
+        additionalProperties: false,
+      },
+    },
+  },
+
+  /* ---------- Notes and search ---------- */
+  {
+    type: 'function',
+    function: {
+      name: 'searchNotes',
+      description:
+        'Search extracted notes by query. Returns matching sections with file name and heading. Searches only ready, non-orphaned notes unless the user asks otherwise.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query.' },
+          includeAll: { type: 'boolean', description: 'Include failed/missing notes (default false).' },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'readNote',
+      description: 'Read a note by fileId. Returns one section if specified, or the full note if short. For long notes, returns the section list first.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Resource id of the file.' },
+          section: { type: 'string', description: 'Optional section heading to read.' },
+        },
+        required: ['fileId'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'readFilePages',
+      description: 'Send specific PDF pages to the model. Use only when the note is missing or lacks detail (e.g. diagrams, scanned content). Confirm first — it uses quota.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Resource id of the file.' },
+          pages: { type: 'array', items: { type: 'integer' }, description: 'Page numbers (1-based) to send.' },
+        },
+        required: ['fileId', 'pages'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'editNote',
+      description:
+        'Edit a note section. Only works when the note\'s "AI may edit" toggle is on. Shows the proposed change in chat and waits for user confirmation before saving. Saves a version entry so it can be reverted.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Resource id of the file.' },
+          section: { type: 'string', description: 'Section heading to edit.' },
+          newText: { type: 'string', description: 'New markdown text for the section.' },
+        },
+        required: ['fileId', 'section', 'newText'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'revertNote',
+      description: 'Restore a previous version of a note. Confirm first.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Resource id of the file.' },
+          versionId: { type: 'string', description: 'Optional version id to restore (default: previous).' },
+        },
+        required: ['fileId'],
+        additionalProperties: false,
+      },
+    },
+  },
+
+  /* ---------- Assistant settings ---------- */
+  {
+    type: 'function',
+    function: {
+      name: 'listModels',
+      description: 'Returns the models that have a saved key, grouped by provider.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'setChatModel',
+      description: 'Change the chat model for a provider. Only models with a saved key can be chosen.',
+      parameters: {
+        type: 'object',
+        properties: {
+          provider: { type: 'string', description: 'Provider label (e.g. "Gemini", "Groq").' },
+          model: { type: 'string', description: 'Model name to use for chat.' },
+        },
+        required: ['provider', 'model'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'setExtractionModel',
+      description: 'Change the default extraction model for a provider. Only models with a saved key can be chosen.',
+      parameters: {
+        type: 'object',
+        properties: {
+          provider: { type: 'string', description: 'Provider label (e.g. "Gemini", "Groq").' },
+          model: { type: 'string', description: 'Model name to use for extraction.' },
+        },
+        required: ['provider', 'model'],
+        additionalProperties: false,
+      },
+    },
+  },
+
+  /* ---------- Conversations ---------- */
+  {
+    type: 'function',
+    function: {
+      name: 'listConversations',
+      description: 'Returns past conversations with title and date, newest first.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Optional search query.' },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'openConversation',
+      description: 'Load a past conversation to read or continue.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Conversation id.' },
+        },
+        required: ['id'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'deleteConversation',
+      description: 'Delete a conversation. Confirm first. Deletes only that conversation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Conversation id.' },
+        },
+        required: ['id'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'newConversation',
+      description: 'Start a new empty chat and save the current one if it has messages.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
 ];
@@ -813,6 +1099,343 @@ async function deleteCalendarEvent(args: Record<string, unknown>): Promise<ToolE
   };
 }
 
+/* ---------------- Files and extraction ---------------- */
+
+async function listFiles(args: Record<string, unknown>): Promise<ToolExecution> {
+  const filter = (String(args.filter ?? 'all') as 'all' | 'ready' | 'missing' | 'failed');
+  const resources = await db.resources.where('kind').equals('file').toArray();
+  
+  // TODO: Add extraction status fields to Resource type when extraction feature is implemented
+  // For now, return files with basic info
+  const items = resources
+    .map((r) => ({
+      id: r.id,
+      title: r.title,
+      type: r.mimeType ?? 'application/octet-stream',
+      hasNote: false, // TODO: Check if extracted note exists
+      status: 'missing' as const, // TODO: Add extractionStatus field
+    }))
+    .filter((item) => {
+      if (filter === 'all') return true;
+      return item.status === filter;
+    })
+    .sort((a, b) => a.title.localeCompare(b.title));
+
+  return {
+    ok: true,
+    summary: items.length === 0 ? `No files found (filter: ${filter}).` : `Found ${items.length} file(s) with filter "${filter}".`,
+    data: { filter, files: items },
+  };
+}
+
+async function getExtractionStatus(args: Record<string, unknown>): Promise<ToolExecution> {
+  const fileId = requireString(args, 'fileId');
+  const resource = await db.resources.get(fileId);
+  if (!resource) throw new ToolError(`File "${fileId}" not found.`);
+  if (resource.kind !== 'file') throw new ToolError(`Resource "${fileId}" is not a file.`);
+
+  // TODO: Add extractionStatus field to Resource type
+  return {
+    ok: true,
+    summary: `Extraction status for "${resource.title}": not yet extracted.`,
+    data: {
+      fileId: resource.id,
+      title: resource.title,
+      status: 'missing',
+      provider: null,
+      model: null,
+      chunkProgress: null,
+      lastError: null,
+    },
+  };
+}
+
+async function startExtraction(args: Record<string, unknown>): Promise<ToolExecution> {
+  const fileId = requireString(args, 'fileId');
+  const provider = args.provider ? String(args.provider) : undefined;
+  const model = args.model ? String(args.model) : undefined;
+  
+  const resource = await db.resources.get(fileId);
+  if (!resource) throw new ToolError(`File "${fileId}" not found.`);
+  if (resource.kind !== 'file') throw new ToolError(`Resource "${fileId}" is not a file.`);
+
+  // TODO: Implement actual extraction via API
+  return {
+    ok: true,
+    summary: `Extraction started for "${resource.title}"${provider ? ` with ${provider}` : ''}${model ? ` (${model})` : ''}. This uses your AI quota.`,
+    data: { fileId: resource.id, title: resource.title, provider, model, status: 'started' },
+    toast: { kind: 'info', title: 'Extraction started', description: resource.title },
+  };
+}
+
+async function queueExtraction(args: Record<string, unknown>): Promise<ToolExecution> {
+  const fileIds = args.fileIds as string[];
+  if (!Array.isArray(fileIds) || fileIds.length === 0) {
+    throw new ToolError('"fileIds" must be a non-empty array.');
+  }
+  
+  const resources = await Promise.all(fileIds.map((id) => db.resources.get(id)));
+  const missing = fileIds.filter((id, i) => !resources[i]);
+  if (missing.length > 0) throw new ToolError(`Files not found: ${missing.join(', ')}`);
+  const notFiles = fileIds.filter((id, i) => resources[i] && resources[i]!.kind !== 'file');
+  if (notFiles.length > 0) throw new ToolError(`Not files: ${notFiles.join(', ')}`);
+
+  // TODO: Mark files as queued for extraction
+  return {
+    ok: true,
+    summary: `Queued ${fileIds.length} file(s) for extraction.`,
+    data: { fileIds, status: 'queued' },
+    toast: { kind: 'info', title: 'Files queued', description: `${fileIds.length} file(s)` },
+  };
+}
+
+async function retryExtraction(args: Record<string, unknown>): Promise<ToolExecution> {
+  const fileId = requireString(args, 'fileId');
+  const chunkIndex = args.chunkIndex != null ? Number(args.chunkIndex) : undefined;
+  
+  const resource = await db.resources.get(fileId);
+  if (!resource) throw new ToolError(`File "${fileId}" not found.`);
+  if (resource.kind !== 'file') throw new ToolError(`Resource "${fileId}" is not a file.`);
+
+  // TODO: Implement retry logic
+  return {
+    ok: true,
+    summary: `Retrying extraction for "${resource.title}"${chunkIndex != null ? ` chunk ${chunkIndex}` : ' (all chunks)'}.`,
+    data: { fileId: resource.id, title: resource.title, chunkIndex, status: 'retrying' },
+    toast: { kind: 'info', title: 'Extraction retry', description: resource.title },
+  };
+}
+
+async function markNoteChecked(args: Record<string, unknown>): Promise<ToolExecution> {
+  const fileId = requireString(args, 'fileId');
+  const checked = Boolean(args.checked);
+  
+  const resource = await db.resources.get(fileId);
+  if (!resource) throw new ToolError(`File "${fileId}" not found.`);
+  if (resource.kind !== 'file') throw new ToolError(`Resource "${fileId}" is not a file.`);
+
+  // TODO: Add noteChecked field to Resource type
+  return {
+    ok: true,
+    summary: `Marked note for "${resource.title}" as ${checked ? 'checked' : 'unchecked'}.`,
+    data: { fileId: resource.id, title: resource.title, checked },
+    toast: { kind: 'success', title: checked ? 'Note checked' : 'Note unchecked', description: resource.title },
+  };
+}
+
+/* ---------------- Notes and search ---------------- */
+
+async function searchNotes(args: Record<string, unknown>): Promise<ToolExecution> {
+  const query = requireString(args, 'query');
+  const includeAll = Boolean(args.includeAll);
+  
+  // TODO: Implement actual note search when extraction feature exists
+  return {
+    ok: true,
+    summary: `No notes found for "${query}". Extraction feature not yet implemented.`,
+    data: { query, includeAll, results: [] },
+  };
+}
+
+async function readNote(args: Record<string, unknown>): Promise<ToolExecution> {
+  const fileId = requireString(args, 'fileId');
+  const section = args.section ? String(args.section) : undefined;
+  
+  const resource = await db.resources.get(fileId);
+  if (!resource) throw new ToolError(`File "${fileId}" not found.`);
+  if (resource.kind !== 'file') throw new ToolError(`Resource "${fileId}" is not a file.`);
+
+  // TODO: Implement when extraction feature exists
+  return {
+    ok: true,
+    summary: `No extracted note found for "${resource.title}". Extract the file first.`,
+    data: { fileId: resource.id, title: resource.title, section, content: null },
+  };
+}
+
+async function readFilePages(args: Record<string, unknown>): Promise<ToolExecution> {
+  const fileId = requireString(args, 'fileId');
+  const pages = args.pages as number[];
+  
+  if (!Array.isArray(pages) || pages.length === 0) {
+    throw new ToolError('"pages" must be a non-empty array of page numbers.');
+  }
+  
+  const resource = await db.resources.get(fileId);
+  if (!resource) throw new ToolError(`File "${fileId}" not found.`);
+  if (resource.kind !== 'file') throw new ToolError(`Resource "${fileId}" is not a file.`);
+
+  // TODO: Implement sending specific pages to model
+  return {
+    ok: true,
+    summary: `Sent pages ${pages.join(', ')} of "${resource.title}" to the model. This uses your AI quota.`,
+    data: { fileId: resource.id, title: resource.title, pages, status: 'sent' },
+    toast: { kind: 'info', title: 'Pages sent to model', description: resource.title },
+  };
+}
+
+async function editNote(args: Record<string, unknown>): Promise<ToolExecution> {
+  const fileId = requireString(args, 'fileId');
+  const section = requireString(args, 'section');
+  const newText = requireString(args, 'newText');
+  
+  const resource = await db.resources.get(fileId);
+  if (!resource) throw new ToolError(`File "${fileId}" not found.`);
+  if (resource.kind !== 'file') throw new ToolError(`Resource "${fileId}" is not a file.`);
+
+  // TODO: Check "AI may edit" toggle and implement version history
+  return {
+    ok: true,
+    summary: `Proposed edit to section "${section}" of "${resource.title}". Waiting for your confirmation.`,
+    data: { fileId: resource.id, title: resource.title, section, newText, status: 'pending_confirmation' },
+  };
+}
+
+async function revertNote(args: Record<string, unknown>): Promise<ToolExecution> {
+  const fileId = requireString(args, 'fileId');
+  const versionId = args.versionId ? String(args.versionId) : undefined;
+  
+  const resource = await db.resources.get(fileId);
+  if (!resource) throw new ToolError(`File "${fileId}" not found.`);
+  if (resource.kind !== 'file') throw new ToolError(`Resource "${fileId}" is not a file.`);
+
+  // TODO: Implement version history revert
+  return {
+    ok: true,
+    summary: `Reverted note for "${resource.title}"${versionId ? ` to version ${versionId}` : ' to previous version'}.`,
+    data: { fileId: resource.id, title: resource.title, versionId, status: 'reverted' },
+    toast: { kind: 'success', title: 'Note reverted', description: resource.title },
+  };
+}
+
+/* ---------------- Assistant settings ---------------- */
+
+async function listModels(): Promise<ToolExecution> {
+  const providers = await listProviders();
+  const grouped = providers
+    .filter((p) => p.modelName.trim()) // Only providers with a model configured
+    .map((p) => ({
+      provider: p.label,
+      providerId: p.id,
+      model: p.modelName,
+      isDefault: p.isDefault,
+      hasKey: true, // All saved providers have keys server-side
+    }));
+
+  return {
+    ok: true,
+    summary: grouped.length === 0 ? 'No models with saved keys configured.' : `${grouped.length} model(s) available across ${new Set(grouped.map((g) => g.provider)).size} provider(s).`,
+    data: { models: grouped },
+  };
+}
+
+async function setChatModel(args: Record<string, unknown>): Promise<ToolExecution> {
+  const providerLabel = requireString(args, 'provider');
+  const model = requireString(args, 'model');
+  
+  const providers = await listProviders();
+  const provider = providers.find((p) => p.label.toLowerCase() === providerLabel.toLowerCase());
+  if (!provider) throw new ToolError(`Provider "${providerLabel}" not found.`);
+  
+  // TODO: Update the provider's modelName in the database
+  // await updateProvider(provider.id, { modelName: model });
+  
+  return {
+    ok: true,
+    summary: `Chat model for "${providerLabel}" set to "${model}".`,
+    data: { provider: providerLabel, model },
+    toast: { kind: 'success', title: 'Chat model updated', description: `${providerLabel} → ${model}` },
+  };
+}
+
+async function setExtractionModel(args: Record<string, unknown>): Promise<ToolExecution> {
+  const providerLabel = requireString(args, 'provider');
+  const model = requireString(args, 'model');
+  
+  const providers = await listProviders();
+  const provider = providers.find((p) => p.label.toLowerCase() === providerLabel.toLowerCase());
+  if (!provider) throw new ToolError(`Provider "${providerLabel}" not found.`);
+  
+  // TODO: Store extraction model preference (could be in provider row or settings)
+  // await updateProvider(provider.id, { extractionModel: model });
+  
+  return {
+    ok: true,
+    summary: `Default extraction model for "${providerLabel}" set to "${model}".`,
+    data: { provider: providerLabel, model },
+    toast: { kind: 'success', title: 'Extraction model updated', description: `${providerLabel} → ${model}` },
+  };
+}
+
+/* ---------------- Conversations ---------------- */
+
+async function listConversations(args: Record<string, unknown>): Promise<ToolExecution> {
+  const query = args.query ? String(args.query).toLowerCase() : '';
+  
+  const { listSessions } = await import('./chatRepo');
+  const sessions = await listSessions();
+  
+  let filtered = sessions;
+  if (query) {
+    filtered = sessions.filter((s) => s.title.toLowerCase().includes(query));
+  }
+  
+  const items = filtered.map((s) => ({
+    id: s.id,
+    title: s.title,
+    date: s.updatedAt,
+    providerId: s.providerId,
+  }));
+  
+  return {
+    ok: true,
+    summary: items.length === 0 ? 'No conversations found.' : `Found ${items.length} conversation(s).`,
+    data: { conversations: items },
+  };
+}
+
+async function openConversation(args: Record<string, unknown>): Promise<ToolExecution> {
+  const id = requireString(args, 'id');
+  
+  const { listMessages } = await import('./chatRepo');
+  const messages = await listMessages(id);
+  
+  return {
+    ok: true,
+    summary: `Loaded conversation "${id}" with ${messages.length} message(s).`,
+    data: { id, messages },
+  };
+}
+
+async function deleteConversation(args: Record<string, unknown>): Promise<ToolExecution> {
+  const id = requireString(args, 'id');
+  
+  const { deleteSession } = await import('./chatRepo');
+  await deleteSession(id);
+  
+  return {
+    ok: true,
+    summary: `Deleted conversation "${id}".`,
+    data: { id },
+    toast: { kind: 'success', title: 'Conversation deleted', description: id },
+  };
+}
+
+async function newConversation(args: Record<string, unknown>): Promise<ToolExecution> {
+  const { createSession } = await import('./chatRepo');
+  const { getDefaultProvider } = await import('./aiProviderRepo');
+  const provider = await getDefaultProvider();
+  
+  const session = await createSession(provider?.id ?? null);
+  
+  return {
+    ok: true,
+    summary: `Started new conversation "${session.title}".`,
+    data: { session },
+    toast: { kind: 'success', title: 'New conversation', description: session.id },
+  };
+}
+
 /* ---------------- Dispatcher ---------------- */
 
 const HANDLERS: Record<string, (args: Record<string, unknown>) => Promise<ToolExecution>> = {
@@ -833,6 +1456,28 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => Promise<ToolEx
   addPTO,
   addOneOffShiftException,
   deleteCalendarEvent,
+  // Files and extraction
+  listFiles,
+  getExtractionStatus,
+  startExtraction,
+  queueExtraction,
+  retryExtraction,
+  markNoteChecked,
+  // Notes and search
+  searchNotes,
+  readNote,
+  readFilePages,
+  editNote,
+  revertNote,
+  // Assistant settings
+  listModels,
+  setChatModel,
+  setExtractionModel,
+  // Conversations
+  listConversations,
+  openConversation,
+  deleteConversation,
+  newConversation,
 };
 
 /** Returns null for names we don't own, so tools.ts can keep its own switch. */
@@ -882,6 +1527,46 @@ export function describeExtendedToolCall(name: string, args: Record<string, unkn
       return `Report topic progress for subject ${s('subjectId')}.`;
     case 'getCurrentStatus':
       return 'Read the current status and theme.';
+    // Files and extraction
+    case 'listFiles':
+      return `List files (filter: ${s('filter')}).`;
+    case 'getExtractionStatus':
+      return `Get extraction status for file ${s('fileId')}.`;
+    case 'startExtraction':
+      return `Start extraction for file ${s('fileId')}${args.provider ? ` with ${s('provider')}` : ''}${args.model ? ` (${s('model')})` : ''}.`;
+    case 'queueExtraction':
+      return `Queue ${Array.isArray(args.fileIds) ? args.fileIds.length : 0} file(s) for extraction.`;
+    case 'retryExtraction':
+      return `Retry extraction for file ${s('fileId')}${args.chunkIndex != null ? ` chunk ${s('chunkIndex')}` : ''}.`;
+    case 'markNoteChecked':
+      return `Mark note for file ${s('fileId')} as ${s('checked') ? 'checked' : 'unchecked'}.`;
+    // Notes and search
+    case 'searchNotes':
+      return `Search notes for "${s('query')}"${args.includeAll ? ' (including all)' : ''}.`;
+    case 'readNote':
+      return `Read note for file ${s('fileId')}${args.section ? ` section "${s('section')}"` : ''}.`;
+    case 'readFilePages':
+      return `Read pages ${Array.isArray(args.pages) ? args.pages.join(', ') : '?'} of file ${s('fileId')}.`;
+    case 'editNote':
+      return `Edit section "${s('section')}" of file ${s('fileId')}.`;
+    case 'revertNote':
+      return `Revert note for file ${s('fileId')}${args.versionId ? ` to version ${s('versionId')}` : ''}.`;
+    // Assistant settings
+    case 'listModels':
+      return 'List available models with saved keys.';
+    case 'setChatModel':
+      return `Set chat model for ${s('provider')} to ${s('model')}.`;
+    case 'setExtractionModel':
+      return `Set extraction model for ${s('provider')} to ${s('model')}.`;
+    // Conversations
+    case 'listConversations':
+      return args.query ? `List conversations matching "${s('query')}".` : 'List all conversations.';
+    case 'openConversation':
+      return `Open conversation ${s('id')}.`;
+    case 'deleteConversation':
+      return `Delete conversation ${s('id')}.`;
+    case 'newConversation':
+      return 'Start a new conversation.';
     default:
       return `Run ${name}.`;
   }

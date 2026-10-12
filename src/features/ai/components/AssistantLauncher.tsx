@@ -121,6 +121,9 @@ export const AssistantLauncher: React.FC<AssistantLauncherProps> = ({
   // Set on pointerdown and cleared on the following click, so a drag never
   // registers as a click.
   const suppressClickRef = useRef(false);
+  // Track drag distance to distinguish click from drag (5px threshold).
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const hasMovedEnoughRef = useRef(false);
 
   /**
    * Measure the viewport, the safe areas and every keep-out zone, live.
@@ -227,13 +230,23 @@ export const AssistantLauncher: React.FC<AssistantLauncherProps> = ({
     e.currentTarget.setPointerCapture(e.pointerId);
     setDragging(true);
     setFaded(false);
-    // Suppress the click that follows the drag, which would otherwise toggle
-    // the panel open at the end of every reposition.
-    suppressClickRef.current = true;
+    // Record start position for click-vs-drag threshold (5px).
+    dragStartRef.current = { x: e.clientX, y: e.clientY };
+    hasMovedEnoughRef.current = false;
+    // suppressClickRef is set to true only after movement exceeds 5px.
 
     const onMove = (ev: PointerEvent) => {
       const g = geometryRef.current;
       if (!g) return;
+      // Check if we've moved more than 5px (click vs drag threshold).
+      if (dragStartRef.current && !hasMovedEnoughRef.current) {
+        const dx = ev.clientX - dragStartRef.current.x;
+        const dy = ev.clientY - dragStartRef.current.y;
+        if (dx * dx + dy * dy > 25) { // 5^2 = 25
+          hasMovedEnoughRef.current = true;
+          suppressClickRef.current = true;
+        }
+      }
       const insets = readSafeInsets();
       const live: DockGeometry = { ...g, safeTop: insets.top, safeBottom: insets.bottom };
       const edge = edgeFromX(ev.clientX - SIZE / 2, live.viewportW);
@@ -258,6 +271,10 @@ export const AssistantLauncher: React.FC<AssistantLauncherProps> = ({
         remember(mode, { yFraction, edge });
         return { yFraction, edge };
       });
+      // Reset drag tracking.
+      dragStartRef.current = null;
+      hasMovedEnoughRef.current = false;
+      // If we never moved enough, suppressClickRef stays false so the click fires.
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', finish);
       window.removeEventListener('pointercancel', finish);

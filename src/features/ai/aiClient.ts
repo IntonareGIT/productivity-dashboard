@@ -119,13 +119,22 @@ export const OVERLOADED_MESSAGE =
   'The model is overloaded right now. Try again in a minute or switch model in Settings.';
 
 /** Why a request failed, in the user's terms rather than the provider's JSON. */
-export function friendlyError(err: unknown): { message: string; retryable: boolean } {
+export function friendlyError(err: unknown): { message: string; retryable: boolean; noKeyProvider?: string } {
   if (err instanceof AiRequestError) {
     if (err.quotaExhausted) {
       return {
         message:
           'The daily quota for this model is used up, so no more requests will go through today. Switch model in Settings, or wait for the quota to reset.',
         retryable: false,
+      };
+    }
+    // Check for 403 no_key error from our gateway
+    if (err.status === 403 && /"error"\s*:\s*"no_key"/i.test(err.message)) {
+      const match = err.message.match(/"provider"\s*:\s*"([^"]+)"/i);
+      return {
+        message: 'no_key',
+        retryable: false,
+        noKeyProvider: match?.[1],
       };
     }
     if (err.status === 401 || err.status === 403) {
@@ -159,6 +168,8 @@ export interface ChatCompletionOptions {
   onRetry?: (info: { attempt: number; max: number; delayMs: number; error: AiRequestError }) => void;
   /** Model tried once if every retry of the primary model fails. Off by default. */
   fallbackModel?: string | null;
+  /** Override the provider's default model for this request. */
+  model?: string;
 }
 
 /** A sleep that rejects as soon as the turn is aborted. */
@@ -480,7 +491,7 @@ export function simplifyHistoryForRetry(messages: ChatMessage[]): ChatMessage[] 
 
 export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatCompletionResult> {
   const { provider, tools, temperature = 0.2, maxTokens = 4096 } = opts;
-  const { signal, onRetry, fallbackModel } = opts;
+  const { signal, onRetry, fallbackModel, model } = opts;
 
   // EVERY request goes through the one normalizer, here, so the main path, each
   // retry, the fallback model and every tool round are covered by construction
@@ -493,9 +504,10 @@ export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatC
   // A thinking model draws its reasoning from the SAME `max_tokens` budget as
   // the answer, so a tight cap is spent on thinking and the reply comes back
   // empty or truncated. The budget has to cover both.
-  const buildBodyFrom = (msgs: ChatMessage[], model: string) =>
+  const effectiveModel = model ?? provider.modelName;
+  const buildBodyFrom = (msgs: ChatMessage[], mdl: string) =>
     JSON.stringify({
-      model,
+      model: mdl,
       // Gateway-only hint (Gemini default, Groq on request) — the server
       // strips it before forwarding. Derived from the row's base URL so the
       // user's model choice keeps working exactly as before.
@@ -509,7 +521,7 @@ export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatC
 
   // The buildBody above is the normal path; this is the same body built from an
   // arbitrary message list, used only by the turn-order safety net.
-  const buildBody = (model: string) => buildBodyFrom(messages, model);
+  const buildBody = (mdl: string) => buildBodyFrom(messages, mdl);
 
   // Retry the REQUEST, never the turn. The transcript, the stored session rows
   // and any tool results already recorded are untouched by this loop, so a
@@ -524,7 +536,7 @@ export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatC
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
     let res: Response;
     try {
-      res = await attemptCompletion(provider, buildBody(provider.modelName), signal);
+      res = await attemptCompletion(provider, buildBody(effectiveModel), signal);
     } catch (e) {
       const err = e instanceof AiRequestError ? e : new AiRequestError(String(e));
 
@@ -536,7 +548,7 @@ export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatC
         repairedConversation = true;
         const simplified = simplifyHistoryForRetry(messages);
         try {
-          const retry = await attemptCompletion(provider, buildBodyFrom(simplified, provider.modelName), signal);
+          const retry = await attemptCompletion(provider, buildBodyFrom(simplified, effectiveModel), signal);
           const payload = await retry.json();
           return { ...readCompletion(payload), conversationRepaired: true };
         } catch {

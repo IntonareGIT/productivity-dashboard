@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, Check, Info, RefreshCw, SendHorizonal, Square, TriangleAlert, Zap } from 'lucide-react';
+import { Bot, Check, Info, RefreshCw, SendHorizonal, Square, TriangleAlert, Zap, Key, ExternalLink, Copy, RotateCcw, Clock, Settings, Sparkles } from 'lucide-react';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
 import { ThoughtBlock } from './ThoughtBlock';
+import { AssistantMessage, AssistantViewMsg } from './AssistantMessage';
 
 /** Roughly six lines at the composer's font size; past this it scrolls. */
 const MAX_COMPOSER_HEIGHT_PX = 132;
@@ -48,6 +49,9 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
   const retryStatus = useAssistantStore((s) => s.retryStatus);
   const failure = useAssistantStore((s) => s.failure);
   const fallbackNotice = useAssistantStore((s) => s.fallbackNotice);
+  const providerLabel = useAssistantStore((s) => s.providerLabel);
+  const selectedModels = useAssistantStore((s) => s.selectedModels);
+  const setModel = useAssistantStore((s) => s.setModel);
   const setOpen = useAssistantStore((s) => s.setOpen);
   const send = useAssistantStore((s) => s.send);
   const stop = useAssistantStore((s) => s.stop);
@@ -188,6 +192,30 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
             {configured ? 'Connected — can act on your data' : 'Needs an AI provider'}
           </p>
         </div>
+        {configured && providerLabel && (
+          <select
+            value={selectedModels[providerLabel] ?? ''}
+            onChange={(e) => setModel(providerLabel, e.target.value)}
+            className="ml-auto mr-2 bg-bg-elevated border border-border text-content-primary text-xs rounded-xl px-2 py-1.5 outline-none focus:border-accent cursor-pointer min-w-[160px]"
+            aria-label="Select model"
+          >
+            {providerLabel.toLowerCase().includes('gemini') ? (
+              <>
+                <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
+                <option value="gemini-3.1-flash">Gemini 3.1 Flash</option>
+                <option value="gemini-3.1-pro">Gemini 3.1 Pro</option>
+              </>
+            ) : providerLabel.toLowerCase().includes('groq') ? (
+              <>
+                <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
+                <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
+                <option value="mixtral-8x7b-32768">Mixtral 8x7B</option>
+              </>
+            ) : (
+              <option value="">Select a model</option>
+            )}
+          </select>
+        )}
         {headerExtra}
       </div>
 
@@ -205,29 +233,21 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
 
       <div ref={listRef} onScroll={onScroll} className={`flex-1 overflow-y-auto px-3 py-3 space-y-2.5 min-h-[180px] ${className}`}>
         {view.map((msg) => (
-          <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div
-              className={`max-w-[85%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap ${
-                msg.role === 'user'
-                  ? 'bg-accent text-white rounded-br-md'
-                  : msg.error
-                    ? 'bg-rose-500/10 border border-rose-500/40 text-content-primary rounded-bl-md'
-                    : 'bg-bg-elevated/60 border border-border text-content-primary rounded-bl-md'
-              }`}
-            >
-              {msg.role === 'tool' && (
-                <p className={`text-[10px] font-bold uppercase tracking-wide mb-1 ${msg.error ? 'text-rose-500' : 'text-accent'}`}>
-                  Action{msg.toolName ? ` · ${msg.toolName}` : ''}
-                </p>
-              )}
-              {/* Reasoning, when the model produced any, sits ABOVE the answer
-                  inside its own collapsible block. A standard model sends none,
-                  `thought` is undefined, and this renders nothing at all — so
-                  the message is byte-for-byte the normal one. */}
-              {msg.thought && <ThoughtBlock text={msg.thought} />}
-              {msg.text}
-            </div>
-          </div>
+          <AssistantMessage
+            key={msg.id}
+            msg={msg}
+            onCopy={(text) => navigator.clipboard.writeText(text)}
+            onRegenerate={(msgId) => {
+              const idx = view.findIndex((m) => m.id === msgId);
+              if (idx > 0 && view[idx - 1].role === 'user') {
+                // Find the user message before this assistant message
+                const userMsg = view[idx - 1];
+                setDraft(userMsg.text);
+                void send(userMsg.text, true);
+              }
+            }}
+            isStreaming={busy && view[view.length - 1]?.id === msg.id}
+          />
         ))}
         {activeTool ? (
           <div className="flex justify-start">
@@ -267,7 +287,7 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
       {/* A failure is shown OUTSIDE the scrolling transcript, above the
           composer, so Retry is always reachable without scrolling back to find
           it. The raw provider error is behind Details, never dumped inline. */}
-      {failure && (
+      {failure && failure.message !== 'no_key' && (
         <div className="mx-3 mb-2 rounded-xl border border-rose-500/40 bg-rose-500/10 p-3" data-failure>
           <p className="text-xs text-content-primary">{failure.message}</p>
           <div className="flex flex-wrap items-center gap-2 mt-2">
@@ -293,6 +313,25 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
               {failure.details}
             </pre>
           )}
+        </div>
+      )}
+
+      {failure && failure.message === 'no_key' && (
+        <div className="mx-3 mb-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3" data-failure>
+          <div className="flex items-start gap-2">
+            <Key className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-content-primary">
+                Add a free <span className="font-semibold capitalize">{failure.noKeyProvider ?? 'Gemini'}</span> key in Settings → AI Keys to use the assistant.
+              </p>
+              <button
+                onClick={onOpenSettings}
+                className="mt-2 inline-flex items-center gap-1.5 px-3 min-h-[36px] rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-semibold transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5" /> Open Settings
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

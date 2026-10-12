@@ -73,6 +73,18 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   'addPTO',
   'addOneOffShiftException',
   'deleteCalendarEvent',
+  // Files and extraction
+  'startExtraction',
+  'queueExtraction',
+  'retryExtraction',
+  'markNoteChecked',
+  'readFilePages',
+  'editNote',
+  'revertNote',
+  'setChatModel',
+  'setExtractionModel',
+  'deleteConversation',
+  'newConversation',
   // Phase 2 library tools. Spread from one source of truth so a new tool
   // cannot be added without also being classified.
   ...LIBRARY_TOOL_NAMES,
@@ -88,6 +100,12 @@ export const CONFIRMATION_TOOL_NAMES: ReadonlySet<string> = new Set([
   'addPTO',
   'addOneOffShiftException',
   'deleteCalendarEvent',
+  // Files and extraction - confirm because they use quota
+  'startExtraction',
+  'readFilePages',
+  'editNote',
+  'revertNote',
+  'deleteConversation',
   // Every library delete joins the gate. `deleteGroup` is here even though it
   // only ungroups, because it still removes a row the user made, so it asks
   // first. A second model call CANNOT perform it; only Confirm can.

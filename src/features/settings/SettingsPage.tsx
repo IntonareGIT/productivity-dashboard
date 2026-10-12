@@ -6,6 +6,7 @@ import { useThemeStatusMap } from '../../hooks/useThemeStatusMap';
 import { WeeklySchedulesSettings } from './components/WeeklySchedulesSettings';
 import { PomodoroSettingsSection } from './components/PomodoroSettingsSection';
 import { AiProvidersSettings } from './components/AiProvidersSettings';
+import { AiKeysSettings } from './components/AiKeysSettings';
 import { ChatHistorySettings } from './components/ChatHistorySettings';
 import { FloatingAiSettings } from './components/FloatingAiSettings';
 import { SyncSettings } from './components/SyncSettings';
@@ -53,6 +54,9 @@ export const SettingsPage: React.FC<{ onOpenAbout?: () => void }> = ({ onOpenAbo
 
       {/* AI Providers (configurable OpenAI-compatible models) */}
       <AiProvidersSettings />
+
+      {/* Per-user encrypted API keys for each provider */}
+      <AiKeysSettings />
 
       {/* Assistant conversation history */}
       <ChatHistorySettings />

@@ -237,8 +237,9 @@ interface AssistantState {
   /**
    * The friendly failure to show with a Retry button, with the raw provider
    * error kept for the Details toggle. Null when there is no failure to offer.
+   * noKeyProvider is set when the error is a 403 no_key from the gateway.
    */
-  failure: { message: string; details: string; retryable: boolean } | null;
+  failure: { message: string; details: string; retryable: boolean; noKeyProvider?: string } | null;
   /** Set when the last answer came from the configured fallback model. */
   fallbackNotice: string | null;
   /** Sessions this provider can safely continue (v7). */
@@ -246,6 +247,9 @@ interface AssistantState {
   sessionId: string | null;
   view: AssistantViewMsg[];
   pending: PendingCall | null;
+  // Per-provider model selection.
+  selectedModels: Record<string, string>;
+
   setOpen: (open: boolean) => void;
   ask: (text: string) => void;
   send: (text: string, isRetry?: boolean) => Promise<void>;
@@ -262,23 +266,14 @@ interface AssistantState {
   selectSession: (id: string) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
-  /**
-   * Unsent composer text, held in the store rather than in `AssistantChat`.
-   *
-   * The floating panel unmounts its chat when closed, so a `useState` draft is
-   * destroyed on every close and reopen. Typing a question, closing the panel to
-   * check something in a pane, and coming back is a normal thing to do, so the
-   * text has to outlive the component. `AssistantChat` still owns the input
-   * element and the auto-grow behaviour; only the value is lifted.
-   */
+
+  // Plain setters: the values are UI-local state, not persisted chat history,
+  // so they deliberately stay out of Dexie and out of the backup.
   draft: string;
   setDraft: (text: string) => void;
-  /**
-   * Transcript scroll offset, likewise lifted so reopening returns the user to
-   * the same place in a long conversation instead of the bottom.
-   */
   listScrollTop: number;
   setListScrollTop: (top: number) => void;
+  setModel: (providerId: string, model: string) => void;
 }
 
 const WELCOME: AssistantViewMsg[] = [
@@ -301,6 +296,9 @@ const WELCOME: AssistantViewMsg[] = [
 let turnController: AbortController | null = null;
 /** The prompt of the turn currently running, so Retry can resume it verbatim. */
 let lastUserPrompt: string | null = null;
+
+/** Incremented on each new request. Responses with a stale ID are ignored. */
+let currentRequestId = 0;
 
 /** Was this turn ended by Stop rather than by finishing or failing? */
 export class TurnStopped extends Error {
@@ -433,7 +431,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
   async function request(
     provider: AiProvider,
     messages: ChatMessage[],
-    opts: { tools?: ToolSpec[] } = {},
+    opts: { tools?: ToolSpec[]; model?: string } = {},
   ) {
     try {
       return await chatCompletion({
@@ -442,6 +440,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         tools: opts.tools,
         signal: turnController?.signal,
         fallbackModel: provider.fallbackModel ?? null,
+        model: opts.model,
         onRetry: ({ attempt, max }) => {
           set({ retryStatus: `Model is busy, retrying (${attempt}/${max})...` });
         },
@@ -458,12 +457,13 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
    * produced the "Provider responded HTTP 503 - {"error":{...}}" wall of text.
    */
   function reportFailure(err: unknown): void {
-    const { message, retryable } = friendlyError(err);
+    const { message, retryable, noKeyProvider } = friendlyError(err);
     set({
       failure: {
         message,
         details: err instanceof Error ? err.message : String(err),
         retryable,
+        noKeyProvider,
       },
     });
   }
@@ -486,12 +486,17 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     view: WELCOME,
     pending: null,
     activeTool: null,
+    // Per-provider model selection, persisted in localStorage.
+    selectedModels: {} as Record<string, string>,
 
     setOpen: (open) => {
       set({ open });
       if (open) {
         void get().refreshProvider();
-        void get().loadSessions();
+        // Do NOT load sessions or select a session here.
+        // The assistant should always open with an empty new conversation (WELCOME).
+        // Past conversations are loaded only when the user explicitly opens them
+        // from the history list (Part 5).
       }
     },
 
@@ -508,15 +513,8 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       // Only sessions belonging to the active provider are replayable.
       const mine = provider ? all.filter((s) => s.providerId === provider.id) : [];
       set({ sessions: mine });
-      const current = get().sessionId;
-      if (current && !mine.some((s) => s.id === current)) {
-        // Provider changed (or session deleted) — start clean rather than
-        // resend another provider's messages.
-        set({ sessionId: null, view: WELCOME, pending: null });
-      }
-      if (!get().sessionId && mine.length > 0) {
-        await get().selectSession(mine[0].id);
-      }
+      // Do NOT auto-select a session. The assistant opens with WELCOME.
+      // The user can select a past session from the history list.
     },
 
     newSession: async () => {
@@ -554,6 +552,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     // so they deliberately stay out of Dexie and out of the backup.
     setDraft: (draft) => set({ draft }),
     setListScrollTop: (listScrollTop) => set({ listScrollTop }),
+    setModel: (providerId: string, model: string) =>
+      set((s) => ({
+        selectedModels: { ...s.selectedModels, [providerId]: model },
+      })),
 
     clearChat: async () => {
       const current = get().sessionId;
@@ -641,7 +643,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
           const result = await request(provider, [
             { role: 'system', content: systemPrompt(new Date()) },
             ...transcript,
-          ], { tools: TOOL_SPECS });
+          ], { tools: TOOL_SPECS, model: get().selectedModels[provider.id] });
 
           if (result.answeredByFallback) {
             set({ fallbackNotice: `Answered by fallback model ${result.answeredByFallback}` });
@@ -730,7 +732,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
           const closing = await request(provider, [
             { role: 'system', content: systemPrompt(new Date()) },
             ...transcript,
-          ]);
+          ], { model: get().selectedModels[provider.id] });
           const raw = closing.content.trim() ||
             'I reached the limit on how many actions I can take in one go. Here is where things stand — tell me what to do next.';
           transcript = [...transcript, { role: 'assistant', content: raw }];
@@ -854,6 +856,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
               content: `The user confirmed. ${pending.description} The action completed with: ${exec.summary}. Confirm the outcome in plain language.`,
             },
           ],
+          model: get().selectedModels[provider.id],
         });
         const reply = followUp.content.trim() || exec.summary;
         const replyMsg: ChatMessage = { role: 'assistant', content: reply, reasoning: followUp.reasoning };
