@@ -47,6 +47,7 @@ export const FileMigrationSection: React.FC = () => {
    * partial run.
    */
   const [lastFailures, setLastFailures] = useState<{ id: string; title: string; error: string }[]>([]);
+  const [controller, setController] = useState<AbortController | null>(null);
 
   // Refresh the pending count whenever the section mounts or the run ends.
   useEffect(() => {
