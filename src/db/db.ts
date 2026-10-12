@@ -62,6 +62,12 @@ export class ProductivityDB extends Dexie {
   chatSessions!: Table<ChatSession, string>;
   chatMessages!: Table<ChatMessageRow, string>;
   uiState!: Table<UiState, string>;
+  /**
+   * Local cache of R2 blobs, keyed by r2Key. Never synced: it is a pure
+   * convenience so re-opening a file in the same session (or after a reload)
+   * does not re-download it. See cloudBlobCache.ts.
+   */
+  cloudBlobCache!: Table<{ key: string; blob: Blob; cachedAt: number }, string>;
 
   constructor() {
     // The Dexie Cloud addon is attached here; without it db.cloud is undefined.
@@ -431,6 +437,23 @@ export class ProductivityDB extends Dexie {
             await tx.table('topics').put({ ...t, title: next, updatedAt: now });
           }
         }
+      });
+
+    /**
+     * v16: index `resources.kind`.
+     *
+     * The library filters resources by kind ('link' vs 'file') in several
+     * places, and `listPendingMigrations` does `where('kind').equals('file')`.
+     * Without an index that query throws SchemaError ("KeyPath kind on object
+     * store resources is not indexed"), which made the migration silently
+     * report "nothing to migrate" — the exact symptom of a run that never
+     * actually ran. Adding an index is a pure schema change: no row is read or
+     * rewritten, so the upgrade is empty.
+     */
+    this.version(16)
+      .stores({
+        resources: 'id, subjectId, topicId, title, dueDate, createdAt, groupId, kind',
+        cloudBlobCache: 'key, cachedAt',
       });
   }
 }

@@ -4,6 +4,7 @@ import { endOfWeek, format, isBefore, isToday, isWithinInterval, parseISO, start
 import { ArrowLeft, BookOpenCheck, CalendarClock, Check, ChevronRight, Columns2, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Pencil, Plus, Search, Timer, Trash2 } from 'lucide-react';
 import { db } from '../../../db/db';
 import { Card } from '../../../components/ui/Card';
+import { Modal } from '../../../components/ui/Modal';
 import { toast } from '../../../stores/useToastStore';
 import { MarkdownNotes, NoteTitleInput } from './MarkdownNotes';
 import { NotesEditorBody } from './NotesEditorBody';
@@ -15,6 +16,7 @@ import { AssessmentModal } from './AssessmentModal';
 import { MoveToGroupMenu } from './MoveToGroupMenu';
 import { GroupNameEditor, NewGroupButton } from './ResourceGroups';
 import { GroupTree } from './GroupTree';
+import { useCloudReAdd } from '../../../stores/useCloudReAddStore';
 import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, moveGroup, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes } from '../libraryRepo';
 import type { Assessment, Resource, ResourceGroup, Subject, Topic, TopicStatus } from '../../../types';
 
@@ -193,6 +195,14 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   const [editingTopic, setEditingTopic] = useState<Topic | null>(null);
   const [addingResource, setAddingResource] = useState(false);
   const [editingResource, setEditingResource] = useState<Resource | null>(null);
+  /**
+   * Re-adding a cloud copy: the user picked a file that lives in R2 but has no
+   * row here. The Settings page stashes the key; this component reads it and
+   * opens the add-resource modal with that key pre-filled, reusing the bytes
+   * already cached locally instead of re-uploading.
+   */
+  const pendingCloudKey = useCloudReAdd((s) => s.pendingKey);
+  const consumeCloudKey = useCloudReAdd((s) => s.consume);
   // The resource currently open in the preview modal, if any.
   const [previewingResource, setPreviewingResource] = useState<Resource | null>(null);
   // Real-browser full screen for the preview, wired through the SAME shared
@@ -202,6 +212,12 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   const [editingAssessment, setEditingAssessment] = useState<Assessment | null>(null);
   const [confirmDeleteSubject, setConfirmDeleteSubject] = useState(false);
   const [deleteResourceId, setDeleteResourceId] = useState<string | null>(null);
+  /**
+   * A delete that has been confirmed but is waiting on the user to say whether
+   * the cloud copy goes too. `null` = no delete pending; otherwise the id and
+   * the r2Key of the row being deleted.
+   */
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; r2Key: string | null } | null>(null);
   const [deleteTopicId, setDeleteTopicId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   /**
@@ -578,7 +594,10 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
                       confirmDelete={deleteResourceId === resource.id}
                       onToggle={() => toggleResourceCompleted(resource)}
                       onEdit={() => setEditingResource(resource)}
-                      onDelete={() => (deleteResourceId === resource.id ? void deleteResource(resource.id).then(() => setDeleteResourceId(null)) : setDeleteResourceId(resource.id))}
+                      onDelete={() => {
+                      const r = resources.find((x) => x.id === resource.id);
+                      setPendingDelete(r ? { id: r.id, r2Key: r.r2Key ?? null } : { id: resource.id, r2Key: null });
+                    }}
                       onCopy={() => copyPath(resource)}
                       onPreview={() => setPreviewingResource(resource)}
                       onDownload={() => downloadFile(resource)}
@@ -593,10 +612,13 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
                     key={resource.id}
                         resource={resource}
                         copied={copiedId === resource.id}
-                        confirmDelete={deleteResourceId === resource.id}
+confirmDelete={pendingDelete?.id === resource.id}
                         onToggle={() => toggleResourceCompleted(resource)}
                         onEdit={() => setEditingResource(resource)}
-                        onDelete={() => (deleteResourceId === resource.id ? void deleteResource(resource.id).then(() => setDeleteResourceId(null)) : setDeleteResourceId(resource.id))}
+onDelete={() => {
+                      const r = resources.find((x) => x.id === resource.id);
+                      setPendingDelete(r ? { id: r.id, r2Key: r.r2Key ?? null } : { id: resource.id, r2Key: null });
+                    }}
                         onCopy={() => copyPath(resource)}
                         onPreview={() => setPreviewingResource(resource)}
                         onDownload={() => downloadFile(resource)}
@@ -676,8 +698,18 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
       {(addingTopic || editingTopic) && (
         <TopicModal subjectId={subject.id} topic={editingTopic} onClose={() => { setEditingTopic(null); setAddingTopic(false); }} />
       )}
-      {(addingResource || editingResource) && (
-        <ResourceModal subjectId={subject.id} topicId={selectedTopic?.id ?? null} resource={editingResource} onClose={() => { setEditingResource(null); setAddingResource(false); }} />
+      {(addingResource || editingResource || pendingCloudKey) && (
+        <ResourceModal
+          subjectId={subject.id}
+          topicId={selectedTopic?.id ?? null}
+          resource={editingResource}
+          cloudKey={pendingCloudKey}
+          onClose={() => {
+            setEditingResource(null);
+            setAddingResource(false);
+            if (pendingCloudKey) consumeCloudKey();
+          }}
+        />
       )}
       {(addingAssessment || editingAssessment) && (
         <AssessmentModal subjectId={subject.id} assessment={editingAssessment} onClose={() => { setEditingAssessment(null); setAddingAssessment(false); }} />
@@ -688,9 +720,87 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
           onClose={() => setPreviewingResource(null)}
         />
       )}
+      {pendingDelete && (
+        <DeleteResourceModal
+          resource={resources.find((r) => r.id === pendingDelete.id) ?? null}
+          cloudKey={pendingDelete.r2Key}
+          onClose={() => setPendingDelete(null)}
+          onConfirm={async (deleteCloud) => {
+            await deleteResource(pendingDelete.id, { deleteCloud });
+            setPendingDelete(null);
+          }}
+        />
+      )}
       {/* The same shared full-screen preview the split view uses. */}
       <ResourceFullScreen resource={fullScreenResource} onClose={closeFullScreen} />
     </div>
+  );
+};
+
+/**
+ * Delete confirmation with the optional cloud half.
+ *
+ * Deleting the local row is always the first step and always happens. The
+ * cloud copy is a second, explicit choice — most users want the file gone
+ * everywhere, but a file that was re-added on another device is a legitimate
+ * reason to keep the cloud object around.
+ */
+const DeleteResourceModal: React.FC<{
+  resource: Resource | null;
+  cloudKey: string | null;
+  onClose: () => void;
+  onConfirm: (deleteCloud: boolean) => Promise<void>;
+}> = ({ resource, cloudKey, onClose, onConfirm }) => {
+  if (!resource) return null;
+  const [deleting, setDeleting] = useState(false);
+  const [deleteCloud, setDeleteCloud] = useState(true);
+
+  const confirm = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      await onConfirm(deleteCloud);
+    } catch (e) {
+      toast('error', 'Delete failed', e instanceof Error ? e.message : 'Could not delete the resource.');
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <Modal open onClose={onClose} title="Delete resource" subtitle={resource.title} size="md">
+      <div className="space-y-4">
+        <p className="text-sm text-content-secondary">
+          This removes the resource from this subject. It cannot be undone.
+        </p>
+        {cloudKey ? (
+          <label className="flex items-start gap-3 rounded-xl border border-border bg-bg-elevated/40 p-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={deleteCloud}
+              onChange={(e) => setDeleteCloud(e.target.checked)}
+              className="mt-0.5 accent-accent"
+            />
+            <div>
+              <p className="text-xs font-semibold text-content-primary">Also delete the cloud copy</p>
+              <p className="mt-0.5 text-[11px] text-content-tertiary">
+                The file lives in Cloudflare R2 as <span className="font-mono break-all">{cloudKey}</span>.
+                Leave this unchecked to keep the cloud copy — useful if you want to re-add it later.
+              </p>
+            </div>
+          </label>
+        ) : (
+          <p className="text-xs text-content-tertiary">
+            This file has no cloud copy, so there is nothing else to delete.
+          </p>
+        )}
+        <div className="flex items-center justify-end gap-2 border-t border-border/50 pt-4">
+          <button onClick={onClose} disabled={deleting} className="px-4 min-h-[44px] rounded-xl text-sm text-content-secondary hover:text-content-primary transition-colors">Cancel</button>
+          <button onClick={confirm} disabled={deleting} className="px-5 min-h-[44px] rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-sm font-semibold transition-colors">
+            {deleting ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 };
 

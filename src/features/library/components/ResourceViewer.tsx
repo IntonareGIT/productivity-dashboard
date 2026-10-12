@@ -107,9 +107,16 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
     setRemoteError(false);
     (async () => {
       try {
+        const { getCachedCloudBlob, cacheCloudBlob } = await import('../../ai/cloudBlobCache');
         const { downloadFromR2 } = await import('../../ai/cloudClient');
-        const blob = await downloadFromR2(resource.r2Key!);
+        const cached = await getCachedCloudBlob(resource.r2Key!);
         if (cancelled) return;
+        let blob = cached;
+        if (!blob) {
+          blob = await downloadFromR2(resource.r2Key!);
+          if (cancelled) return;
+          await cacheCloudBlob(resource.r2Key!, blob);
+        }
         const url = URL.createObjectURL(blob);
         setRemoteUrl(url);
       } catch {
@@ -154,8 +161,13 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
     }
     if (resource.r2Key) {
       try {
+        const { getCachedCloudBlob, cacheCloudBlob } = await import('../../ai/cloudBlobCache');
         const { downloadFromR2 } = await import('../../ai/cloudClient');
-        const blob = await downloadFromR2(resource.r2Key);
+        let blob = await getCachedCloudBlob(resource.r2Key);
+        if (!blob) {
+          blob = await downloadFromR2(resource.r2Key);
+          await cacheCloudBlob(resource.r2Key, blob);
+        }
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;

@@ -11,6 +11,12 @@ interface ResourceModalProps {
   subjectId: string;
   topicId: string | null;
   resource: Resource | null;
+  /**
+   * When set, the modal opens in "re-add a cloud copy" mode: the row is saved
+   * with this r2Key and no upload, because the bytes are already in R2 (and
+   * cached locally). The label is pre-filled from the key's filename.
+   */
+  cloudKey?: string | null;
   onClose: () => void;
 }
 
@@ -43,9 +49,9 @@ const UploadGauge: React.FC<{ loaded: number; total: number }> = ({ loaded, tota
   );
 };
 
-export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId, resource, onClose }) => {
-  const [kind, setKind] = useState<ResourceKind>(resource?.kind ?? 'link');
-  const [title, setTitle] = useState('');
+export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId, resource, cloudKey, onClose }) => {
+  const [kind, setKind] = useState<ResourceKind>(resource?.kind ?? (cloudKey ? 'file' : 'link'));
+  const [title, setTitle] = useState(resource?.title ?? (cloudKey ? (cloudKey.split('/').pop() ?? '').replace(/\.[^.]+$/, '') : ''));
   const [urlOrPath, setUrlOrPath] = useState('');
   const [tagsInput, setTagsInput] = useState('');
   const [dueDate, setDueDate] = useState('');
@@ -107,7 +113,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
       } else {
         // A new file goes to R2 first; only then is the row written, so a
         // failed upload never leaves a dangling record behind.
-        let r2Key = resource?.r2Key ?? null;
+        let r2Key = resource?.r2Key ?? (cloudKey ?? null);
         if (file) {
           const { uploadToR2, currentUserId } = await import('../../../features/ai/cloudClient');
           const userId = currentUserId();
@@ -129,7 +135,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
           urlOrPath: resource?.urlOrPath ?? '',
           blob: undefined,
           r2Key,
-          fileName: file?.name ?? resource?.fileName,
+          fileName: file?.name ?? resource?.fileName ?? (cloudKey ? cloudKey.split('/').pop() ?? null : null),
           mimeType: file?.type ?? resource?.mimeType,
           fileSize: file?.size ?? resource?.fileSize,
           tags,

@@ -129,3 +129,16 @@ export async function downloadFromR2(key: string): Promise<Blob> {
   if (!res.ok) throw new Error(`Download failed with status ${res.status}.`);
   return res.blob();
 }
+
+/**
+ * Delete an object from R2 by key. Best-effort: a failure here must not break
+ * deleting the local row, so callers catch it.
+ */
+export async function deleteCloudObject(key: string): Promise<void> {
+  const { url } = await gateway<{ url: string }>(
+    '/api/delete-url',
+    { method: 'POST', body: JSON.stringify({ key }) },
+  );
+  const res = await fetch(url, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`Delete failed with status ${res.status}.`);
+}

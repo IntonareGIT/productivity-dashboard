@@ -471,15 +471,23 @@ export function resourceObjectUrl(resource: Resource): string | null {
 /**
  * Resolve the bytes for a file resource, regardless of where they live.
  *
- * Local blobs are returned as-is; R2-staged files are fetched through the
+ * Local blobs are returned as-is. R2-staged files are fetched through the
  * gateway, which verifies the Dexie Cloud token and returns a 5-minute
- * presigned URL. Callers should treat a thrown promise as "not available".
+ * presigned URL. The fetched blob is cached locally so re-opening the same
+ * file in this session (or after a reload) does not re-download it.
+ *
+ * Callers should treat a thrown promise as "not available".
  */
 export async function loadFileBytes(resource: Resource): Promise<Blob | null> {
   if (resource.blob && resource.blob instanceof Blob) return resource.blob;
   if (resource.r2Key) {
     const { downloadFromR2 } = await import('../../features/ai/cloudClient');
-    return downloadFromR2(resource.r2Key);
+    const { getCachedCloudBlob, cacheCloudBlob } = await import('../../features/ai/cloudBlobCache');
+    const cached = await getCachedCloudBlob(resource.r2Key);
+    if (cached) return cached;
+    const blob = await downloadFromR2(resource.r2Key);
+    await cacheCloudBlob(resource.r2Key, blob);
+    return blob;
   }
   return null;
 }
@@ -489,8 +497,20 @@ export async function toggleResourceCompleted(resource: Resource): Promise<void>
   await db.resources.put({ ...cur, completed: !(cur.completed ?? false) });
 }
 
-export async function deleteResource(id: string): Promise<void> {
+export async function deleteResource(id: string, opts: { deleteCloud?: boolean } = {}): Promise<void> {
+  const resource = await db.resources.get(id);
   await db.resources.delete(id);
+  if (resource?.r2Key) {
+    // The local cache is keyed by r2Key; a stale entry would serve bytes for a
+    // row the user just deleted. Clear it regardless of whether the cloud
+    // object is deleted, so a re-add cannot resurrect a phantom.
+    const { forgetCloudBlob } = await import('../../features/ai/cloudBlobCache');
+    forgetCloudBlob(resource.r2Key);
+    if (opts.deleteCloud) {
+      const { deleteCloudObject } = await import('../../features/ai/cloudClient');
+      await deleteCloudObject(resource.r2Key).catch(() => {});
+    }
+  }
 }
 
 /* ---------------- Resource groups (v10) ---------------- */
