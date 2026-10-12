@@ -112,7 +112,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
       setError('A URL or file path is required.');
       return;
     }
-    if (kind === 'file' && !file && !resource?.r2Key && !resource?.blob) {
+    if (kind === 'file' && !file && !resource?.r2Key && !resource?.blob && !cloudKey) {
       setError('Choose a file to upload.');
       return;
     }
@@ -133,43 +133,68 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
           groupId: groupId || null,
         });
       } else {
-        // A new file goes to R2 first; only then is the row is written, so a
-        // failed upload never leaves a dangling record behind.
-        const { uploadToR2, currentUserId, deleteCloudObject } = await import('../../../features/ai/cloudClient');
-        const { buildCloudKey } = await import('../../../features/ai/cloudKey');
-        const userId = currentUserId();
-        if (!userId) throw new Error('Sign in to Dexie Cloud to upload files.');
+        // Three paths share this branch:
+        //   - a brand new file upload
+        //   - re-uploading a file whose bytes were offloaded (file picked, row exists)
+        //   - re-adding an orphaned cloud copy (no file, cloudKey set) — the bytes
+        //     are already in R2 and cached locally, so nothing is uploaded.
+        if (file) {
+          const { uploadToR2, currentUserId, deleteCloudObject } = await import('../../../features/ai/cloudClient');
+          const { buildCloudKey } = await import('../../../features/ai/cloudKey');
+          const userId = currentUserId();
+          if (!userId) throw new Error('Sign in to Dexie Cloud to upload files.');
 
-        // The subject folder is the organizing unit: every file for a subject
-        // lands under `{userId}/{subject}/`. Re-uploading replaces the old
-        // object rather than leaving a second copy, so the old key is deleted
-        // first — but only after the new one exists, so a failed re-upload
-        // never loses the file.
-        const key = buildCloudKey(userId, subjectId, subjectName, file.name);
-        setUploadProgress({ loaded: 0, total: file.size });
-        await uploadToR2(key, file, file.type || undefined, (loaded) => {
-          setUploadProgress({ loaded, total: file.size });
-        });
-        if (resource?.r2Key && resource.r2Key !== key) {
-          await deleteCloudObject(resource.r2Key).catch(() => {});
+          // The subject folder is the organizing unit: every file for a subject
+          // lands under `{userId}/{subject}/`. Re-uploading replaces the old
+          // object rather than leaving a second copy, so the old key is deleted
+          // first — but only after the new one exists, so a failed re-upload
+          // never loses the file.
+          const key = buildCloudKey(userId, subjectId, subjectName, file.name);
+          setUploadProgress({ loaded: 0, total: file.size });
+          await uploadToR2(key, file, file.type || undefined, (loaded) => {
+            setUploadProgress({ loaded, total: file.size });
+          });
+          if (resource?.r2Key && resource.r2Key !== key) {
+            await deleteCloudObject(resource.r2Key).catch(() => {});
+          }
+          await saveResource({
+            id: resource?.id,
+            subjectId,
+            topicId,
+            kind,
+            title,
+            // Uploads carry no URL. Only keep a previous value when editing.
+            urlOrPath: resource?.urlOrPath ?? '',
+            blob: null,
+            r2Key: key,
+            fileName: file.name,
+            mimeType: file.type || null,
+            fileSize: file.size,
+            tags,
+            dueDate: dueDate || null,
+            groupId: groupId || null,
+          });
+        } else {
+          // Re-adding an orphaned cloud copy: the bytes are already in R2 and
+          // cached locally, so the only thing to do is write the row pointing
+          // at the existing key. No upload, no file, no progress bar.
+          await saveResource({
+            id: resource?.id,
+            subjectId,
+            topicId,
+            kind,
+            title,
+            urlOrPath: resource?.urlOrPath ?? '',
+            blob: null,
+            r2Key: cloudKey!,
+            fileName: cloudKey!.split('/').pop() ?? null,
+            mimeType: null,
+            fileSize: null,
+            tags,
+            dueDate: dueDate || null,
+            groupId: groupId || null,
+          });
         }
-        await saveResource({
-          id: resource?.id,
-          subjectId,
-          topicId,
-          kind,
-          title,
-          // Uploads carry no URL. Only keep a previous value when editing.
-          urlOrPath: resource?.urlOrPath ?? '',
-          blob: null,
-          r2Key: key,
-          fileName: file.name,
-          mimeType: file.type || null,
-          fileSize: file.size,
-          tags,
-          dueDate: dueDate || null,
-          groupId: groupId || null,
-        });
       }
       onClose();
     } catch (e) {

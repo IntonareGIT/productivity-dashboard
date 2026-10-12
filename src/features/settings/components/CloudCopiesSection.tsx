@@ -161,7 +161,7 @@ export const CloudCopiesSection: React.FC = () => {
         <ResourceModal
           subjectId={reAddSubjectId}
           cloudKey={reAddKey}
-          onClose={() => { setReAddKey(null); setReAddSubjectId(null); }}
+          onClose={() => { setReAddKey(null); setReAddSubjectId(null); void refresh(); }}
         />
       )}
     </Card>
