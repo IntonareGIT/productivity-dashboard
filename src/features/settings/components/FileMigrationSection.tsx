@@ -27,7 +27,26 @@ export const FileMigrationSection: React.FC = () => {
   const [pending, setPending] = useState(0);
   const [status, setStatus] = useState<MigrationStatus>('idle');
   const [progress, setProgress] = useState<MigrationProgress | null>(null);
-  const [controller, setController] = useState<AbortController | null>(null);
+  /**
+   * The last run's failures, kept after the run ends.
+   *
+   * The failed list only renders while `status === 'running'`, so a finished
+   * run with failures would drop the reasons the moment it reported them —
+   * leaving only the one-line toast. Keeping them here means the user can
+   * read why each file failed and act on it, which is the whole point of a
+   * partial run.
+   */
+  const [lastFailures, setLastFailures] = useState<{ id: string; title: string; error: string }[]>([]);
+  /**
+   * The last run's failures, kept after the run ends.
+   *
+   * The failed list only renders while `status === 'running'`, so a finished
+   * run with failures would drop the reasons the moment it reported them —
+   * leaving only the one-line toast. Keeping them here means the user can
+   * read why each file failed and act on it, which is the whole point of a
+   * partial run.
+   */
+  const [lastFailures, setLastFailures] = useState<{ id: string; title: string; error: string }[]>([]);
 
   // Refresh the pending count whenever the section mounts or the run ends.
   useEffect(() => {
@@ -41,21 +60,21 @@ export const FileMigrationSection: React.FC = () => {
     };
   }, [status]);
 
-  const start = async () => {
+const start = async () => {
     const ac = new AbortController();
     setController(ac);
     setStatus('running');
     setProgress({ total: pending, done: 0, doneBytes: 0, totalBytes: 0, current: null, currentPct: 0, failed: [] });
+    setLastFailures([]);
     try {
       const result = await migrateFilesToCloud(setProgress, ac.signal);
       setProgress(result);
+      setLastFailures(result.failed);
       setStatus(result.failed.length === 0 && result.done > 0 ? 'done' : 'idle');
       if (result.failed.length === 0 && result.done > 0) {
         toast('success', 'Migration complete', `${result.done} file(s) moved to the cloud.`);
       } else if (result.failed.length > 0) {
         toast('error', 'Migration finished with failures', `${result.failed.length} file(s) could not be moved.`);
-        // The toast is a one-line summary; the card keeps the per-file reasons
-        // so the user can act on them without digging through a console.
       }
     } catch (e) {
       setStatus('idle');
@@ -158,6 +177,24 @@ export const FileMigrationSection: React.FC = () => {
             >
               <Play className="w-4 h-4" /> Start migration
             </button>
+          </div>
+        )}
+
+        {/* Failures from the last run, kept after it ends so the reasons are
+            still readable — they only rendered while running before, which
+            meant the toast was the only thing left. */}
+        {lastFailures.length > 0 && (
+          <div className="mt-3 rounded-xl border border-rose-500/30 bg-rose-500/5 p-3">
+            <p className="text-[11px] font-semibold text-rose-500 mb-1">
+              {lastFailures.length} file{lastFailures.length === 1 ? '' : 's'} could not be moved:
+            </p>
+            <ul className="text-[11px] text-rose-500/80 space-y-0.5">
+              {lastFailures.map((f) => (
+                <li key={f.id}>
+                  <span className="font-medium">{f.title}</span> — {f.error}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
