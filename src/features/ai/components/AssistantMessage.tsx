@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Copy, Check, Clock, RotateCcw, Bot, User, Zap, AlertTriangle } from 'lucide-react';
+import { Copy, Check, Clock, RotateCcw, Bot, User, Zap, AlertTriangle, RefreshCw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 
@@ -17,7 +17,9 @@ interface AssistantMessageProps {
   msg: AssistantViewMsg;
   onCopy?: (text: string) => void;
   onRegenerate?: (msgId: string) => void;
+  onRetry?: (msgId: string) => void;
   isStreaming?: boolean;
+  isLastError?: boolean;
 }
 
 /**
@@ -27,7 +29,9 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
   msg,
   onCopy,
   onRegenerate,
+  onRetry,
   isStreaming = false,
+  isLastError = false,
 }) => {
   const [copied, setCopied] = useState(false);
   const [showActions, setShowActions] = useState(false);
@@ -158,6 +162,16 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
               >
                 <RotateCcw className="w-3.5 h-3.5" />
               </button>
+              {isError && isLastError && onRetry && (
+                <button
+                  onClick={() => onRetry(msg.id)}
+                  aria-label="Retry"
+                  className="p-1 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+                  title="Retry"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
+              )}
             </>
           )}
         </div>

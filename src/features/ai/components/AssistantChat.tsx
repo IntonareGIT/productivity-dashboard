@@ -66,6 +66,12 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // The composer is enabled when the SELECTED model has a key.
+  // The store already filters models to only those with hasKey, so we just
+  // check if the selected model exists in that filtered list.
+  const selectedModel = models.find((m) => m.id === selectedModelId) ?? null;
+  const hasUsableModel = Boolean(selectedModel);
+
   /**
    * Restore the transcript scroll position after a remount.
    *
@@ -190,7 +196,7 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-content-primary leading-tight">Assistant</p>
           <p className="text-[11px] text-content-tertiary truncate">
-            {configured ? 'Connected — can act on your data' : models.length > 0 ? 'Select a model to start' : 'Needs an AI model'}
+            {hasUsableModel ? 'Ready — can act on your data' : models.length > 0 ? 'Select a model to start' : 'Needs an AI model'}
           </p>
         </div>
         {models.length > 0 && (
@@ -223,23 +229,27 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
       )}
 
       <div ref={listRef} onScroll={onScroll} className={`flex-1 overflow-y-auto px-3 py-3 space-y-2.5 min-h-[180px] ${className}`}>
-        {view.map((msg) => (
-          <AssistantMessage
-            key={msg.id}
-            msg={msg}
-            onCopy={(text) => navigator.clipboard.writeText(text)}
-            onRegenerate={(msgId) => {
-              const idx = view.findIndex((m) => m.id === msgId);
-              if (idx > 0 && view[idx - 1].role === 'user') {
-                // Find the user message before this assistant message
-                const userMsg = view[idx - 1];
-                setDraft(userMsg.text);
-                void send(userMsg.text, true);
-              }
-            }}
-            isStreaming={busy && view[view.length - 1]?.id === msg.id}
-          />
-        ))}
+        {view.map((msg, idx) => {
+          const isLastError = msg.error && idx === view.length - 1;
+          return (
+            <AssistantMessage
+              key={msg.id}
+              msg={msg}
+              onCopy={(text) => navigator.clipboard.writeText(text)}
+              onRegenerate={(msgId) => {
+                const idx = view.findIndex((m) => m.id === msgId);
+                if (idx > 0 && view[idx - 1].role === 'user') {
+                  const userMsg = view[idx - 1];
+                  setDraft(userMsg.text);
+                  void send(userMsg.text, true);
+                }
+              }}
+              onRetry={isLastError ? (msgId) => void retryLast() : undefined}
+              isLastError={isLastError}
+              isStreaming={busy && view[view.length - 1]?.id === msg.id}
+            />
+          );
+        })}
         {activeTool ? (
           <div className="flex justify-start">
             <div className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent-subtle px-2.5 py-1 text-[11px] font-semibold text-accent-text">
@@ -265,7 +275,7 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
             </div>
           </div>
         )}
-        {fallbackNotice && (
+{fallbackNotice && (
           <div className="flex justify-start">
             <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-elevated px-2.5 py-1 text-[11px] text-content-secondary">
               <Info className="w-3 h-3" aria-hidden="true" />
@@ -275,38 +285,8 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
         )}
       </div>
 
-      {/* A failure is shown OUTSIDE the scrolling transcript, above the
-          composer, so Retry is always reachable without scrolling back to find
-          it. The raw provider error is behind Details, never dumped inline. */}
-      {failure && failure.message !== 'no_key' && (
-        <div className="mx-3 mb-2 rounded-xl border border-rose-500/40 bg-rose-500/10 p-3" data-failure>
-          <p className="text-xs text-content-primary">{failure.message}</p>
-          <div className="flex flex-wrap items-center gap-2 mt-2">
-            {failure.retryable && (
-              <button
-                onClick={() => void retryLast()}
-                disabled={busy}
-                className="inline-flex items-center gap-1.5 px-3 min-h-[36px] rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-semibold transition-colors disabled:opacity-50"
-              >
-                <RefreshCw className="w-3.5 h-3.5" /> Retry
-              </button>
-            )}
-            <button
-              onClick={() => setShowDetails((v) => !v)}
-              aria-expanded={showDetails}
-              className="px-2.5 min-h-[36px] rounded-lg text-xs font-semibold text-content-secondary hover:text-content-primary transition-colors"
-            >
-              {showDetails ? 'Hide details' : 'Details'}
-            </button>
-          </div>
-          {showDetails && (
-            <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-bg-surface p-2 text-[10px] text-content-secondary">
-              {failure.details}
-            </pre>
-          )}
-        </div>
-      )}
-
+      {/* The "no_key" failure shows the add-model banner. Other failures are
+          already in the transcript as chat messages (see reportFailure). */}
       {failure && failure.message === 'no_key' && (
         <div className="mx-3 mb-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3" data-failure>
           <div className="flex items-start gap-2">
@@ -371,8 +351,8 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={models.length > 0 ? 'Ask or tell me to do something…' : 'Add a model in Settings → AI Models…'}
-          disabled={models.length === 0}
+          placeholder={hasUsableModel ? 'Ask anything…' : 'Add a model in Settings'}
+          disabled={!hasUsableModel}
           aria-label="Message the assistant"
           className="flex-1 min-w-0 resize-none overflow-y-auto bg-bg-elevated/60 border border-border rounded-xl px-3 py-2.5 text-sm text-content-primary outline-none focus:border-accent placeholder:text-content-tertiary disabled:opacity-50"
           style={{ maxHeight: MAX_COMPOSER_HEIGHT_PX }}
@@ -392,7 +372,7 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
         ) : (
           <button
             type="submit"
-            disabled={!draft.trim() || models.length === 0}
+            disabled={!draft.trim() || !hasUsableModel}
             aria-label="Send message"
             className="p-3 rounded-xl bg-accent hover:bg-accent-hover text-white transition-colors disabled:opacity-40 shrink-0"
           >

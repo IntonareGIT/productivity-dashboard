@@ -476,6 +476,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
    *
    * Replaces pushing the provider's raw JSON into the transcript, which is what
    * produced the "Provider responded HTTP 503 - {"error":{...}}" wall of text.
+   *
+   * Provider errors (not "no_key") are also pushed into the transcript as a
+   * normal assistant message so they appear in-line with the conversation. The
+   * "no_key" case is handled separately and shows the add-model banner instead.
    */
   function reportFailure(err: unknown): void {
     const { message, retryable, noKeyProvider } = friendlyError(err);
@@ -487,6 +491,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         noKeyProvider,
       },
     });
+    // Provider errors become a chat message; "no_key" shows the add-model banner.
+    if (!noKeyProvider) {
+      pushView({ role: 'assistant', text: message, error: true });
+    }
   }
 
   return {

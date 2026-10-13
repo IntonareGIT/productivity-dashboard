@@ -281,6 +281,8 @@ export const HELP_SECTIONS: HelpSection[] = [
           { lead: 'Notes and search', text: 'Search your notes by keyword; read a note or specific pages of a PDF; edit a note and revert the edit if needed.' },
           { lead: 'Assistant settings', text: 'List available models; set the default chat model; set the default extraction model.' },
           { lead: 'Conversations', text: 'List your past conversations; open one to continue it; delete one you no longer need; and start a fresh conversation from anywhere.' },
+          { lead: 'Library editing', text: 'Create, rename, or delete subjects, topics, and resources; set a note title; create a note, rename a note, delete a note; create a group, rename a group, delete a group, move a group; create, rename, move, or delete groups; list groups; rename a topic, delete a topic; rename a resource, delete a resource; move resources into or out of groups.' },
+          { lead: 'Calendar editing', text: 'Create, rename, move, or delete events; add or delete assessments; create recurring event series with a preview.' },
         ],
       },
     ],

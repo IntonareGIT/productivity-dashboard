@@ -77,7 +77,12 @@ check('the divider chevron is decorative', /aria-hidden/.test(page));
 /* ------------------------------------------- ACCURACY: the AI tool coverage
  * Every tool the runtime actually registers must be described on the page, or
  * the assistant can do something the documentation never mentions. */
-const toolSrc = ['src/features/ai/tools.ts', 'src/features/ai/toolsExtended.ts'].map(read).join('\n');
+const toolSrc = [
+  read('src/features/ai/tools.ts'),
+  read('src/features/ai/toolsExtended.ts'),
+  read('src/features/ai/toolsLibrary.ts'),
+  read('src/features/ai/toolsCalendar.ts'),
+].join('\n');
 const toolNames = [...new Set([...toolSrc.matchAll(/name: '([a-z][a-zA-Z]*)'/g)].map((m) => m[1]))];
 
 // Each tool mapped to copy that must exist for it. A tool with no entry here is
@@ -122,6 +127,23 @@ const TOOL_PROOF = {
   listModels: /List available models/i,
   setChatModel: /set the default chat model/i,
   setExtractionModel: /set the default extraction model/i,
+  setNoteTitle: /set a note title/i,
+  createNote: /create a note/i,
+  renameNote: /rename a note/i,
+  deleteNote: /delete a note/i,
+  listGroups: /create, rename, move, or delete groups/i,
+  createGroup: /create a group/i,
+  renameGroup: /rename a group/i,
+  deleteGroup: /delete a group/i,
+  moveGroup: /move a group/i,
+  moveResourceToGroup: /move resources into or out of groups/i,
+  renameSubject: /rename a subject/i,
+  deleteSubject: /delete a subject/i,
+  renameTopic: /rename a topic/i,
+  deleteTopic: /delete a topic/i,
+  renameResource: /rename a resource/i,
+  moveResource: /move a resource/i,
+  deleteResource: /delete a resource/i,
   listConversations: /List your past conversations/i,
   openConversation: /open one to continue it/i,
   deleteConversation: /delete one you no longer need/i,
