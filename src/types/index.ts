@@ -112,6 +112,34 @@ export interface Resource {
   createdAt: string;       // ISO 8601
 }
 
+/**
+ * Extraction note for a PDF resource (schema v17).
+ * One note per resource, keyed by fileId = resource.id.
+ */
+export interface Note {
+  fileId: string;          // = Resource.id, also primary key
+  status: 'none' | 'queued' | 'processing' | 'ready' | 'failed';
+  modelId?: string;        // Model used/selected for extraction
+  chunks: NoteChunk[];     // Per-chunk progress and markdown
+  markdown: string;        // Full extracted markdown (concatenated chunks)
+  lastError?: string;      // Short error text, never a key
+  checked: boolean;        // User has reviewed
+  editedByUser: boolean;   // User edited the markdown
+  editedByAI: boolean;     // AI edited the markdown
+  aiMayEdit: boolean;      // AI is allowed to edit
+  versions: string[];      // Last 5 markdown versions (newest first)
+  updatedAt: string;       // ISO 8601
+}
+
+export interface NoteChunk {
+  index: number;           // 0-based chunk index
+  pageStart: number;       // 1-based page start
+  pageEnd: number;         // 1-based page end
+  status: 'pending' | 'processing' | 'ready' | 'failed';
+  markdown: string;        // Markdown for this chunk
+  error?: string;          // Chunk-specific error
+}
+
 export type AssessmentType = 'exam' | 'quiz' | 'assignment' | 'project';
 export type AssessmentStatus = 'upcoming' | 'done';
 

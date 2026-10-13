@@ -5,7 +5,7 @@ import {
   noteTitleForNumber,
   uniqueDefaultNoteTitle,
 } from '../../db/noteTitle';
-import type { Assessment, AssessmentStatus, AssessmentType, Resource, ResourceGroup, ResourceKind, Subject, Topic, TopicStatus } from '../../types';
+import type { Assessment, AssessmentStatus, AssessmentType, Note, Resource, ResourceGroup, ResourceKind, Subject, Topic, TopicStatus } from '../../types';
 import { newId } from '../../utils/id';
 import { markdownToEditorHtml } from './noteEditor/markdownToHtml';
 import { htmlToPlainText, sanitizeEditorHtml } from './noteEditor/sanitizeHtml';
@@ -454,6 +454,35 @@ export async function saveResource(input: ResourceInput): Promise<string> {
     await recordCloudKey(record.r2Key);
   }
   return record.id;
+}
+
+/**
+ * Save an extraction note for a PDF resource.
+ * Creates a new note row linked to the resource by fileId.
+ */
+export interface NoteInput {
+  fileId: string;
+  status: 'none' | 'queued' | 'processing' | 'ready' | 'failed';
+  modelId?: string;
+}
+
+export async function saveNote(input: NoteInput): Promise<string> {
+  const now = new Date().toISOString();
+  const record: Note = {
+    fileId: input.fileId,
+    status: input.status,
+    modelId: input.modelId,
+    chunks: [],
+    markdown: '',
+    checked: false,
+    editedByUser: false,
+    editedByAI: false,
+    aiMayEdit: false,
+    versions: [],
+    updatedAt: now,
+  };
+  await db.notes.put(record);
+  return record.fileId;
 }
 
 /**

@@ -3,6 +3,7 @@ import dexieCloud from 'dexie-cloud-addon';
 import type {
   AiProvider,
   Assessment,
+  Note,
   Subject,
   Topic,
   Resource,
@@ -76,6 +77,11 @@ export class ProductivityDB extends Dexie {
    * with no row here" actually detectable. See cloudBlobCache.ts.
    */
   knownCloudKeys!: Table<{ key: string; recordedAt: number }, string>;
+  /**
+   * Extraction notes for PDF resources. One note per resource (fileId = resource.id).
+   * Status tracks the extraction pipeline: none | queued | processing | ready | failed.
+   */
+  notes!: Table<Note, string>;
 
   constructor() {
     // The Dexie Cloud addon is attached here; without it db.cloud is undefined.
@@ -473,6 +479,30 @@ export class ProductivityDB extends Dexie {
         resources: 'id, subjectId, topicId, title, dueDate, createdAt, groupId, kind',
         cloudBlobCache: 'key, cachedAt',
         knownCloudKeys: 'key, recordedAt',
+      });
+
+    /**
+     * v17: extraction notes for PDF resources.
+     *
+     * ADDITIVE ONLY. A new `notes` table with:
+     *   - fileId: FK to Resource.id (also the primary key, one note per resource)
+     *   - status: "none" | "queued" | "processing" | "ready" | "failed"
+     *   - modelId: the model used/selected for extraction
+     *   - chunks: array of { index, pageStart, pageEnd, status, markdown }
+     *   - markdown: the full extracted markdown
+     *   - lastError: short error text (never a key)
+     *   - checked: whether the user has reviewed the extraction
+     *   - editedByUser: whether the user edited the markdown
+     *   - editedByAI: whether the AI edited the markdown
+     *   - aiMayEdit: whether the AI is allowed to edit
+     *   - versions: last 5 versions of the markdown
+     *   - updatedAt: ISO 8601
+     *
+     * No upgrade needed: new table is empty, existing resources have no notes.
+     */
+    this.version(17)
+      .stores({
+        notes: 'fileId, status, updatedAt',
       });
   }
 }

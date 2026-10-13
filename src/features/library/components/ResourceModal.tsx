@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { FileUp } from 'lucide-react';
+import { FileUp, AlertTriangle, Link as LinkIcon, Clock, Check } from 'lucide-react';
 import { Modal } from '../../../components/ui/Modal';
 import { saveResource } from '../libraryRepo';
 import { LARGE_BLOB_WARNING_BYTES } from '../../../db/cloudConfig';
 import { db } from '../../../db/db';
-import type { Resource, ResourceKind } from '../../../types';
+import type { Resource, ResourceKind, UserModel } from '../../../types';
 
 interface ResourceModalProps {
   subjectId: string;
@@ -52,6 +52,12 @@ const UploadGauge: React.FC<{ loaded: number; total: number }> = ({ loaded, tota
   );
 };
 
+function isPdfFile(mime: string | null | undefined, name: string | null | undefined): boolean {
+  if (mime === 'application/pdf') return true;
+  if (name?.toLowerCase().endsWith('.pdf')) return true;
+  return false;
+}
+
 export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId, resource, cloudKey, forceFile, subjectName, onClose }) => {
   const [kind, setKind] = useState<ResourceKind>(resource?.kind ?? (cloudKey ? 'file' : 'link'));
   const [title, setTitle] = useState(resource?.title ?? (cloudKey ? (cloudKey.split('/').pop() ?? '').replace(/\.[^.]+$/, '') : ''));
@@ -69,6 +75,44 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
   const [uploadProgress, setUploadProgress] = useState<{ loaded: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Extraction state
+  const [extractMode, setExtractMode] = useState<'later' | 'now'>('later');
+  const [selectedModelId, setSelectedModelId] = useState<string>('');
+  const [models, setModels] = useState<UserModel[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+
+  // Determine if the current file is a PDF
+  const currentFileName = file?.name ?? fileName;
+  const currentMimeType = file?.type ?? mimeType;
+  const isPdf = kind === 'file' && isPdfFile(currentMimeType, currentFileName);
+
+  // Fetch models that can handle PDFs and have a key
+  const fetchModels = async () => {
+    setModelsLoading(true);
+    setModelsError(null);
+    try {
+      const res = await fetch('/api/models', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch models');
+      const data = await res.json();
+      const pdfModels = (data.models ?? []).filter(
+        (m: UserModel) => m.capabilities.acceptsPdf && m.hasKey
+      );
+      setModels(pdfModels);
+      if (pdfModels.length > 0 && !selectedModelId) {
+        setSelectedModelId(pdfModels[0].id);
+      }
+    } catch (e) {
+      setModelsError(e instanceof Error ? e.message : 'Could not load models');
+    } finally {
+      setModelsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isPdf) fetchModels();
+  }, [isPdf]);
+
   // A cloud key can arrive after this modal mounts (the Settings page stashes
   // it and the library opens the modal later), so re-sync the label from it
   // rather than trusting the value captured at mount time.
@@ -78,6 +122,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
       setTitle(name.replace(/\.[^.]+$/, ''));
       setFileName(name);
       setKind('file');
+      setMimeType('application/pdf');
     }
   }, [cloudKey, resource]);
 
@@ -101,6 +146,10 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
     setError('');
     setGroupId(resource?.groupId ?? '');
     setUploadProgress(null);
+    setExtractMode('later');
+    setSelectedModelId('');
+    setModels([]);
+    setModelsError(null);
   }, [resource]);
 
   const submit = async () => {
@@ -157,7 +206,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
           if (resource?.r2Key && resource.r2Key !== key) {
             await deleteCloudObject(resource.r2Key).catch(() => {});
           }
-          await saveResource({
+          const resourceId = await saveResource({
             id: resource?.id,
             subjectId,
             topicId,
@@ -174,11 +223,20 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
             dueDate: dueDate || null,
             groupId: groupId || null,
           });
+          // Create note row for PDF extraction
+          if (isPdf) {
+            const { saveNote } = await import('../libraryRepo');
+            await saveNote({
+              fileId: resourceId,
+              status: extractMode === 'now' ? 'queued' : 'none',
+              modelId: extractMode === 'now' ? selectedModelId : undefined,
+            });
+          }
         } else {
           // Re-adding an orphaned cloud copy: the bytes are already in R2 and
           // cached locally, so the only thing to do is write the row pointing
           // at the existing key. No upload, no file, no progress bar.
-          await saveResource({
+          const resourceId = await saveResource({
             id: resource?.id,
             subjectId,
             topicId,
@@ -194,6 +252,15 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
             dueDate: dueDate || null,
             groupId: groupId || null,
           });
+          // Create note row for PDF extraction (cloud copy re-add)
+          if (isPdf) {
+            const { saveNote } = await import('../libraryRepo');
+            await saveNote({
+              fileId: resourceId,
+              status: extractMode === 'now' ? 'queued' : 'none',
+              modelId: extractMode === 'now' ? selectedModelId : undefined,
+            });
+          }
         }
       }
       onClose();
@@ -262,6 +329,84 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
             )}
             {uploadProgress && <div className="mt-2"><UploadGauge loaded={uploadProgress.loaded} total={uploadProgress.total} /></div>}
           </label>
+        )}
+
+        {/* Markdown extraction section — only for PDF files */}
+        {isPdf && (
+          <fieldset className="space-y-3 p-3 rounded-xl bg-bg-elevated/50 border border-border">
+            <legend className="text-xs font-semibold text-content-secondary px-2">Markdown extraction</legend>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="extractMode"
+                  value="later"
+                  checked={extractMode === 'later'}
+                  onChange={() => setExtractMode('later')}
+                  className="w-4 h-4 accent-accent"
+                />
+                <span className="text-sm text-content-primary">Extract later</span>
+              </label>
+              <label className={`flex items-center gap-2 cursor-pointer ${models.length === 0 ? 'opacity-50' : ''}`}>
+                <input
+                  type="radio"
+                  name="extractMode"
+                  value="now"
+                  checked={extractMode === 'now'}
+                  onChange={() => {
+                    if (models.length > 0) setExtractMode('now');
+                  }}
+                  disabled={models.length === 0 || modelsLoading}
+                  className="w-4 h-4 accent-accent"
+                />
+                <span className="text-sm text-content-primary">Extract now</span>
+              </label>
+            </div>
+
+            {modelsLoading && (
+              <div className="flex items-center gap-2 text-xs text-content-tertiary">
+                <div className="w-3 h-3 border-2 border-accent/50 border-t-accent rounded-full animate-spin" />
+                Loading models…
+              </div>
+            )}
+
+            {modelsError && (
+              <p className="text-xs text-rose-500 flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3" />
+                {modelsError}
+              </p>
+            )}
+
+            {models.length === 0 && !modelsLoading && (
+              <p className="text-xs text-amber-500 flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3" />
+                Extract now is disabled.{' '}
+                <a href="/settings?section=ai" className="font-semibold underline" target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                  Add a PDF-capable model in Settings → AI Models
+                </a>
+              </p>
+            )}
+
+            {models.length > 0 && extractMode === 'now' && (
+              <div className="space-y-2">
+                <label className="block">
+                  <span className="block text-xs text-content-secondary mb-1">Model</span>
+                  <select
+                    value={selectedModelId}
+                    onChange={(e) => setSelectedModelId(e.target.value)}
+                    className={inputCls}
+                    disabled={modelsLoading}
+                  >
+                    {models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.displayName} ({m.modelId})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
+          </fieldset>
         )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

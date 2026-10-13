@@ -281,9 +281,10 @@ const renderWith = ({ signedIn, currentUserValue }) => {
   // whose title the app itself generated. The guard moves forward rather than
   // being removed, so the next accidental version bump is still caught, and
   // v15's no-delete and content-preserving properties are asserted below.
+  // v17 (extraction notes for PDFs) adds a new `notes` table with no upgrade.
   const dbSrc = read('src/db/db.ts');
   check('8 no schema version beyond v17 was added',
-    !/this\.version\(1[7-9]\)/.test(dbSrc));
+    !/this\.version\(1[8-9]\)/.test(dbSrc));
   check('8 v14 keeps resourceGroups keyed by string id with an unchanged index set',
     /this\.version\(14\)[\s\S]{0,300}?resourceGroups: 'id, subjectId, order, createdAt'/.test(dbSrc));
   check('8 v14 deletes no rows in its upgrade',
@@ -318,9 +319,9 @@ const renderWith = ({ signedIn, currentUserValue }) => {
   const v9 = dbSrc.slice(dbSrc.indexOf('this.version(9)'));
   check('9 v9 keeps the topics primary key as `id`', /topics: 'id,/.test(v9));
   check('9 v9 upgrade only rewrites title', /put\(\{ \.\.\.t, title, updatedAt: now \}\)/.test(v9));
-  // Current schema version is v16 (v16 was added for chat history).
+  // Current schema version is v17 (v17 added extraction notes table).
   check('8 no schema version beyond v17 was added',
-    !/this\.version\(1[7-9]\)/.test(dbSrc));
+    !/this\.version\(1[8-9]\)/.test(dbSrc));
 }
 
 console.log('');

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { endOfWeek, format, isBefore, isToday, isWithinInterval, parseISO, startOfWeek } from 'date-fns';
-import { ArrowLeft, BookOpenCheck, CalendarClock, Check, ChevronRight, Columns2, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Pencil, Plus, Search, Timer, Trash2 } from 'lucide-react';
+import { ArrowLeft, BookOpenCheck, CalendarClock, Check, ChevronRight, Clock, Columns2, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Loader2, Pencil, Plus, Search, Timer, Trash2, AlertTriangle } from 'lucide-react';
 import { db } from '../../../db/db';
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
@@ -16,8 +16,8 @@ import { AssessmentModal } from './AssessmentModal';
 import { MoveToGroupMenu } from './MoveToGroupMenu';
 import { GroupNameEditor, NewGroupButton } from './ResourceGroups';
 import { GroupTree } from './GroupTree';
-import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, moveGroup, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes } from '../libraryRepo';
-import type { Assessment, Resource, ResourceGroup, Subject, Topic, TopicStatus } from '../../../types';
+import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, moveGroup, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes, saveNote } from '../libraryRepo';
+import type { Assessment, Note, Resource, ResourceGroup, Subject, Topic, TopicStatus } from '../../../types';
 
 /**
  * Which groups are collapsed, per subject.
@@ -63,20 +63,73 @@ function fmtBytes(bytes?: number | null): string {
 
 
 interface ResourceRowProps {
-  resource: Resource; copied: boolean; confirmDelete: boolean;
-  onToggle: () => void; onEdit: () => void; onDelete: () => void;
-  onCopy: () => void; onPreview: () => void; onDownload: () => void;
+  resource: Resource;
+  copied: boolean;
+  confirmDelete: boolean;
+  onToggle: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onCopy: () => void;
+  onPreview: () => void;
+  onDownload: () => void;
   /** Opens the split with this resource and its topic notes. */
   onSplitWithNotes?: (resourceId: string, topicId: string | null) => void;
   /** The topic currently selected in the detail view, for the notes fallback. */
   fallbackTopicId?: string | null;
   /** Groups of this subject, for the "Move to group" menu. */
   groups?: ResourceGroup[];
+  /** Note for extraction status. */
+  note?: Note | null;
 }
 
-function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onPreview, onDownload, onSplitWithNotes, fallbackTopicId, groups }: ResourceRowProps) {
+function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onPreview, onDownload, onSplitWithNotes, fallbackTopicId, groups, note }: ResourceRowProps) {
   const meta = dueMeta(resource);
   const isFile = resource.kind === 'file';
+  const isPdf = isFile && (resource.mimeType === 'application/pdf' || resource.fileName?.toLowerCase().endsWith('.pdf'));
+  const extractStatus = note?.status;
+
+  const renderExtractStatus = () => {
+    if (!isPdf || !extractStatus) return null;
+    switch (extractStatus) {
+      case 'none':
+        return (
+          <button
+            disabled
+            className="flex items-center gap-1 text-[11px] font-semibold text-amber-500 hover:underline"
+            title="Extraction starts in the next update"
+          >
+            <Clock className="w-3 h-3" /> Extract
+          </button>
+        );
+      case 'queued':
+        return (
+          <span className="flex items-center gap-1 text-xs text-amber-500">
+            <Clock className="w-3 h-3 animate-pulse" /> Queued
+          </span>
+        );
+      case 'processing':
+        return (
+          <span className="flex items-center gap-1 text-xs text-blue-500">
+            <Loader2 className="w-3 h-3 animate-spin" /> Processing
+          </span>
+        );
+      case 'ready':
+        return (
+          <span className="flex items-center gap-1 text-xs text-emerald-500">
+            <Check className="w-3 h-3" /> Markdown ready
+          </span>
+        );
+      case 'failed':
+        return (
+          <span className="flex items-center gap-1 text-xs text-rose-500">
+            <AlertTriangle className="w-3 h-3" /> Failed
+          </span>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className={`rounded-xl border p-3 ${resource.completed ? 'border-border bg-bg-elevated/30 opacity-70' : 'border-border bg-bg-elevated/40'}`}>
       <div className="flex items-start gap-2.5">
@@ -134,6 +187,9 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
               {resource.tags.map((tag, i) => (<span key={`${tag}-${i}`} className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-accent-subtle text-accent-text">{tag}</span>))}
             </div>
           )}
+
+          {/* Extraction status for PDF files */}
+          {renderExtractStatus()}
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {groups && <MoveToGroupMenu
@@ -185,6 +241,8 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   ) ?? [];
   const assessments = useLiveQuery(() => db.assessments.where('subjectId').equals(subject.id).toArray(), [subject.id]) ?? [];
   const sessions = useLiveQuery(() => db.pomodoroSessions.where('subjectId').equals(subject.id).toArray(), [subject.id]) ?? [];
+  const notes = useLiveQuery(() => db.notes.where('fileId').anyOf(resources.map((r) => r.id)).toArray(), [resources.length]) ?? [];
+  const noteByFileId = useMemo(() => new Map(notes.map((n) => [n.fileId, n])), [notes]);
 
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [editingNotes, setEditingNotes] = useState(false);
@@ -575,7 +633,7 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
                 onCreateGroup={createGroup}
                 onDeleteGroup={removeGroup}
                 onMoveGroup={moveGroupAction}
-                renderResources={(groupId) => {
+renderResources={(groupId) => {
                   const members = topicResources.filter((r) => r.groupId === groupId);
                   return members.map((resource) => (
                     <ResourceRow
@@ -595,6 +653,7 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
                       onSplitWithNotes={onSplitWithNotes}
                       fallbackTopicId={selectedTopic?.id ?? null}
                       groups={sortedGroups}
+                      note={noteByFileId.get(resource.id) ?? null}
                     />
                   ));
                 }}
@@ -603,10 +662,10 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
                     key={resource.id}
                         resource={resource}
                         copied={copiedId === resource.id}
-confirmDelete={pendingDelete?.id === resource.id}
+                    confirmDelete={pendingDelete?.id === resource.id}
                         onToggle={() => toggleResourceCompleted(resource)}
                         onEdit={() => setEditingResource(resource)}
-onDelete={() => {
+                    onDelete={() => {
                       const r = resources.find((x) => x.id === resource.id);
                       setPendingDelete(r ? { id: r.id, r2Key: r.r2Key ?? null } : { id: resource.id, r2Key: null });
                     }}
@@ -616,6 +675,7 @@ onDelete={() => {
                         onSplitWithNotes={onSplitWithNotes}
                         fallbackTopicId={selectedTopic?.id ?? null}
                         groups={sortedGroups}
+                        note={noteByFileId.get(resource.id) ?? null}
                       />
                     ))}
               />
