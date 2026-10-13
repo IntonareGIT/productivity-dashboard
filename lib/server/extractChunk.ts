@@ -5,7 +5,7 @@
  */
 import { PDFDocument } from 'pdf-lib';
 import { getModelKey } from './models';
-import type { UserModel } from './models';
+import type { StoredModel } from './models';
 
 export interface ExtractChunkResult {
   markdown: string;
@@ -25,9 +25,10 @@ export interface ExtractChunkError {
  */
 export async function extractChunk(
   pdfBytes: Uint8Array,
-  model: UserModel,
+  model: StoredModel,
   pageStart: number,
-  pageEnd: number
+  pageEnd: number,
+  userId: string
 ): Promise<ExtractChunkResult> {
   // 1. Slice the PDF to the requested page range (1-based, inclusive)
   let slicedPdf: Uint8Array;
@@ -48,7 +49,7 @@ export async function extractChunk(
   }
 
   // 2. Get the API key for this model
-  const apiKey = await getModelKey(model.id);
+  const apiKey = await getModelKey(userId, model.id);
   if (!apiKey) {
     throw { error: 'no_key', status: 403 };
   }

@@ -11,7 +11,7 @@
 import type { ApiRequest, ApiResponse, VerifiedUser } from '../lib/server/dexie.js';
 import { json, readBearer, verifyDexieToken, unauthorized, setCors } from '../lib/server/dexie.js';
 import { getModel } from '../lib/server/models.js';
-import { downloadFromR2 } from '../lib/server/cloudClient.js';
+import { downloadFromR2Server } from '../lib/server/cloudClient.js';
 import { extractChunk, type ExtractChunkError } from '../lib/server/extractChunk.js';
 
 function badInput(res: ApiResponse, message: string): void {
@@ -117,7 +117,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
   // Download PDF from R2
   let pdfBytes: Uint8Array;
   try {
-    pdfBytes = await downloadFromR2(r2Key);
+    pdfBytes = await downloadFromR2Server(r2Key);
   } catch {
     json(res, 503, { error: 'r2_unavailable', message: 'Could not download file from storage.' });
     return;
@@ -125,7 +125,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
 
   // Extract the chunk
   try {
-    const result = await extractChunk(pdfBytes, model, pageStart, pageEnd);
+    const result = await extractChunk(pdfBytes, model, pageStart, pageEnd, userId);
     json(res, 200, result);
   } catch (e) {
     const err = e as ExtractChunkError;
