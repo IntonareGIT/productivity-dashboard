@@ -106,6 +106,9 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
       } else if (extractStatus === 'queued') {
         // For 'queued', just start the runner
         onStartExtraction?.(resource.id);
+      } else if (extractStatus === 'failed') {
+        // For 'failed', retry the failed chunk
+        onStartExtraction?.(resource.id);
       }
     };
 
@@ -683,8 +686,10 @@ renderResources={(groupId) => {
                       groups={sortedGroups}
                       note={noteByFileId.get(resource.id) ?? null}
                       onStartExtraction={async (fileId, modelId) => {
+                      console.log('[extract] onStartExtraction called', { fileId, modelId });
                       const note = noteByFileId.get(fileId);
                       if (!note || note.status === 'none') {
+                        // Create note and initialize extraction
                         const { saveNote, initNoteForExtraction } = await import('../libraryRepo');
                         await saveNote({
                           fileId,
@@ -692,7 +697,12 @@ renderResources={(groupId) => {
                           modelId: modelId ?? note?.modelId,
                         });
                         await initNoteForExtraction(fileId, modelId ?? note?.modelId ?? '');
+                      } else if (note.status === 'failed') {
+                        // For failed, reset status to processing so runner can resume
+                        const { db } = await import('../../../db/db');
+                        await db.notes.put({ ...note, status: 'processing', updatedAt: new Date().toISOString() });
                       }
+                      console.log('[extract] calling startExtraction for', fileId);
                       startExtraction(fileId);
                     }}
                     />

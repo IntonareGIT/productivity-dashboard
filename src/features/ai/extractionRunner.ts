@@ -28,10 +28,12 @@ export async function runExtraction(
   fileId: string,
   callbacks: RunnerCallbacks = {}
 ): Promise<void> {
+  console.log('[extract] runExtraction started', { fileId });
   // Resume if already processing
   let nextIndex = await resumeNote(fileId);
   if (nextIndex < 0) {
     // All chunks done, finalize
+    console.log('[extract] all chunks done, finalizing', { fileId });
     await finalizeNote(fileId);
     callbacks.onComplete?.(fileId);
     return;
@@ -41,11 +43,13 @@ export async function runExtraction(
   const { db } = await import('../../db/db');
   const note = await db.notes.get(fileId);
   if (!note || note.status !== 'processing') {
+    console.log('[extract] note not processing, aborting', { fileId, status: note?.status });
     return;
   }
 
   const modelId = note.modelId;
   if (!modelId) {
+    console.log('[extract] no modelId on note', { fileId });
     await failNote(fileId, 'No model selected');
     callbacks.onError?.(fileId, 'No model selected');
     return;
@@ -54,12 +58,14 @@ export async function runExtraction(
   // Get the model details
   const modelsResult = await fetchUserModels();
   if (modelsResult.error || !modelsResult.models) {
+    console.log('[extract] could not load models', { fileId, error: modelsResult.error });
     await failNote(fileId, 'Could not load models');
     callbacks.onError?.(fileId, modelsResult.error?.message ?? 'Could not load models');
     return;
   }
   const model = modelsResult.models.find((m) => m.id === modelId);
   if (!model) {
+    console.log('[extract] model not found', { fileId, modelId });
     await failNote(fileId, 'Model not found');
     callbacks.onError?.(fileId, 'Model not found');
     return;
@@ -68,6 +74,7 @@ export async function runExtraction(
   // Get the token for the API call
   const token = getCloudAccessToken();
   if (!token) {
+    console.log('[extract] no cloud token', { fileId });
     await failNote(fileId, 'Not signed in');
     callbacks.onError?.(fileId, 'Not signed in');
     return;
@@ -77,10 +84,13 @@ export async function runExtraction(
   const { db: db2 } = await import('../../db/db');
   const resource = await db2.resources.get(fileId);
   if (!resource?.r2Key) {
+    console.log('[extract] no r2Key on resource', { fileId });
     await failNote(fileId, 'File not in cloud storage');
     callbacks.onError?.(fileId, 'File not in cloud storage');
     return;
   }
+
+  console.log('[extract] processing chunks', { fileId, totalChunks: note.chunks.length, startingAt: nextIndex });
 
   // Process chunks starting from nextIndex
   for (let i = nextIndex; i < note.chunks.length; i++) {
@@ -92,6 +102,7 @@ export async function runExtraction(
     callbacks.onProgress?.(fileId, i, 'processing');
 
     try {
+      console.log('[extract] calling /api/extract-chunk', { fileId, chunkIndex: i, pageStart: chunk.pageStart, pageEnd: chunk.pageEnd });
       const res = await fetch('/api/extract-chunk', {
         method: 'POST',
         credentials: 'include',
@@ -116,17 +127,23 @@ export async function runExtraction(
         else if (res.status === 502) msg = 'Model returned empty output';
         const data = await res.json().catch(() => ({}));
         msg = data.message ?? msg;
+        console.log('[extract] chunk failed', { fileId, chunkIndex: i, status: res.status, msg });
         throw new Error(msg);
       }
 
       const data = await res.json();
       const markdown = data.markdown;
-      if (!markdown) throw new Error('Empty output from model');
+      if (!markdown) {
+        console.log('[extract] empty output from model', { fileId, chunkIndex: i });
+        throw new Error('Empty output from model');
+      }
 
+      console.log('[extract] chunk succeeded', { fileId, chunkIndex: i, markdownLength: markdown.length });
       await updateNoteChunk(fileId, i, { status: 'ready', markdown });
       callbacks.onProgress?.(fileId, i, 'ready');
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Chunk extraction failed';
+      console.log('[extract] chunk error', { fileId, chunkIndex: i, error: msg });
       await updateNoteChunk(fileId, i, { status: 'failed', error: msg });
       await failNote(fileId, `Chunk ${i + 1} failed: ${msg}`);
       callbacks.onError?.(fileId, `Chunk ${i + 1} failed: ${msg}`);
@@ -135,6 +152,7 @@ export async function runExtraction(
   }
 
   // All chunks done, finalize
+  console.log('[extract] all chunks completed, finalizing', { fileId });
   await finalizeNote(fileId);
   callbacks.onComplete?.(fileId);
 }
@@ -144,9 +162,13 @@ export async function runExtraction(
  * Returns a promise that resolves when extraction completes or fails.
  */
 export async function startExtraction(fileId: string, callbacks: RunnerCallbacks = {}): Promise<void> {
+  console.log('[extract] startExtraction called', { fileId });
   const { db } = await import('../../db/db');
   const note = await db.notes.get(fileId);
-  if (!note) return;
+  if (!note) {
+    console.log('[extract] no note found for', fileId);
+    return;
+  }
 
   // Update status to processing
   await db.notes.put({ ...note, status: 'processing', updatedAt: new Date().toISOString() });
