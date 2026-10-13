@@ -496,7 +496,9 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     // unsent composer text or the transcript scroll position.
     draft: '',
     listScrollTop: 0,
-    assistantRedesign: false,
+    assistantRedesign:
+      typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('assistantRedesign') === '1',
     providerLabel: null,
     providerReady: false,
     providerError: null,
