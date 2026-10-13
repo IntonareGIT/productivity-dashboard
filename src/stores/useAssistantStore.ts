@@ -281,6 +281,10 @@ interface AssistantState {
   setListScrollTop: (top: number) => void;
   /** Select a model for chat. */
   setModel: (modelId: string) => void;
+
+  /** Whether the new shared assistant surface is enabled. Default OFF. */
+  assistantRedesign: boolean;
+  setAssistantRedesign: (v: boolean) => void;
 }
 
 const WELCOME: AssistantViewMsg[] = [
@@ -492,6 +496,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     // unsent composer text or the transcript scroll position.
     draft: '',
     listScrollTop: 0,
+    assistantRedesign: false,
     providerLabel: null,
     providerReady: false,
     providerError: null,
@@ -541,6 +546,8 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         // from the history list (Part 5).
       }
     },
+
+    setAssistantRedesign: (v) => set({ assistantRedesign: v }),
 
     ask: (text) => {
       set({ open: true });

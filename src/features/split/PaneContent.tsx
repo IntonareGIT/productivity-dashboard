@@ -2,11 +2,13 @@ import React from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../db/db';
 import { AssistantChat } from '../ai/components/AssistantChat';
+import { AssistantSurface } from '../ai/components/AssistantSurface';
 import { ResourceViewer } from '../library/components/ResourceViewer';
 import { DashboardPage } from '../dashboard/DashboardPage';
 import type { NavTab } from '../../components/layout/Sidebar';
 import type { Resource } from '../../types';
 import { NotesPane } from './NotesPane';
+import { useAssistantStore } from '../../stores/useAssistantStore';
 import type { PaneSlot } from './splitModel';
 
 interface PaneContentProps {
@@ -54,6 +56,8 @@ export const PaneContent: React.FC<PaneContentProps> = ({
     [resourceId],
   ) as Resource | undefined;
 
+  const assistantRedesign = useAssistantStore((s) => s.assistantRedesign);
+
   switch (slot.kind) {
     case 'empty':
       return (
@@ -75,6 +79,13 @@ export const PaneContent: React.FC<PaneContentProps> = ({
       // and tools are shared; only the surrounding layout is narrower. The
       // wrapper is a definite-height flex column and the transcript scrolls
       // INSIDE it, so the composer never gets pushed out of the pane.
+      if (assistantRedesign) {
+        return (
+          <div className="h-full min-h-0 flex flex-col bg-bg-surface overflow-hidden">
+            <AssistantSurface layout="split" />
+          </div>
+        );
+      }
       return (
         <div className="h-full min-h-0 flex flex-col bg-bg-surface overflow-hidden">
           <AssistantChat

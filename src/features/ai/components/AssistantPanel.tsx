@@ -4,6 +4,7 @@ import { Z } from '../../../components/ui/zIndex';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
 import { useFloatingAiStore, type BubbleMode } from '../../../stores/useFloatingAiStore';
 import { AssistantChat } from './AssistantChat';
+import { AssistantSurface } from './AssistantSurface';
 
 interface AssistantPanelProps {
   onOpenSettings: () => void;
@@ -43,6 +44,7 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const open = useAssistantStore((s) => s.open);
   const setOpen = useAssistantStore((s) => s.setOpen);
   const clearChat = useAssistantStore((s) => s.clearChat);
+  const assistantRedesign = useAssistantStore((s) => s.assistantRedesign);
   const edge = useFloatingAiStore((s) => s.memory[mode].edge);
 
   const [width, setWidth] = useState(DEFAULT_W);
@@ -112,11 +114,58 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({
       : { height: `${SHEET_H * 100}vh`, maxHeight: `${SHEET_H * 100}vh` }
     : { width };
 
+  // When the redesign flag is ON, render the new shared surface with layout='bubble'.
+  // The old panel and chat stay behind the flag so we can toggle back.
+  if (assistantRedesign) {
+    return (
+      <div
+        ref={panelRef}
+        data-floating-ai-keepout="assistant-panel"
+        onKeyDown={onKeyDown}
+        className={`fixed ${Z.modal} flex flex-col overflow-hidden ${
+          isPhone
+            ? 'inset-x-0 bottom-0 rounded-t-2xl border-t border-border bg-bg-surface shadow-2xl'
+            : `${edge === 'right' ? 'right-4' : 'left-4'} top-24 max-h-[80vh] rounded-2xl border border-border bg-bg-surface shadow-2xl`
+        }`}
+        style={panelStyle}
+      >
+        {isPhone && (
+          <div
+            onPointerDown={startResize}
+            className="shrink-0 pt-2 pb-1 flex justify-center cursor-ns-resize touch-none"
+            aria-label="Resize assistant"
+            role="separator"
+            aria-orientation="horizontal"
+          >
+            <span className="h-1 w-10 rounded-full bg-border-strong" />
+          </div>
+        )}
+        <AssistantSurface layout="bubble" />
+        {!isPhone && (
+          <div
+            onPointerDown={startResize}
+            className={`absolute bottom-0 w-3 h-3 cursor-ew-resize touch-none ${
+              edge === 'right' ? 'right-0' : 'left-0'
+            }`}
+            aria-label="Resize assistant"
+            role="separator"
+            aria-orientation="vertical"
+          >
+            <span
+              className={`absolute bottom-1 w-2 h-2 border-border-strong ${
+                edge === 'right' ? 'right-1 border-b border-r' : 'left-1 border-b border-l'
+              }`}
+            />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Old panel (flag OFF)
   return (
     <div
       ref={panelRef}
-      // Declares itself a keep-out zone so the floating bubble moves out of the way
-      // instead of sitting on top of the panel it just opened.
       data-floating-ai-keepout="assistant-panel"
       onKeyDown={onKeyDown}
       className={`fixed ${Z.modal} flex flex-col overflow-hidden ${
