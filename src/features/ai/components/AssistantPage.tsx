@@ -221,7 +221,7 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
       {drawerOpen && (
         <div className={`md:hidden fixed inset-0 ${Z.modal} flex`}>
           <div className="absolute inset-0 bg-black/50" onClick={() => setDrawerOpen(false)} />
-          <aside className="relative w-72 max-w-[80vw] flex flex-col bg-bg-surface border-r border-border shadow-2xl">
+          <aside className="assistant-drawer relative w-72 max-w-[80vw] flex flex-col bg-bg-surface border-r border-border shadow-2xl">
             <AssistantSessionList onNavigate={() => setDrawerOpen(false)} />
           </aside>
         </div>

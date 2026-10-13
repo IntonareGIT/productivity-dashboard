@@ -329,3 +329,77 @@ html.light {
   padding: 0.4rem 0.6rem;
   margin: 0.35rem 0;
 }
+
+/* ---- Assistant panel tokens ---------------------------------------------
+   The assistant surface uses the SAME tokens the rest of the app uses, so it
+   follows every status theme and both light/dark modes with no per-theme
+   values to fall out of sync. These three extra tokens are the only ones the
+   assistant needs beyond what the layout already declares: a subtle surface
+   for message cards, and a "ready" green that is separate from the status
+   accent so a model that is ready always reads green regardless of theme. */
+:root {
+  --assistant-surface: var(--bg-surface-elevated);
+  --assistant-border: var(--border-subtle);
+  --assistant-ready: #22c55e;
+}
+
+/* ---- Assistant animations ---------------------------------------------
+   All of these are opacity and transform only, every one under 250ms, and
+   every one is disabled when the user has asked for reduced motion. The
+   thinking dots are the only exception to the "no looping" rule, and even they
+   are paused by prefers-reduced-motion. */
+@media (prefers-reduced-motion: reduce) {
+  .assistant-fade,
+  .assistant-slide,
+  .assistant-drawer,
+  .assistant-reader,
+  .assistant-thinking-dot {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@keyframes assistant-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.assistant-fade {
+  animation: assistant-fade-in 180ms ease-out both;
+}
+
+@keyframes assistant-slide-in {
+  from { opacity: 0; transform: translateX(100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.assistant-slide {
+  animation: assistant-slide-in 200ms ease-out both;
+}
+
+@keyframes assistant-drawer-in {
+  from { opacity: 0; transform: translateX(-100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.assistant-drawer {
+  animation: assistant-drawer-in 200ms ease-out both;
+}
+
+@keyframes assistant-reader-in {
+  from { opacity: 0; transform: translateX(100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.assistant-reader {
+  animation: assistant-reader-in 200ms ease-out both;
+}
+
+@keyframes assistant-thinking-dot {
+  0%, 60%, 100% { opacity: 0.2; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+
+.assistant-thinking-dot {
+  animation: assistant-thinking-dot 1.2s ease-in-out infinite;
+}

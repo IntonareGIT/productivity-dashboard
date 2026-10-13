@@ -71,9 +71,18 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
     ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : '';
 
+  // Three-dot thinking indicator while streaming
+  const thinkingDots = isStreaming && !isUser && !isTool ? (
+    <div className="flex items-center gap-0.5 text-content-tertiary mt-1" aria-label="Assistant is thinking">
+      <span className="assistant-thinking-dot">●</span>
+      <span className="assistant-thinking-dot" style={{ animationDelay: '200ms' }}>●</span>
+      <span className="assistant-thinking-dot" style={{ animationDelay: '400ms' }}>●</span>
+    </div>
+  ) : null;
+
   return (
     <div
-      className={`flex gap-2 ${isUser ? 'justify-end' : 'justify-start'}`}
+      className={`flex gap-2 ${isUser ? 'justify-end' : 'justify-start'} assistant-fade`}
       onMouseEnter={() => setShowActions(true)}
       onMouseLeave={() => setShowActions(false)}
     >
@@ -128,6 +137,7 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
               {msg.text}
             </ReactMarkdown>
           </div>
+          {thinkingDots}
         </div>
 
         <div

@@ -434,7 +434,7 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
       {/* Reader pane */}
       {readerMsgId && (
         <div
-          className={`fixed inset-0 z-50 flex ${layout === 'bubble' ? 'md:inset-auto md:max-w-3xl md:max-h-[80vh] md:m-auto' : ''}`}
+          className={`fixed inset-0 z-50 flex assistant-reader ${layout === 'bubble' ? 'md:inset-auto md:max-w-3xl md:max-h-[80vh] md:m-auto' : ''}`}
           role="dialog"
           aria-modal="true"
           aria-label="Message reader"
