@@ -5,11 +5,12 @@ import {
   noteTitleForNumber,
   uniqueDefaultNoteTitle,
 } from '../../db/noteTitle';
-import type { Assessment, AssessmentStatus, AssessmentType, Note, Resource, ResourceGroup, ResourceKind, Subject, Topic, TopicStatus } from '../../types';
+import type { Assessment, AssessmentStatus, AssessmentType, Note, NoteChunk, Resource, ResourceGroup, ResourceKind, Subject, Topic, TopicStatus } from '../../types';
 import { newId } from '../../utils/id';
 import { markdownToEditorHtml } from './noteEditor/markdownToHtml';
 import { htmlToPlainText, sanitizeEditorHtml } from './noteEditor/sanitizeHtml';
 import { parentOf, validateGroupPlacement } from './groupTree';
+import { EXTRACTION_CONFIG } from '../../../lib/config/extraction';
 
 /* ---------------- Subjects ---------------- */
 
@@ -466,12 +467,37 @@ export interface NoteInput {
   modelId?: string;
 }
 
+/**
+ * Save an extraction note for a PDF resource.
+ * Creates a new note row linked to the resource by fileId.
+ * Reads the PDF page count and stores it.
+ */
 export async function saveNote(input: NoteInput): Promise<string> {
   const now = new Date().toISOString();
+
+  // Read the PDF page count
+  let pageCount = 0;
+  const resource = await db.resources.get(input.fileId);
+  if (resource?.r2Key) {
+    try {
+      const { downloadFromR2 } = await import('../../features/ai/cloudClient');
+      const { PDFDocument } = await import('pdf-lib');
+      const blob = await downloadFromR2(resource.r2Key);
+      const arrayBuffer = await blob.arrayBuffer();
+      const pdfBytes = new Uint8Array(arrayBuffer);
+      const doc = await PDFDocument.load(pdfBytes);
+      pageCount = doc.getPageCount();
+    } catch {
+      // If we can't read the PDF, we'll still create the note but with pageCount = 0
+      // The status will be set to 'failed' by the caller if needed
+    }
+  }
+
   const record: Note = {
     fileId: input.fileId,
     status: input.status,
     modelId: input.modelId,
+    pageCount,
     chunks: [],
     markdown: '',
     checked: false,
@@ -483,6 +509,177 @@ export async function saveNote(input: NoteInput): Promise<string> {
   };
   await db.notes.put(record);
   return record.fileId;
+}
+
+/**
+ * Generate chunk ranges for a PDF based on pageCount and chunkPages config.
+ * Returns array of { pageStart, pageEnd } (1-based, inclusive).
+ */
+export function getChunkRanges(pageCount: number): { pageStart: number; pageEnd: number }[] {
+  const { chunkPages, maxChunks } = EXTRACTION_CONFIG;
+  const ranges: { pageStart: number; pageEnd: number }[] = [];
+  for (let start = 1; start <= pageCount; start += chunkPages) {
+    const end = Math.min(start + chunkPages - 1, pageCount);
+    ranges.push({ pageStart: start, pageEnd: end });
+    if (ranges.length >= EXTRACTION_CONFIG.maxChunks) break;
+  }
+  return ranges;
+}
+
+/**
+ * Initialize a note for extraction: set up chunks based on page count.
+ * Call this when status changes to 'queued'.
+ */
+export async function initNoteForExtraction(fileId: string, modelId: string): Promise<void> {
+  const note = await db.notes.get(fileId);
+  if (!note) return;
+  const pageCount = note.pageCount;
+  if (pageCount === 0) {
+    // Can't read PDF, mark as failed
+    await db.notes.put({ ...note, status: 'failed', lastError: 'Could not read this PDF.', updatedAt: new Date().toISOString() });
+    return;
+  }
+  const ranges = getChunkRanges(note.pageCount);
+  const chunks: NoteChunk[] = ranges.map((r, i) => ({
+    index: i,
+    pageStart: r.pageStart,
+    pageEnd: r.pageEnd,
+    status: 'pending' as const,
+    markdown: '',
+  }));
+  const now = new Date().toISOString();
+  await db.notes.put({
+    ...note,
+    status: 'queued',
+    chunks,
+    updatedAt: now,
+  });
+}
+
+/**
+ * Update a single chunk's status and markdown.
+ */
+export async function updateNoteChunk(
+  fileId: string,
+  chunkIndex: number,
+  update: Partial<NoteChunk>
+): Promise<void> {
+  const note = await db.notes.get(fileId);
+  if (!note) return;
+  const chunks = [...note.chunks];
+  if (chunks[update.index ?? 0] === undefined) return;
+  const idx = update.index ?? 0;
+  chunks[idx] = { ...chunks[idx], ...update };
+  await db.notes.put({ ...note, chunks, updatedAt: new Date().toISOString() });
+}
+
+/**
+ * Join all completed chunks in order with headings and save as final markdown.
+ */
+export async function finalizeNote(fileId: string): Promise<void> {
+  const note = await db.notes.get(fileId);
+  if (!note) return;
+  const parts = note.chunks
+    .filter((c) => c.status === 'ready')
+    .sort((a, b) => a.index - b.index)
+    .map((c) => `## Pages ${c.pageStart}–${c.pageEnd}\n\n${c.markdown}`);
+  const markdown = parts.join('\n\n');
+  await db.notes.put({
+    ...note,
+    status: 'ready',
+    markdown,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * Mark a note as failed with a reason.
+ */
+export async function failNote(fileId: string, reason: string): Promise<void> {
+  const note = await db.notes.get(fileId);
+  if (!note) return;
+  await db.notes.put({
+    ...note,
+    status: 'failed',
+    lastError: reason,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * Get the extraction status for a file.
+ * Returns the full status object for the assistant tool.
+ */
+export async function getExtractionStatus(fileId: string): Promise<{
+  status: 'none' | 'queued' | 'processing' | 'ready' | 'failed';
+  pageCount: number;
+  chunks: { index: number; pageStart: number; pageEnd: number; status: string; error?: string }[];
+  lastError?: string;
+  modelId?: string;
+  updatedAt: string;
+} | null> {
+  const note = await db.notes.get(fileId);
+  if (!note) return null;
+  return {
+    status: note.status,
+    pageCount: note.pageCount,
+    chunks: note.chunks.map((c) => ({
+      index: c.index,
+      pageStart: c.pageStart,
+      pageEnd: c.pageEnd,
+      status: c.status,
+      error: c.error,
+    })),
+    lastError: note.lastError,
+    modelId: note.modelId,
+    updatedAt: note.updatedAt,
+  };
+}
+
+/**
+ * Read the extracted markdown for a file.
+ * Returns the full markdown or a specific section.
+ */
+export async function readNote(fileId: string, section?: string | null): Promise<{
+  markdown: string;
+  status: 'none' | 'queued' | 'processing' | 'ready' | 'failed';
+  pageCount: number;
+} | null> {
+  const note = await db.notes.get(fileId);
+  if (!note) return null;
+  if (section) {
+    // Simple section extraction - just return the full markdown for now
+    // Could be enhanced to parse headings
+  }
+  return {
+    markdown: note.markdown || (note.status === 'ready' ? '' : 'No markdown available yet.'),
+    status: note.status,
+    pageCount: note.pageCount,
+  };
+}
+
+/**
+ * Retry a failed chunk: set its status to 'pending' and re-run extraction.
+ * The actual extraction is done by the runner; this just resets the chunk.
+ */
+export async function retryNoteChunk(fileId: string, chunkIndex: number): Promise<void> {
+  await updateNoteChunk(fileId, chunkIndex, { status: 'pending', error: undefined });
+}
+
+/**
+ * Resume a note that was 'processing' — find the first non-ready chunk and set it to 'pending'.
+ * Returns the chunk index to process, or -1 if all done.
+ */
+export async function resumeNote(fileId: string): Promise<number> {
+  const note = await db.notes.get(fileId);
+  if (!note || note.status !== 'processing') return -1;
+  for (let i = 0; i < note.chunks.length; i++) {
+    if (note.chunks[i].status !== 'ready') {
+      await updateNoteChunk(fileId, i, { status: 'pending', error: undefined });
+      return i;
+    }
+  }
+  return -1;
 }
 
 /**
@@ -839,3 +1036,6 @@ export async function toggleAssessmentStatus(assessment: Assessment): Promise<vo
 export async function deleteAssessment(id: string): Promise<void> {
   await db.assessments.delete(id);
 }
+
+
+

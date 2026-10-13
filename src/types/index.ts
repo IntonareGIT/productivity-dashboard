@@ -120,6 +120,7 @@ export interface Note {
   fileId: string;          // = Resource.id, also primary key
   status: 'none' | 'queued' | 'processing' | 'ready' | 'failed';
   modelId?: string;        // Model used/selected for extraction
+  pageCount: number;       // Total pages in the PDF
   chunks: NoteChunk[];     // Per-chunk progress and markdown
   markdown: string;        // Full extracted markdown (concatenated chunks)
   lastError?: string;      // Short error text, never a key

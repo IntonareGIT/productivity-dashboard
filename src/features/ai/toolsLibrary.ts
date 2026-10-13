@@ -15,13 +15,15 @@
  *      on, never instructions to follow.
  */
 import { db } from '../../db/db';
-import type { Resource, ResourceGroup, Subject, Topic } from '../../types';
+import type { Note, Resource, ResourceGroup, Subject, Topic } from '../../types';
 import {
   deleteResource, deleteResourceGroup, deleteSubjectCascade, deleteTopicCascade,
   ensureDefaultTopic, listResourceGroups, moveGroup, moveResourceToGroup,
   renameResourceGroup, saveResource, saveResourceGroup, saveSubject, saveTopic,
   setTopicTitle,
+  failNote, initNoteForExtraction, readNote, getExtractionStatus,
 } from '../library/libraryRepo';
+import { startExtraction } from './extractionRunner';
 import {
   buildGroupTree, deleteImpact, pathOf, type GroupNode,
 } from '../library/groupTree';
@@ -411,6 +413,56 @@ export const LIBRARY_TOOL_SPECS: ToolSpec[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'startExtraction',
+      description:
+        'Start PDF-to-Markdown extraction for a file. Requires user confirmation. The extraction runs in the background and progress is shown on the file card. Replies with the file ID and status.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Resource id or exact title of the PDF file.' },
+          modelId: { type: 'string', description: 'Optional model id to use. Omit to use the model already selected for this file.' },
+        },
+        required: ['fileId'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'getExtractionStatus',
+      description:
+        'Get the current extraction status for a file. Returns status, chunk progress, and any error.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Resource id or exact title of the PDF file.' },
+        },
+        required: ['fileId'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'readNote',
+      description:
+        'Read the extracted markdown for a file. If the note is missing or not ready, returns a clear message. Optional section parameter to read a specific part.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Resource id or exact title of the PDF file.' },
+          section: { type: 'string', description: 'Optional. Read a specific section (e.g. "summary", "chapters").' },
+        },
+        required: ['fileId'],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 /* ---------------- Implementations ---------------- */
@@ -784,6 +836,55 @@ const HANDLERS: Record<string, (a: Args) => Promise<ReturnType<typeof ok>>> = {
     const resource = need(await resourceRows(), a.resourceId, (r: Resource) => r.title, 'resource');
     await deleteResource(resource.id);
     return ok(`Deleted resource "${resource.title}".`, { resourceId: resource.id, title: resource.title });
+  },
+
+  /**
+   * Start PDF extraction for a file. Requires user confirmation.
+   * The extraction runs in the background and progress is visible on the file card.
+   */
+  async startExtraction(a) {
+    const fileId = String(a.fileId).trim();
+    if (!fileId) throw new ToolError('fileId is required.');
+    const note = await db.notes.get(fileId);
+    if (!note) throw new ToolError('No extraction note found for this file.');
+
+    // Check if already processing or queued
+    if (note.status === 'processing' || note.status === 'queued') {
+      return ok(`Extraction already ${note.status} for this file.`, { fileId, status: note.status });
+    }
+    if (note.status === 'ready') {
+      return ok('Extraction already complete. Use readNote to see the markdown.', { fileId, status: 'ready' });
+    }
+
+    // Update status to queued and initialize chunks
+    const modelId = typeof a.modelId === 'string' ? a.modelId : (note.modelId ?? '');
+    await initNoteForExtraction(fileId, modelId);
+
+    // The runner will pick it up automatically when status is 'queued'
+    return ok(`Extraction queued for this file. Progress will appear on the file card.`, { fileId, status: 'queued' });
+  },
+
+  /**
+   * Get the current extraction status for a file.
+   */
+  async getExtractionStatus(a) {
+    const fileId = String(a.fileId).trim();
+    if (!fileId) throw new ToolError('fileId is required.');
+    const status = await getExtractionStatus(fileId);
+    if (!status) throw new ToolError('No extraction note found for this file.');
+    return ok(`Extraction status for this file.`, { fileId, ...status });
+  },
+
+  /**
+   * Read the extracted markdown for a file.
+   */
+  async readNote(a) {
+    const fileId = String(a.fileId).trim();
+    if (!fileId) throw new ToolError('fileId is required.');
+    const section = typeof a.section === 'string' ? a.section : null;
+    const result = await readNote(fileId, section);
+    if (!result) throw new ToolError('No markdown available yet for this file.');
+    return ok(`Markdown for this file.`, { fileId, ...result });
   },
 };
 

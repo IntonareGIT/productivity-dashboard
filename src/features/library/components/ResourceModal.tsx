@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { FileUp, AlertTriangle, Link as LinkIcon, Clock, Check } from 'lucide-react';
 import { Modal } from '../../../components/ui/Modal';
-import { saveResource } from '../libraryRepo';
+import { saveResource, saveNote, initNoteForExtraction } from '../libraryRepo';
 import { LARGE_BLOB_WARNING_BYTES } from '../../../db/cloudConfig';
 import { db } from '../../../db/db';
 import { fetchUserModels, getPdfCapableModels } from '../../../features/ai/modelsClient';
@@ -222,12 +222,15 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
           });
           // Create note row for PDF extraction
           if (isPdf) {
-            const { saveNote } = await import('../libraryRepo');
+            const { saveNote, initNoteForExtraction } = await import('../libraryRepo');
             await saveNote({
               fileId: resourceId,
               status: extractMode === 'now' ? 'queued' : 'none',
               modelId: extractMode === 'now' ? selectedModelId : undefined,
             });
+            if (extractMode === 'now') {
+              await initNoteForExtraction(resourceId, selectedModelId);
+            }
           }
         } else {
           // Re-adding an orphaned cloud copy: the bytes are already in R2 and
@@ -251,12 +254,15 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
           });
           // Create note row for PDF extraction (cloud copy re-add)
           if (isPdf) {
-            const { saveNote } = await import('../libraryRepo');
+            const { saveNote, initNoteForExtraction } = await import('../libraryRepo');
             await saveNote({
               fileId: resourceId,
               status: extractMode === 'now' ? 'queued' : 'none',
               modelId: extractMode === 'now' ? selectedModelId : undefined,
             });
+            if (extractMode === 'now') {
+              await initNoteForExtraction(resourceId, selectedModelId);
+            }
           }
         }
       }
