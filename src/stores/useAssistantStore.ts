@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { format } from 'date-fns';
 import { chatCompletion, friendlyError } from '../features/ai/aiClient';
 import { CLOUD_SIGN_IN_REQUIRED, cloudAuthRequired, getCloudAccessToken } from '../features/ai/cloudAuth';
+import { fetchUserModels } from '../features/ai/modelsClient';
 import { NOT_EXECUTED } from '../features/ai/historyNormalizer';
 import {
   DEFAULT_TITLE,
@@ -579,26 +580,22 @@ providerReady: false,
     readerMsgId: null as string | null,
     readerQuestion: null as string | null,
 
-    // Fetch user's models from the server
+// Fetch user's models from the server
     fetchModels: async () => {
-      const token = getCloudAccessToken();
-      if (!token) return;
-      try {
-        const res = await fetch('/api/models', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok) {
-          const { models } = await res.json();
-          // Only models with keys can be used for chat
-          const withKeys = models.filter((m: UserModel) => m.hasKey);
-          set({ models: withKeys });
-          // If no model selected yet, pick the first one
-          if (withKeys.length > 0 && !get().selectedModelId) {
-            set({ selectedModelId: withKeys[0].id });
-          }
+      const result = await fetchUserModels();
+      if (result.error) {
+        // Only set models to empty on auth/no-token errors; keep existing on network/server errors
+        if (result.error.code === 'NO_TOKEN' || result.error.code === 'UNAUTHORIZED') {
+          set({ models: [] });
         }
-      } catch {
-        // Ignore - models will be empty
+        return;
+      }
+      // Only models with keys can be used for chat
+      const withKeys = result.models.filter((m: UserModel) => m.hasKey);
+      set({ models: withKeys });
+      // If no model selected yet, pick the first one
+      if (withKeys.length > 0 && !get().selectedModelId) {
+        set({ selectedModelId: withKeys[0].id });
       }
     },
 

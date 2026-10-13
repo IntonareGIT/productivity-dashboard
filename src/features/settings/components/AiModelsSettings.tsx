@@ -3,6 +3,7 @@ import { Check, Key, Save, Trash2, X, ExternalLink, TestTube2, Pencil, Plus } fr
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
+import { fetchUserModels } from '../../../features/ai/modelsClient';
 import { getCloudAccessToken } from '../../../features/ai/cloudAuth';
 import { toast } from '../../../stores/useToastStore';
 import type { UserModel, UserModelInput } from '../../../types';
@@ -65,26 +66,15 @@ export const AiModelsSettings: React.FC = () => {
   const [showKey, setShowKey] = useState(false);
 
   const fetchModelsFromServer = async () => {
-    const token = getCloudAccessToken();
-    if (!token) {
+    const result = await fetchUserModels();
+    if (result.error) {
+      // Don't show toast for auth errors — just leave the list empty
       setModels([]);
-      setLoading(false);
-      return;
+    } else {
+      setModels(result.models);
+      fetchModels(); // Refresh the assistant store
     }
-    try {
-      const res = await fetch('/api/models', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setModels(data.models ?? []);
-        fetchModels(); // Refresh the assistant store
-      }
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
+    setLoading(false);
   };
 
   useEffect(() => {
