@@ -8,6 +8,7 @@ import { PomodoroSettingsSection } from './components/PomodoroSettingsSection';
 import { AiModelsSettings } from './components/AiModelsSettings';
 import { ChatHistorySettings } from './components/ChatHistorySettings';
 import { FloatingAiSettings } from './components/FloatingAiSettings';
+import { AssistantRedesignSettings } from './components/AssistantRedesignSettings';
 import { SyncSettings } from './components/SyncSettings';
 import { DataBackupSection } from './components/DataBackupSection';
 import { FileMigrationSection } from './components/FileMigrationSection';
@@ -59,6 +60,9 @@ export const SettingsPage: React.FC<{ onOpenAbout?: () => void }> = ({ onOpenAbo
 
       {/* Floating AI button visibility, one switch for both modes */}
       <FloatingAiSettings />
+
+      {/* Assistant redesign preview toggle */}
+      <AssistantRedesignSettings />
 
       {/* Cross-device sync (Dexie Cloud) */}
       <SyncSettings />

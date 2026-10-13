@@ -553,8 +553,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     draft: '',
     listScrollTop: 0,
     assistantRedesign:
-      typeof window !== 'undefined' &&
-      new URLSearchParams(window.location.search).get('assistantRedesign') === '1',
+      typeof window !== 'undefined' && (
+        new URLSearchParams(window.location.search).get('assistantRedesign') === '1' ||
+        localStorage.getItem('assistantRedesignEnabled') === 'true'
+      ),
     providerLabel: null,
 providerReady: false,
     providerError: null,
