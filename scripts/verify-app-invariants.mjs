@@ -324,6 +324,22 @@ const renderWith = ({ signedIn, currentUserValue }) => {
     !/this\.version\(1[8-9]\)/.test(dbSrc));
 }
 
+// ---- 9. No duplicate tool names in the combined registry ----
+{
+  const read = (p) => readFileSync(p, 'utf8');
+  const toolsSrc = read('src/features/ai/tools.ts');
+  const libSrc = read('src/features/ai/toolsLibrary.ts');
+  const extSrc = read('src/features/ai/toolsExtended.ts');
+  // Count occurrences in TOOL_SPECS arrays only (name: '...')
+  const specNameMatches = (src) => (src.match(/name:\s*'([a-zA-Z][a-zA-Z0-9]*)'/g) ?? []).map(m => m.replace(/name:\s*'/, '').replace(/'/, ''));
+  const allSpecs = [...specNameMatches(toolsSrc), ...specNameMatches(libSrc), ...specNameMatches(extSrc)];
+  const counts = {};
+  for (const name of allSpecs) counts[name] = (counts[name] ?? 0) + 1;
+  const dupes = Object.entries(counts).filter(([, c]) => c > 1).map(([n]) => n);
+  check('9 no tool spec name appears more than once across all TOOL_SPECS',
+    dupes.length === 0, dupes.join(', '));
+}
+
 console.log('');
 console.log(fail === 0 ? 'ALL CHECKS PASSED' : `${fail} CHECK(S) FAILED`);
 console.log(`${pass} passed, ${fail} failed`);

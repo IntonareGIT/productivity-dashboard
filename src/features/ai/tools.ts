@@ -74,7 +74,6 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   'addOneOffShiftException',
   'deleteCalendarEvent',
   // Files and extraction
-  'startExtraction',
   'queueExtraction',
   'retryExtraction',
   'markNoteChecked',

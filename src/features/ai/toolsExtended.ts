@@ -362,40 +362,6 @@ export const EXTENDED_TOOL_SPECS: ToolSpec[] = [
   {
     type: 'function',
     function: {
-      name: 'getExtractionStatus',
-      description:
-        'Returns the note status, provider, model, chunk progress, and the last short error for a file.',
-      parameters: {
-        type: 'object',
-        properties: {
-          fileId: { type: 'string', description: 'Resource id of the file.' },
-        },
-        required: ['fileId'],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'startExtraction',
-      description:
-        'Start extraction of a file to markdown. If no model is given, use the model the user last chose. Confirm first, because it uses the user\'s quota.',
-      parameters: {
-        type: 'object',
-        properties: {
-          fileId: { type: 'string', description: 'Resource id of the file.' },
-          provider: { type: 'string', description: 'Optional provider label (e.g. "Gemini", "Groq").' },
-          model: { type: 'string', description: 'Optional model name.' },
-        },
-        required: ['fileId'],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'queueExtraction',
       description: 'Mark files as "Extract later" without running them.',
       parameters: {
@@ -455,22 +421,6 @@ export const EXTENDED_TOOL_SPECS: ToolSpec[] = [
           includeAll: { type: 'boolean', description: 'Include failed/missing notes (default false).' },
         },
         required: ['query'],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'readNote',
-      description: 'Read a note by fileId. Returns one section if specified, or the full note if short. For long notes, returns the section list first.',
-      parameters: {
-        type: 'object',
-        properties: {
-          fileId: { type: 'string', description: 'Resource id of the file.' },
-          section: { type: 'string', description: 'Optional section heading to read.' },
-        },
-        required: ['fileId'],
         additionalProperties: false,
       },
     },
@@ -1536,14 +1486,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => Promise<ToolEx
   // Files and extraction
   searchFiles,
   listFiles,
-  getExtractionStatus,
-  startExtraction,
   queueExtraction,
   retryExtraction,
   markNoteChecked,
   // Notes and search
   searchNotes,
-  readNote,
   readFilePages,
   editNote,
   revertNote,
@@ -1610,10 +1557,6 @@ export function describeExtendedToolCall(name: string, args: Record<string, unkn
       return `Search files for "${s('query')}".`;
     case 'listFiles':
       return `List files (filter: ${s('filter')}).`;
-    case 'getExtractionStatus':
-      return `Get extraction status for file ${s('fileId')}.`;
-    case 'startExtraction':
-      return `Start extraction for file ${s('fileId')}${args.provider ? ` with ${s('provider')}` : ''}${args.model ? ` (${s('model')})` : ''}.`;
     case 'queueExtraction':
       return `Queue ${Array.isArray(args.fileIds) ? args.fileIds.length : 0} file(s) for extraction.`;
     case 'retryExtraction':
@@ -1623,8 +1566,6 @@ export function describeExtendedToolCall(name: string, args: Record<string, unkn
     // Notes and search
     case 'searchNotes':
       return `Search notes for "${s('query')}"${args.includeAll ? ' (including all)' : ''}.`;
-    case 'readNote':
-      return `Read note for file ${s('fileId')}${args.section ? ` section "${s('section')}"` : ''}.`;
     case 'readFilePages':
       return `Read pages ${Array.isArray(args.pages) ? args.pages.join(', ') : '?'} of file ${s('fileId')}.`;
     case 'editNote':
