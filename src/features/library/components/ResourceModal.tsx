@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { FileUp, AlertTriangle, Link as LinkIcon, Clock, Check } from 'lucide-react';
 import { Modal } from '../../../components/ui/Modal';
 import { saveResource, saveNote, initNoteForExtraction } from '../libraryRepo';
+import { startExtraction } from '../../../features/ai/extractionRunner';
 import { LARGE_BLOB_WARNING_BYTES } from '../../../db/cloudConfig';
 import { db } from '../../../db/db';
 import { fetchUserModels, getPdfCapableModels } from '../../../features/ai/modelsClient';
@@ -230,6 +231,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
             });
             if (extractMode === 'now') {
               await initNoteForExtraction(resourceId, selectedModelId);
+              startExtraction(resourceId);
             }
           }
         } else {
@@ -262,6 +264,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
             });
             if (extractMode === 'now') {
               await initNoteForExtraction(resourceId, selectedModelId);
+              startExtraction(resourceId);
             }
           }
         }

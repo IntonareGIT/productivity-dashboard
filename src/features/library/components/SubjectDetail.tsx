@@ -16,6 +16,8 @@ import { AssessmentModal } from './AssessmentModal';
 import { MoveToGroupMenu } from './MoveToGroupMenu';
 import { GroupNameEditor, NewGroupButton } from './ResourceGroups';
 import { GroupTree } from './GroupTree';
+import { useAssistantStore } from '../../../stores/useAssistantStore';
+import { startExtraction } from '../../../features/ai/extractionRunner';
 import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, moveGroup, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes, saveNote } from '../libraryRepo';
 import type { Assessment, Note, Resource, ResourceGroup, Subject, Topic, TopicStatus } from '../../../types';
 
@@ -80,9 +82,11 @@ interface ResourceRowProps {
   groups?: ResourceGroup[];
   /** Note for extraction status. */
   note?: Note | null;
+  /** Called when user clicks Extract/Start on a PDF. */
+  onStartExtraction?: (fileId: string, modelId?: string) => void;
 }
 
-function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onPreview, onDownload, onSplitWithNotes, fallbackTopicId, groups, note }: ResourceRowProps) {
+function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onPreview, onDownload, onSplitWithNotes, fallbackTopicId, groups, note, onStartExtraction }: ResourceRowProps) {
   const meta = dueMeta(resource);
   const isFile = resource.kind === 'file';
   const isPdf = isFile && (resource.mimeType === 'application/pdf' || resource.fileName?.toLowerCase().endsWith('.pdf'));
@@ -90,22 +94,42 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
 
   const renderExtractStatus = () => {
     if (!isPdf || !extractStatus) return null;
+    const models = useAssistantStore.getState().models;
+    const pdfModels = models.filter((m) => m.capabilities.acceptsPdf && m.hasKey);
+    const hasMultipleModels = pdfModels.length > 1;
+    const defaultModelId = pdfModels[0]?.id;
+
+    const handleStart = () => {
+      if (extractStatus === 'none') {
+        // For 'none', create note first then start
+        onStartExtraction?.(resource.id, hasMultipleModels ? undefined : defaultModelId);
+      } else if (extractStatus === 'queued') {
+        // For 'queued', just start the runner
+        onStartExtraction?.(resource.id);
+      }
+    };
+
     switch (extractStatus) {
       case 'none':
         return (
           <button
-            disabled
-            className="flex items-center gap-1 text-[11px] font-semibold text-amber-500 hover:underline"
-            title="Extraction starts in the next update"
+            onClick={handleStart}
+            disabled={pdfModels.length === 0}
+            className={`flex items-center gap-1 text-[11px] font-semibold ${pdfModels.length === 0 ? 'text-slate-400 cursor-not-allowed' : 'text-amber-500 hover:underline'}`}
+            title={pdfModels.length === 0 ? 'Add a PDF-capable model in Settings → AI Models' : 'Start extraction'}
           >
-            <Clock className="w-3 h-3" /> Extract
+            <Clock className="w-3 h-3" /> {pdfModels.length === 0 ? 'No model' : 'Extract'}
           </button>
         );
       case 'queued':
         return (
-          <span className="flex items-center gap-1 text-xs text-amber-500">
-            <Clock className="w-3 h-3 animate-pulse" /> Queued
-          </span>
+          <button
+            onClick={handleStart}
+            className="flex items-center gap-1 text-xs font-semibold text-amber-500 hover:underline"
+            title="Start extraction"
+          >
+            <Clock className="w-3 h-3" /> Start
+          </button>
         );
       case 'processing':
         return (
@@ -121,9 +145,13 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
         );
       case 'failed':
         return (
-          <span className="flex items-center gap-1 text-xs text-rose-500">
-            <AlertTriangle className="w-3 h-3" /> Failed
-          </span>
+          <button
+            onClick={handleStart}
+            className="flex items-center gap-1 text-xs font-semibold text-rose-500 hover:underline"
+            title="Retry extraction"
+          >
+            <AlertTriangle className="w-3 h-3" /> Retry
+          </button>
         );
       default:
         return null;
@@ -654,6 +682,19 @@ renderResources={(groupId) => {
                       fallbackTopicId={selectedTopic?.id ?? null}
                       groups={sortedGroups}
                       note={noteByFileId.get(resource.id) ?? null}
+                      onStartExtraction={async (fileId, modelId) => {
+                      const note = noteByFileId.get(fileId);
+                      if (!note || note.status === 'none') {
+                        const { saveNote, initNoteForExtraction } = await import('../libraryRepo');
+                        await saveNote({
+                          fileId,
+                          status: 'queued',
+                          modelId: modelId ?? note?.modelId,
+                        });
+                        await initNoteForExtraction(fileId, modelId ?? note?.modelId ?? '');
+                      }
+                      startExtraction(fileId);
+                    }}
                     />
                   ));
                 }}
@@ -676,6 +717,20 @@ renderResources={(groupId) => {
                         fallbackTopicId={selectedTopic?.id ?? null}
                         groups={sortedGroups}
                         note={noteByFileId.get(resource.id) ?? null}
+onStartExtraction={async (fileId, modelId) => {
+                      const note = noteByFileId.get(fileId);
+                      if (!note || note.status === 'none') {
+                        // Create note and initialize extraction
+                        const { saveNote, initNoteForExtraction } = await import('../libraryRepo');
+                        await saveNote({
+                          fileId,
+                          status: 'queued',
+                          modelId: modelId ?? note?.modelId,
+                        });
+                        await initNoteForExtraction(fileId, modelId ?? note?.modelId ?? '');
+                      }
+                      startExtraction(fileId);
+                    }}
                       />
                     ))}
               />
