@@ -13,6 +13,7 @@ import {
   failNote,
   resumeNote,
 } from '../library/libraryRepo';
+import { toast } from '../../stores/useToastStore';
 
 interface RunnerCallbacks {
   onProgress?: (fileId: string, chunkIndex: number, status: string) => void;
@@ -51,6 +52,7 @@ export async function runExtraction(
   if (!modelId) {
     console.log('[extract] no modelId on note', { fileId });
     await failNote(fileId, 'No model selected');
+    toast('error', 'Extraction failed', 'No model selected');
     callbacks.onError?.(fileId, 'No model selected');
     return;
   }
@@ -60,6 +62,7 @@ export async function runExtraction(
   if (modelsResult.error || !modelsResult.models) {
     console.log('[extract] could not load models', { fileId, error: modelsResult.error });
     await failNote(fileId, 'Could not load models');
+    toast('error', 'Extraction failed', 'Could not load models');
     callbacks.onError?.(fileId, modelsResult.error?.message ?? 'Could not load models');
     return;
   }
@@ -67,6 +70,7 @@ export async function runExtraction(
   if (!model) {
     console.log('[extract] model not found', { fileId, modelId });
     await failNote(fileId, 'Model not found');
+    toast('error', 'Extraction failed', 'Model not found');
     callbacks.onError?.(fileId, 'Model not found');
     return;
   }
@@ -76,6 +80,7 @@ export async function runExtraction(
   if (!token) {
     console.log('[extract] no cloud token', { fileId });
     await failNote(fileId, 'Not signed in');
+    toast('error', 'Extraction failed', 'Not signed in. Sign in again from Settings → Sync.');
     callbacks.onError?.(fileId, 'Not signed in');
     return;
   }
@@ -86,10 +91,12 @@ export async function runExtraction(
   if (!resource?.r2Key) {
     console.log('[extract] no r2Key on resource', { fileId });
     await failNote(fileId, 'File not in cloud storage');
+    toast('error', 'Extraction failed', 'File not in cloud storage');
     callbacks.onError?.(fileId, 'File not in cloud storage');
     return;
   }
 
+  toast('info', 'Extraction started', resource.title);
   console.log('[extract] processing chunks', { fileId, totalChunks: note.chunks.length, startingAt: nextIndex });
 
   // Process chunks starting from nextIndex
@@ -146,6 +153,7 @@ export async function runExtraction(
       console.log('[extract] chunk error', { fileId, chunkIndex: i, error: msg });
       await updateNoteChunk(fileId, i, { status: 'failed', error: msg });
       await failNote(fileId, `Chunk ${i + 1} failed: ${msg}`);
+      toast('error', 'Extraction failed', msg);
       callbacks.onError?.(fileId, `Chunk ${i + 1} failed: ${msg}`);
       return;
     }
@@ -154,6 +162,7 @@ export async function runExtraction(
   // All chunks done, finalize
   console.log('[extract] all chunks completed, finalizing', { fileId });
   await finalizeNote(fileId);
+  toast('success', 'Extraction complete', 'Markdown ready');
   callbacks.onComplete?.(fileId);
 }
 

@@ -102,12 +102,19 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
     const handleStart = () => {
       if (extractStatus === 'none') {
         // For 'none', create note first then start
+        if (pdfModels.length === 0) {
+          toast('info', 'No PDF-capable model', 'Add one in Settings → AI Models');
+          return;
+        }
+        toast('info', 'Retry clicked', resource.title);
         onStartExtraction?.(resource.id, hasMultipleModels ? undefined : defaultModelId);
       } else if (extractStatus === 'queued') {
         // For 'queued', just start the runner
+        toast('info', 'Extraction started', resource.title);
         onStartExtraction?.(resource.id);
       } else if (extractStatus === 'failed') {
         // For 'failed', retry the failed chunk
+        toast('info', 'Retry clicked', resource.title);
         onStartExtraction?.(resource.id);
       }
     };
