@@ -291,6 +291,10 @@ interface AssistantState {
   readerQuestion: string | null;
   openReader: (msgId: string, question: string) => void;
   closeReader: () => void;
+
+  /** Undo toast state (for reversible actions). */
+  undoToast: { id: string; message: string; onUndo: () => void } | null;
+  setUndoToast: (toast: { id: string; message: string; onUndo: () => void } | null) => void;
 }
 
 const WELCOME: AssistantViewMsg[] = [
@@ -328,6 +332,40 @@ export class TurnStopped extends Error {
 const isStopped = (err: unknown): boolean =>
   err instanceof TurnStopped ||
   (err instanceof Error && (err.name === 'AbortError' || err.message === 'Stopped'));
+
+/**
+ * One pending undo toast, at module level like `turnController`.
+ * Survives panel unmount so tools can call it from anywhere.
+ */
+let undoToast: { id: string; message: string; onUndo: () => void } | null = null;
+let undoTimer: number | null = null;
+
+function showUndo(message: string, onUndo: () => void): void {
+  if (undoTimer) window.clearTimeout(undoTimer);
+  undoToast = { id: `undo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, message, onUndo };
+  undoTimer = window.setTimeout(() => {
+    undoToast = null;
+    undoTimer = null;
+    useAssistantStore.getState().setUndoToast(null);
+  }, 8000);
+  useAssistantStore.getState().setUndoToast(undoToast);
+}
+
+function dismissUndo(): void {
+  if (undoTimer) window.clearTimeout(undoTimer);
+  undoTimer = null;
+  undoToast = null;
+  useAssistantStore.getState().setUndoToast(null);
+}
+
+function actUndo(): void {
+  const toast = undoToast;
+  if (!toast) return;
+  dismissUndo();
+  try { toast.onUndo(); } catch { /* reported by tool */ }
+}
+
+export const assistantUndo = { showUndo, dismissUndo, actUndo };
 
 export const useAssistantStore = create<AssistantState>((set, get) => {
   async function resolveModel(): Promise<{ model: UserModel | null; error: string | null }> {
@@ -514,7 +552,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       typeof window !== 'undefined' &&
       new URLSearchParams(window.location.search).get('assistantRedesign') === '1',
     providerLabel: null,
-    providerReady: false,
+providerReady: false,
     providerError: null,
     retryStatus: null,
     failure: null,
@@ -524,14 +562,15 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     view: WELCOME,
     pending: null,
     activeTool: null,
+    undoToast: null,
     // User's AI models (fetched from server)
     models: [] as UserModel[],
-// Currently selected model ID (from user's models with keys)
-  selectedModelId: null as string | null,
+    // Currently selected model ID (from user's models with keys)
+    selectedModelId: null as string | null,
 
-  // Reader pane state (for long messages)
-  readerMsgId: null as string | null,
-  readerQuestion: null as string | null,
+    // Reader pane state (for long messages)
+    readerMsgId: null as string | null,
+    readerQuestion: null as string | null,
 
     // Fetch user's models from the server
     fetchModels: async () => {
@@ -572,6 +611,9 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     // Reader pane
     openReader: (msgId, question) => set({ readerMsgId: msgId, readerQuestion: question }),
     closeReader: () => set({ readerMsgId: null, readerQuestion: null }),
+
+    // Undo toast
+    setUndoToast: (toast) => set({ undoToast: toast }),
 
     ask: (text) => {
       set({ open: true });

@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, Check, Copy, RotateCcw, SendHorizonal, Square, Zap, AlertTriangle, User, Sparkles, Info } from 'lucide-react';
+import { Bot, Check, Copy, RotateCcw, SendHorizonal, Square, Zap, AlertTriangle, User, Sparkles, Info, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
-import { useAssistantStore } from '../../../stores/useAssistantStore';
+import { useAssistantStore, assistantUndo } from '../../../stores/useAssistantStore';
 import { AssistantMessage } from './AssistantMessage';
 
 export type AssistantLayout = 'bubble' | 'fullscreen' | 'split';
@@ -63,6 +63,8 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
   const readerQuestion = useAssistantStore((s) => s.readerQuestion);
   const openReader = useAssistantStore((s) => s.openReader);
   const closeReader = useAssistantStore((s) => s.closeReader);
+  const undoToast = useAssistantStore((s) => s.undoToast);
+  const setUndoToast = useAssistantStore((s) => s.setUndoToast);
 
   const [showDetails, setShowDetails] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -257,6 +259,30 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
             AI is disabled. <span className="font-semibold underline">Add a model in Settings → AI Models</span> to enable it.
           </span>
         </button>
+      )}
+
+      {/* Undo toast */}
+      {undoToast && (
+        <div className="m-3 flex items-center gap-2 rounded-xl border border-accent/40 bg-accent-subtle px-3 py-2 text-sm text-accent-text animate-slide-in">
+          <span className="flex-1">{undoToast.message}</span>
+          <button
+            onClick={() => {
+              assistantUndo.actUndo();
+            }}
+            className="px-3 py-1 rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-semibold transition-colors shrink-0"
+          >
+            Undo
+          </button>
+          <button
+            onClick={() => {
+              assistantUndo.dismissUndo();
+            }}
+            aria-label="Dismiss"
+            className="p-1.5 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors shrink-0"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
       )}
 
       {/* Command bar: centered input + chips */}
