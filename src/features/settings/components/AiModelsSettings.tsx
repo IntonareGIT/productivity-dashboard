@@ -197,7 +197,13 @@ export const AiModelsSettings: React.FC = () => {
       if (res.ok && isJson && data.ok === true) {
         toast('success', 'Test passed', (data.message as string) ?? 'Key valid');
       } else if (!isJson) {
-        toast('error', 'Test failed', `Server route not found (HTTP ${res.status})`);
+        if (res.status === 404) {
+          toast('error', 'Test failed', 'Server route not found (HTTP 404)');
+        } else if (res.status === 500) {
+          toast('error', 'Test failed', 'Server error (HTTP 500). Check Vercel logs for this request.');
+        } else {
+          toast('error', 'Test failed', `Unexpected response (HTTP ${res.status})`);
+        }
       } else {
         toast('error', 'Test failed', (data.message as string) ?? 'Model did not respond correctly.');
       }

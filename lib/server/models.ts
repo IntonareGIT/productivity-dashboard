@@ -270,3 +270,90 @@ export async function getModelKey(userId: string, id: string): Promise<string | 
     return null;
   }
 }
+
+export async function testModelKey(
+  adapter: 'gemini' | 'openai-compatible',
+  baseUrl: string,
+  modelId: string,
+  apiKey: string,
+): Promise<{ ok: boolean; message: string }> {
+  try {
+    if (adapter === 'gemini') {
+      // Normalize model ID: trim, remove leading "models/"
+      const normalizedModelId = modelId.trim().replace(/^models\//, '');
+      // Validate: only letters, digits, dots, hyphens
+      if (!/^[a-zA-Z0-9.-]+$/.test(normalizedModelId)) {
+        return { ok: false, message: 'modelId contains invalid characters' };
+      }
+      // Build URL with normalized ID, key in header
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${normalizedModelId}:generateContent`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'test' }] }],
+          generationConfig: { maxOutputTokens: 64 },
+        }),
+      });
+      const responseText = await res.text();
+      let data: Record<string, unknown> = {};
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        // ignore parse error
+      }
+      console.log('[DEBUG] Gemini test response:', { status: res.status, keys: Object.keys(data), error: data.error });
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, message: 'Invalid key (provider returned 401)' };
+      }
+      if (res.status === 404) {
+        return { ok: false, message: 'Model ID not found at this provider' };
+      }
+      if (!res.ok) {
+        return { ok: false, message: `Provider error (status ${res.status})` };
+      }
+      // Accept any 200 with candidates array as success, even if text is empty
+      // (some models use tokens for internal reasoning)
+      if (Array.isArray(data.candidates) && data.candidates.length > 0) {
+        return { ok: true, message: 'Key valid' };
+      }
+      return { ok: false, message: 'Provider returned unexpected response' };
+    } else {
+      // Test with OpenAI-compatible chat/completions
+      if (!baseUrl) {
+        return { ok: false, message: 'baseUrl is required for openai-compatible' };
+      }
+      const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: 'user', content: 'test' }],
+          max_tokens: 16,
+        }),
+      });
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, message: 'Invalid key (provider returned 401)' };
+      }
+      if (res.status === 404) {
+        return { ok: false, message: 'Model ID not found at this provider' };
+      }
+      if (!res.ok) {
+        return { ok: false, message: `Provider error (status ${res.status})` };
+      }
+      return { ok: true, message: 'Key valid' };
+    }
+  } catch (e) {
+    if (e instanceof TypeError && e.message.includes('fetch')) {
+      return { ok: false, message: 'Could not reach the provider at this address' };
+    }
+    return { ok: false, message: 'Could not reach the provider at this address' };
+  }
+}

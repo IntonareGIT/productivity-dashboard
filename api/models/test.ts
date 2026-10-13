@@ -6,9 +6,9 @@
  * Verifies the Dexie Cloud token and scopes to the user's `sub` claim.
  * Never logs the API key.
  */
-import type { ApiRequest, ApiResponse, VerifiedUser } from '../lib/server/dexie.js';
-import { json, readBearer, verifyDexieToken, unauthorized, setCors } from '../lib/server/dexie.js';
-import { testModelKey } from './models.js';
+import type { ApiRequest, ApiResponse, VerifiedUser } from '../../lib/server/dexie.js';
+import { json, readBearer, verifyDexieToken, unauthorized, setCors } from '../../lib/server/dexie.js';
+import { testModelKey } from '../../lib/server/models.js';
 
 function badInput(res: ApiResponse, message: string): void {
   json(res, 400, { error: 'bad_request', message });
