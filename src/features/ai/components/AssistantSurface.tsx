@@ -129,6 +129,13 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
   const [showJump, setShowJump] = useState(false);
   const pinnedRef = useRef(true);
 
+  // Test helper: expose showJump state globally for browser tests
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).__assistantShowJump = showJump;
+    }
+  }, [showJump]);
+
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
@@ -305,6 +312,7 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
       {/* Reply list */}
       <div
         ref={listRef}
+        data-autoscroll-list
         onScroll={handleScroll}
         className={`flex-1 overflow-y-auto px-3 py-3 space-y-2.5 min-h-[180px]`}
       >
