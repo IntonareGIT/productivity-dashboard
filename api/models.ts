@@ -81,66 +81,6 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     return;
   }
 
-  // Test endpoint: POST /api/models/test { adapter, baseUrl, modelId, apiKey }
-  // Returns { ok: true, message } or { ok: false, message }
-  if (req.method === 'POST' && req.url?.includes('/test')) {
-    let body: unknown = req.body;
-    if (typeof body === 'string') {
-      try {
-        body = JSON.parse(body);
-      } catch {
-        body = null;
-      }
-    }
-    const parsed = body as Record<string, unknown> | null;
-    if (!parsed || typeof parsed !== 'object') {
-      badInput(res, 'JSON body required');
-      return;
-    }
-
-    const adapter = parsed.adapter;
-    const baseUrl = typeof parsed.baseUrl === 'string' ? parsed.baseUrl.trim() : '';
-    const modelId = typeof parsed.modelId === 'string' ? parsed.modelId.trim() : '';
-    const apiKey = typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : '';
-
-    if (adapter !== 'gemini' && adapter !== 'openai-compatible') {
-      badInput(res, 'adapter must be "gemini" or "openai-compatible"');
-      return;
-    }
-    if (adapter === 'openai-compatible') {
-      if (!baseUrl || !isValidUrl(baseUrl)) {
-        badInput(res, 'baseUrl must be a valid HTTPS URL for openai-compatible adapter');
-        return;
-      }
-    } else {
-      if (baseUrl) {
-        badInput(res, 'baseUrl must be empty for gemini adapter');
-        return;
-      }
-    }
-    if (!modelId) {
-      badInput(res, 'modelId is required');
-      return;
-    }
-    if (!apiKey) {
-      badInput(res, 'apiKey is required');
-      return;
-    }
-    if (apiKey.length > 300) {
-      badInput(res, 'apiKey too long (max 300 characters)');
-      return;
-    }
-
-    const testResult = await testModelKey(adapter, baseUrl, modelId, apiKey);
-    console.log('[DEBUG] testModelKey result:', { adapter, status: testResult.ok ? 'ok' : 'fail', message: testResult.message });
-    if (!testResult.ok) {
-      json(res, 400, { error: 'test_failed', message: testResult.message });
-      return;
-    }
-    json(res, 200, { ok: true, message: testResult.message });
-    return;
-  }
-
   if (req.method === 'POST') {
     let body: unknown = req.body;
     if (typeof body === 'string') {

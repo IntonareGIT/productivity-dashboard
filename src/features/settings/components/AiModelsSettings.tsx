@@ -184,11 +184,22 @@ export const AiModelsSettings: React.FC = () => {
         body: JSON.stringify(input),
       });
 
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) {
-        toast('success', 'Test passed', data.message ?? 'Key valid');
+      const contentType = res.headers.get('content-type') ?? '';
+      const isJson = contentType.includes('application/json');
+      let data: Record<string, unknown> = {};
+      if (isJson) {
+        try {
+          data = await res.json();
+        } catch {
+          // JSON parse failed
+        }
+      }
+      if (res.ok && isJson && data.ok === true) {
+        toast('success', 'Test passed', (data.message as string) ?? 'Key valid');
+      } else if (!isJson) {
+        toast('error', 'Test failed', `Server route not found (HTTP ${res.status})`);
       } else {
-        toast('error', 'Test failed', data.message ?? 'Model did not respond correctly.');
+        toast('error', 'Test failed', (data.message as string) ?? 'Model did not respond correctly.');
       }
     } catch {
       toast('error', 'Test failed', 'Network error.');

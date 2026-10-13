@@ -190,10 +190,10 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-content-primary leading-tight">Assistant</p>
           <p className="text-[11px] text-content-tertiary truncate">
-            {configured ? 'Connected — can act on your data' : 'Needs an AI model'}
+            {configured ? 'Connected — can act on your data' : models.length > 0 ? 'Select a model to start' : 'Needs an AI model'}
           </p>
         </div>
-        {configured && models.length > 0 && (
+        {models.length > 0 && (
           <select
             value={selectedModelId ?? ''}
             onChange={(e) => setModel(e.target.value)}
@@ -210,7 +210,7 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
         {headerExtra}
       </div>
 
-      {!configured && (
+      {models.length === 0 && (
         <button
           onClick={() => { setOpen(false); onOpenSettings(); }}
           className="m-3 mb-0 flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-left"
