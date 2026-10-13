@@ -201,7 +201,7 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
               <span className="flex items-center justify-center w-8 h-8 rounded-xl bg-accent text-white shrink-0">
                 <Bot className="w-4 h-4" />
               </span>
-<div className="min-w-0">
+              <div className="min-w-0">
                 <h1 className="text-sm font-semibold text-content-primary leading-tight">Assistant</h1>
                 {providerReady && providerLabel && (
                   <div className="flex items-center gap-1.5 mt-0.5">
@@ -217,7 +217,7 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
                   </div>
                 )}
               </div>
-          </div>
+            </div>
           <div className="flex items-center gap-1" data-model-menu>
             {/* Model menu with green dot */}
             <div className="relative">
