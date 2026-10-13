@@ -5,6 +5,7 @@ import { Modal } from '../../../components/ui/Modal';
 import { saveResource } from '../libraryRepo';
 import { LARGE_BLOB_WARNING_BYTES } from '../../../db/cloudConfig';
 import { db } from '../../../db/db';
+import { getCloudAccessToken } from '../../../features/ai/cloudAuth';
 import type { Resource, ResourceKind, UserModel } from '../../../types';
 
 interface ResourceModalProps {
@@ -92,8 +93,24 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
     setModelsLoading(true);
     setModelsError(null);
     try {
-      const res = await fetch('/api/models', { credentials: 'include' });
-      if (!res.ok) throw new Error('Failed to fetch models');
+      const token = getCloudAccessToken();
+      if (!token) {
+        setModelsError('Not signed in to Dexie Cloud. Sign in from Settings → Sync, then try again.');
+        setModels([]);
+        return;
+      }
+      const res = await fetch('/api/models', {
+        credentials: 'include',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        let msg: string;
+        if (res.status === 401) msg = 'Could not load models (HTTP 401) — session expired or invalid. Sign in again from Settings → Sync.';
+        else if (res.status === 503) msg = 'Could not load models (HTTP 503) — model store unavailable. Check KV_REST_API_URL and KV_REST_API_TOKEN in Vercel.';
+        else if (res.status === 404) msg = 'Could not load models (HTTP 404) — route not found. Check Vercel functions are deployed.';
+        else msg = `Could not load models (HTTP ${res.status})`;
+        throw new Error(msg);
+      }
       const data = await res.json();
       const pdfModels = (data.models ?? []).filter(
         (m: UserModel) => m.capabilities.acceptsPdf && m.hasKey
@@ -103,7 +120,12 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
         setSelectedModelId(pdfModels[0].id);
       }
     } catch (e) {
-      setModelsError(e instanceof Error ? e.message : 'Could not load models');
+      const err = e instanceof Error ? e : new Error(String(e));
+      let msg = err.message;
+      if (!msg.startsWith('Could not load models')) {
+        msg = 'Network error';
+      }
+      setModelsError(msg);
     } finally {
       setModelsLoading(false);
     }
@@ -381,7 +403,7 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
               <p className="text-xs text-amber-500 flex items-center gap-1">
                 <AlertTriangle className="w-3 h-3" />
                 Extract now is disabled.{' '}
-                <a href="/settings?section=ai" className="font-semibold underline" target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                <a href="/settings?section=ai" className="font-semibold underline" onClick={(e) => e.stopPropagation()}>
                   Add a PDF-capable model in Settings → AI Models
                 </a>
               </p>
