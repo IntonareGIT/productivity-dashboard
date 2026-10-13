@@ -285,6 +285,12 @@ interface AssistantState {
   /** Whether the new shared assistant surface is enabled. Default OFF. */
   assistantRedesign: boolean;
   setAssistantRedesign: (v: boolean) => void;
+
+  /** Reader pane state (for long messages). */
+  readerMsgId: string | null;
+  readerQuestion: string | null;
+  openReader: (msgId: string, question: string) => void;
+  closeReader: () => void;
 }
 
 const WELCOME: AssistantViewMsg[] = [
@@ -520,8 +526,12 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     activeTool: null,
     // User's AI models (fetched from server)
     models: [] as UserModel[],
-    // Currently selected model ID (from user's models with keys)
-    selectedModelId: null as string | null,
+// Currently selected model ID (from user's models with keys)
+  selectedModelId: null as string | null,
+
+  // Reader pane state (for long messages)
+  readerMsgId: null as string | null,
+  readerQuestion: null as string | null,
 
     // Fetch user's models from the server
     fetchModels: async () => {
@@ -558,6 +568,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     },
 
     setAssistantRedesign: (v) => set({ assistantRedesign: v }),
+
+    // Reader pane
+    openReader: (msgId, question) => set({ readerMsgId: msgId, readerQuestion: question }),
+    closeReader: () => set({ readerMsgId: null, readerQuestion: null }),
 
     ask: (text) => {
       set({ open: true });

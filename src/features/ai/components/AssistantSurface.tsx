@@ -59,6 +59,10 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
   const setDraft = useAssistantStore((s) => s.setDraft);
   const listScrollTop = useAssistantStore((s) => s.listScrollTop);
   const setListScrollTop = useAssistantStore((s) => s.setListScrollTop);
+  const readerMsgId = useAssistantStore((s) => s.readerMsgId);
+  const readerQuestion = useAssistantStore((s) => s.readerQuestion);
+  const openReader = useAssistantStore((s) => s.openReader);
+  const closeReader = useAssistantStore((s) => s.closeReader);
 
   const [showDetails, setShowDetails] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -107,6 +111,12 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
       if (busy) {
         e.preventDefault();
         stop();
+        return;
+      }
+      if (readerMsgId) {
+        e.preventDefault();
+        closeReader();
+        return;
       }
       return;
     }
@@ -314,27 +324,39 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
         ref={listRef}
         data-autoscroll-list
         onScroll={handleScroll}
-        className={`flex-1 overflow-y-auto px-3 py-3 space-y-2.5 min-h-[180px]`}
+        className={`flex-1 overflow-y-auto px-3 py-3 space-y-2.5 min-h-[180px}`}
       >
         {view.map((msg, idx) => {
           const isLastError = msg.error && idx === view.length - 1;
+          const isLong = (msg.text?.length ?? 0) > 800 || (msg.text?.match(/\n/g)?.length ?? 0) > 5;
           return (
-            <AssistantMessage
-              key={msg.id}
-              msg={msg}
-              onCopy={(text) => navigator.clipboard.writeText(text)}
-              onRegenerate={(msgId) => {
-                const idx = view.findIndex((m) => m.id === msgId);
-                if (idx > 0 && view[idx - 1].role === 'user') {
-                  const userMsg = view[idx - 1];
-                  setDraft(userMsg.text);
-                  void send(userMsg.text, true);
-                }
-              }}
-              onRetry={isLastError ? (msgId) => void retryLast() : undefined}
-              isLastError={isLastError}
-              isStreaming={busy && view[view.length - 1]?.id === msg.id}
-            />
+            <React.Fragment key={msg.id}>
+              <AssistantMessage
+                msg={msg}
+                onCopy={(text) => navigator.clipboard.writeText(text)}
+                onRegenerate={(msgId) => {
+                  const idx = view.findIndex((m) => m.id === msgId);
+                  if (idx > 0 && view[idx - 1].role === 'user') {
+                    const userMsg = view[idx - 1];
+                    setDraft(userMsg.text);
+                    void send(userMsg.text, true);
+                  }
+                }}
+                onRetry={isLastError ? (msgId) => void retryLast() : undefined}
+                isLastError={isLastError}
+                isStreaming={busy && view[view.length - 1]?.id === msg.id}
+              />
+              {isLong && !msg.error && msg.role === 'assistant' && (
+                <button
+                  type="button"
+                  onClick={() => openReader(msg.id, view[idx - 1]?.text ?? '')}
+                  className="mx-auto mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-accent/10 border border-accent/30 text-accent text-xs font-semibold hover:bg-accent/20 transition-colors"
+                >
+                  <span className="w-3 h-3">📖</span>
+                  Read in reader
+                </button>
+              )}
+            </React.Fragment>
           );
         })}
 
@@ -381,6 +403,80 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
           <span className="w-3 h-3 animate-bounce">↓</span>
           Jump to latest
         </button>
+      )}
+
+      {/* Reader pane */}
+      {readerMsgId && (
+        <div
+          className={`fixed inset-0 z-50 flex ${layout === 'bubble' ? 'md:inset-auto md:max-w-3xl md:max-h-[80vh] md:m-auto' : ''}`}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Message reader"
+        >
+          <div className="absolute inset-0 bg-black/50" onClick={closeReader} aria-hidden="true" />
+          <div className={`relative flex flex-col bg-bg-surface border border-border ${layout === 'bubble' ? 'md:w-full md:h-full' : 'w-full h-full'}`}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border/60 bg-bg-elevated/50 shrink-0">
+              <button
+                onClick={closeReader}
+                aria-label="Back to command bar"
+                className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                  <path d="M15 19l-7-7 7-7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-content-primary leading-tight truncate">
+                  {readerQuestion?.slice(0, 50) ?? 'Assistant reply'}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  const msg = view.find((m) => m.id === readerMsgId);
+                  if (msg) navigator.clipboard.writeText(msg.text);
+                }}
+                aria-label="Copy reply"
+                className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+              >
+                <Copy className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
+              <div className="text-[14px] leading-relaxed text-content-primary">
+                <ReactMarkdown
+                  rehypePlugins={[rehypeHighlight]}
+                  components={{
+                    h1: ({ children }) => <h1 className="text-lg font-bold mt-3 mb-1">{children}</h1>,
+                    h2: ({ children }) => <h2 className="text-base font-bold mt-3 mb-1">{children}</h2>,
+                    h3: ({ children }) => <h3 className="text-sm font-bold mt-2 mb-1">{children}</h3>,
+                    p: ({ children }) => <p className="my-1.5">{children}</p>,
+                    ul: ({ children }) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
+                    ol: ({ children }) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
+                    li: ({ children }) => <li className="text-[13px] leading-relaxed">{children}</li>,
+                    code: ({ children, ...props }) => (
+                      <code {...props} className="font-mono text-[12px] bg-bg-elevated border border-border rounded px-1 py-0.5">
+                        {children}
+                      </code>
+                    ),
+                    pre: ({ children }) => (
+                      <pre className="overflow-x-auto rounded-lg bg-bg-surface border border-border p-3 text-[12px] my-2">
+                        {children}
+                      </pre>
+                    ),
+                    a: ({ href, children }) => (
+                      <a href={href} target="_blank" rel="noopener noreferrer" className="underline text-accent">
+                        {children}
+                      </a>
+                    ),
+                  }}
+                >
+                  {view.find((m) => m.id === readerMsgId)?.text ?? ''}
+                </ReactMarkdown>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );
