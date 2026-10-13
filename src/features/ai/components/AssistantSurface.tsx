@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, Check, Copy, RotateCcw, SendHorizonal, Square, Zap, AlertTriangle, User, Sparkles, Info, X } from 'lucide-react';
+import { Bot, Check, Copy, RotateCcw, SendHorizonal, Square, Zap, AlertTriangle, User, Sparkles, Info, X, ChevronDown, Circle, HelpCircle, History } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import { useAssistantStore, assistantUndo } from '../../../stores/useAssistantStore';
@@ -65,10 +65,25 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
   const closeReader = useAssistantStore((s) => s.closeReader);
   const undoToast = useAssistantStore((s) => s.undoToast);
   const setUndoToast = useAssistantStore((s) => s.setUndoToast);
+  const setHistoryDrawerOpen = useAssistantStore((s) => s.setHistoryDrawerOpen);
 
   const [showDetails, setShowDetails] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [showWhatCanYouDo, setShowWhatCanYouDo] = useState(false);
+
+  // Keyboard: Ctrl+/ (Cmd+/ on Mac) focuses the command bar
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === '/') {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Composer gate: enabled when selected model has a key
   const selectedModel = models.find((m) => m.id === selectedModelId) ?? null;
@@ -181,7 +196,7 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
       {/* Top bar (fullscreen/split only) */}
       {(layout === 'fullscreen' || layout === 'split') && (
         <header className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-border/60 bg-bg-elevated/50 shrink-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2" data-model-menu>
             <span className="flex items-center justify-center w-8 h-8 rounded-xl bg-accent text-white shrink-0">
               <Bot className="w-4 h-4" />
             </span>
@@ -202,19 +217,57 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
               )}
             </div>
           </div>
-          <div className="flex items-center gap-1">
-            <select
-              value={selectedModelId ?? ''}
-              onChange={(e) => setModel(e.target.value)}
-              className="bg-bg-elevated border border-border text-content-primary text-xs rounded-xl px-2 py-1.5 outline-none focus:border-accent cursor-pointer min-w-[160px]"
-              aria-label="Select model"
+          <div className="flex items-center gap-1" data-model-menu>
+            {/* Model menu with green dot */}
+            <div className="relative">
+              <button
+                onClick={() => setModelMenuOpen((v) => !v)}
+                aria-label="Select model"
+                aria-expanded={modelMenuOpen}
+                aria-haspopup="listbox"
+                className="flex items-center gap-1.5 p-1.5 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+              >
+                <span className="relative flex items-center">
+                  {selectedModel && (
+                    <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-assistant-ready border-2 border-bg" aria-label="Model ready" />
+                  )}
+                  <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-xl bg-bg-elevated border border-border text-xs font-medium text-content-primary">
+                    {selectedModel ? selectedModel.displayName : 'Select model'}
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </span>
+                </span>
+              </button>
+              {modelMenuOpen && (
+                <ul
+                  role="listbox"
+                  aria-label="Select model"
+                  className="absolute right-0 mt-1 min-w-[180px] rounded-xl border border-border bg-bg-surface shadow-lg overflow-hidden z-10"
+                >
+                  {models.map((m) => (
+                    <li key={m.id} role="option" aria-selected={m.id === selectedModelId}>
+                      <button
+                        onClick={() => { void setModel(m.id); setModelMenuOpen(false); }}
+                        className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-content-primary hover:bg-bg-elevated transition-colors ${
+                          m.id === selectedModelId ? 'bg-accent/10 font-semibold' : ''
+                        }`}
+                      >
+                        {m.id === selectedModelId && <Check className="w-4 h-4 text-accent" />}
+                        <span className="flex-1 truncate">{m.displayName}</span>
+                        <span className="text-[10px] text-content-tertiary">{m.modelId}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <button
+              onClick={() => setHistoryDrawerOpen(true)}
+              aria-label="Open history"
+              className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+              title="History"
             >
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.displayName}
-                </option>
-              ))}
-            </select>
+              <History className="w-4 h-4" />
+            </button>
           </div>
         </header>
       )}
@@ -232,18 +285,49 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
             </p>
           </div>
           {models.length > 0 && (
-            <select
-              value={selectedModelId ?? ''}
-              onChange={(e) => setModel(e.target.value)}
-              className="ml-auto mr-2 bg-bg-elevated border border-border text-content-primary text-xs rounded-xl px-2 py-1.5 outline-none focus:border-accent cursor-pointer min-w-[160px]"
-              aria-label="Select model"
-            >
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.displayName}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-1 ml-auto mr-2" data-model-menu>
+              <div className="relative">
+                <button
+                  onClick={() => setModelMenuOpen((v) => !v)}
+                  aria-label="Select model"
+                  aria-expanded={modelMenuOpen}
+                  aria-haspopup="listbox"
+                  className="flex items-center gap-1.5 p-1.5 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+                >
+                  <span className="relative flex items-center">
+                    {selectedModel && (
+                      <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-assistant-ready border-2 border-bg" aria-label="Model ready" />
+                    )}
+                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-xl bg-bg-elevated border border-border text-xs font-medium text-content-primary">
+                      {selectedModel ? selectedModel.displayName : 'Select model'}
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </span>
+                  </span>
+                </button>
+                {modelMenuOpen && (
+                  <ul
+                    role="listbox"
+                    aria-label="Select model"
+                    className="absolute right-0 mt-1 min-w-[180px] rounded-xl border border-border bg-bg-surface shadow-lg overflow-hidden z-10"
+                  >
+                    {models.map((m) => (
+                      <li key={m.id} role="option" aria-selected={m.id === selectedModelId}>
+                        <button
+                          onClick={() => { void setModel(m.id); setModelMenuOpen(false); }}
+                          className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-content-primary hover:bg-bg-elevated transition-colors ${
+                            m.id === selectedModelId ? 'bg-accent/10 font-semibold' : ''
+                          }`}
+                        >
+                          {m.id === selectedModelId && <Check className="w-4 h-4 text-accent" />}
+                          <span className="flex-1 truncate">{m.displayName}</span>
+                          <span className="text-[10px] text-content-tertiary">{m.modelId}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -340,6 +424,15 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
                   {s}
                 </button>
               ))}
+              <button
+                key="what-can-you-do"
+                type="button"
+                onClick={() => setShowWhatCanYouDo(true)}
+                disabled={!hasUsableModel || busy}
+                className="px-3 py-1.5 rounded-full bg-accent/10 border border-accent/30 text-xs font-semibold text-accent hover:bg-accent/20 transition-colors disabled:opacity-50"
+              >
+                What can you do?
+              </button>
             </div>
           </form>
         </div>
@@ -500,6 +593,56 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
                   {view.find((m) => m.id === readerMsgId)?.text ?? ''}
                 </ReactMarkdown>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* What can you do? modal */}
+      {showWhatCanYouDo && (
+        <div
+          className="fixed inset-0 z-50 flex"
+          role="dialog"
+          aria-modal="true"
+          aria-label="What can you do?"
+        >
+          <div className="absolute inset-0 bg-black/50" onClick={() => setShowWhatCanYouDo(false)} aria-hidden="true" />
+          <div className="relative w-full max-w-md mx-auto my-auto bg-bg-surface border border-border rounded-xl shadow-xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border/60 bg-bg-elevated/50 shrink-0">
+              <h2 className="text-sm font-semibold text-content-primary">What can you do?</h2>
+              <button
+                onClick={() => setShowWhatCanYouDo(false)}
+                aria-label="Close"
+                className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 space-y-3 max-h-[60vh] overflow-y-auto">
+              <p className="text-xs text-content-tertiary">The assistant can:</p>
+              <ul className="space-y-2 text-sm text-content-primary">
+                <li>• Read and search your files, notes, and calendar</li>
+                <li>• Create subjects, topics, notes, and assessments</li>
+                <li>• Add calendar events, PTO, and shift exceptions</li>
+                <li>• Start and stop focus timers</li>
+                <li>• Change your status (Studying, Working, etc.)</li>
+                <li>• List and switch AI models</li>
+                <li>• Manage conversations (list, open, delete, new)</li>
+                <li>• Extract text from PDFs and mark them as checked</li>
+                <li>• Search notes and read specific pages</li>
+                <li>• Edit and revert notes</li>
+              </ul>
+              <p className="text-xs text-content-tertiary mt-2">
+                It cannot add, view, or copy API keys — if asked, it points to Settings → AI Keys.
+              </p>
+            </div>
+            <div className="px-4 py-3 border-t border-border/60 bg-bg-elevated/50 flex justify-end">
+              <button
+                onClick={() => setShowWhatCanYouDo(false)}
+                className="px-4 py-2 rounded-xl bg-accent hover:bg-accent-hover text-white text-xs font-semibold transition-colors"
+              >
+                Got it
+              </button>
             </div>
           </div>
         </div>

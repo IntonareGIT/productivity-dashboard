@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
-import { ArrowLeft, Minimize2, PanelLeftClose, PanelLeftOpen, Bot, Settings, Sparkles } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ArrowLeft, Minimize2, PanelLeftClose, PanelLeftOpen, Bot, Settings, Sparkles, History, ChevronDown, Circle, HelpCircle, Copy, Check } from 'lucide-react';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
+import { AssistantSurface } from './AssistantSurface';
 import { AssistantChat } from './AssistantChat';
 import { AssistantSessionList } from './AssistantSessionList';
-import { AssistantSurface } from './AssistantSurface';
+import { AssistantHistoryDrawer } from './AssistantHistoryDrawer';
 import { Z } from '../../../components/ui/zIndex';
 
 interface AssistantPageProps {
@@ -17,7 +18,7 @@ interface AssistantPageProps {
 /**
  * Full-page assistant.
  *
- * Renders the same `AssistantChat` and the same Dexie-backed session list as
+ * Renders the same `AssistantSurface` and the same Dexie-backed session list as
  * the bubble panel, so both surfaces share one conversation and one history.
  * The side panel is persistent on `md+` and a slide-over drawer below it.
  */
@@ -33,9 +34,14 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
   const providerLabel = useAssistantStore((s) => s.providerLabel);
   const models = useAssistantStore((s) => s.models);
   const selectedModelId = useAssistantStore((s) => s.selectedModelId);
+  const setModel = useAssistantStore((s) => s.setModel);
   const assistantRedesign = useAssistantStore((s) => s.assistantRedesign);
+  const historyDrawerOpen = useAssistantStore((s) => s.historyDrawerOpen);
+  const setHistoryDrawerOpen = useAssistantStore((s) => s.setHistoryDrawerOpen);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [showWhatCanYouDo, setShowWhatCanYouDo] = useState(false);
 
   const model = models.find((m) => m.id === selectedModelId);
 
@@ -47,6 +53,44 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
       setOpen(false);
     };
   }, [loadSessions, setOpen]);
+
+  // Keyboard: Ctrl+/ (Cmd+/ on Mac) focuses the command bar
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === '/') {
+        e.preventDefault();
+        const input = document.querySelector('textarea[aria-label="Message the assistant"]') as HTMLTextAreaElement;
+        input?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Close model menu when clicking outside
+  React.useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (modelMenuOpen && !(e.target as HTMLElement).closest('[data-model-menu]')) {
+        setModelMenuOpen(false);
+      }
+    };
+    if (modelMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [modelMenuOpen]);
+
+  // Close history drawer on Escape
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (historyDrawerOpen) setHistoryDrawerOpen(false);
+        if (drawerOpen) setDrawerOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [historyDrawerOpen, drawerOpen]);
 
   if (!open) return null;
 
@@ -64,7 +108,7 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
         <div className="flex-1 flex flex-col min-w-0">
           {/* Compact header with context chip */}
           <header className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-border/60 bg-bg-elevated/50 shrink-0">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2" data-model-menu>
               <span className="flex items-center justify-center w-8 h-8 rounded-xl bg-accent text-white shrink-0">
                 <Bot className="w-4 h-4" />
               </span>
@@ -87,6 +131,14 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
             </div>
             <div className="flex items-center gap-1">
               <button
+                onClick={() => setHistoryDrawerOpen(true)}
+                aria-label="Open history"
+                className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+                title="History"
+              >
+                <History className="w-4 h-4" />
+              </button>
+              <button
                 onClick={() => setDrawerOpen((v) => !v)}
                 aria-label="Toggle session list"
                 className="md:hidden p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
@@ -100,6 +152,48 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
               >
                 {railOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
               </button>
+              {/* Model menu with green dot */}
+              <div className="relative" data-model-menu>
+                <button
+                  onClick={() => setModelMenuOpen((v) => !v)}
+                  aria-label="Select model"
+                  aria-expanded={modelMenuOpen}
+                  aria-haspopup="listbox"
+                  className="flex items-center gap-1.5 p-1.5 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+                >
+                  <span className="relative flex items-center">
+                    {model && (
+                      <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-assistant-ready border-2 border-bg" aria-label="Model ready" />
+                    )}
+                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-xl bg-bg-elevated border border-border text-xs font-medium text-content-primary">
+                      {model ? model.displayName : 'Select model'}
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </span>
+                  </span>
+                </button>
+                {modelMenuOpen && (
+                  <ul
+                    role="listbox"
+                    aria-label="Select model"
+                    className="absolute right-0 mt-1 min-w-[180px] rounded-xl border border-border bg-bg-surface shadow-lg overflow-hidden z-10"
+                  >
+                    {models.map((m) => (
+                      <li key={m.id} role="option" aria-selected={m.id === selectedModelId}>
+                        <button
+                          onClick={() => { void setModel(m.id); setModelMenuOpen(false); }}
+                          className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-content-primary hover:bg-bg-elevated transition-colors ${
+                            m.id === selectedModelId ? 'bg-accent/10 font-semibold' : ''
+                          }`}
+                        >
+                          {m.id === selectedModelId && <Check className="w-4 h-4 text-accent" />}
+                          <span className="flex-1 truncate">{m.displayName}</span>
+                          <span className="text-[10px] text-content-tertiary">{m.modelId}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
               <button
                 onClick={onOpenSettings}
                 aria-label="Settings"
@@ -126,11 +220,18 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
         {drawerOpen && (
           <div className={`md:hidden fixed inset-0 ${Z.modal} flex`}>
             <div className="absolute inset-0 bg-black/50" onClick={() => setDrawerOpen(false)} />
-            <aside className="relative w-72 max-w-[80vw] flex flex-col bg-bg-surface border-r border-border shadow-2xl">
+            <aside className="assistant-drawer relative w-72 max-w-[80vw] flex flex-col bg-bg-surface border-r border-border shadow-2xl">
               <AssistantSessionList onNavigate={() => setDrawerOpen(false)} />
             </aside>
           </div>
         )}
+
+        {/* History drawer */}
+        <AssistantHistoryDrawer
+          open={historyDrawerOpen}
+          onClose={() => setHistoryDrawerOpen(false)}
+          onNavigate={() => setHistoryDrawerOpen(false)}
+        />
 
         {/* Return to the previous page */}
         <button

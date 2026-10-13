@@ -292,6 +292,10 @@ interface AssistantState {
   openReader: (msgId: string, question: string) => void;
   closeReader: () => void;
 
+  /** History drawer state. */
+  historyDrawerOpen: boolean;
+  setHistoryDrawerOpen: (v: boolean) => void;
+
   /** Undo toast state (for reversible actions). */
   undoToast: { id: string; message: string; onUndo: () => void } | null;
   setUndoToast: (toast: { id: string; message: string; onUndo: () => void } | null) => void;
@@ -563,6 +567,7 @@ providerReady: false,
     pending: null,
     activeTool: null,
     undoToast: null,
+    historyDrawerOpen: false,
     // User's AI models (fetched from server)
     models: [] as UserModel[],
     // Currently selected model ID (from user's models with keys)
@@ -611,6 +616,9 @@ providerReady: false,
     // Reader pane
     openReader: (msgId, question) => set({ readerMsgId: msgId, readerQuestion: question }),
     closeReader: () => set({ readerMsgId: null, readerQuestion: null }),
+
+    // History drawer
+    setHistoryDrawerOpen: (v) => set({ historyDrawerOpen: v }),
 
     // Undo toast
     setUndoToast: (toast) => set({ undoToast: toast }),
