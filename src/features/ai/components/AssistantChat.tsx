@@ -371,8 +371,8 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={configured ? 'Ask or tell me to do something…' : 'Configure a provider first…'}
-          disabled={!configured}
+          placeholder={models.length > 0 ? 'Ask or tell me to do something…' : 'Add a model in Settings → AI Models…'}
+          disabled={models.length === 0}
           aria-label="Message the assistant"
           className="flex-1 min-w-0 resize-none overflow-y-auto bg-bg-elevated/60 border border-border rounded-xl px-3 py-2.5 text-sm text-content-primary outline-none focus:border-accent placeholder:text-content-tertiary disabled:opacity-50"
           style={{ maxHeight: MAX_COMPOSER_HEIGHT_PX }}
@@ -392,7 +392,7 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
         ) : (
           <button
             type="submit"
-            disabled={!draft.trim() || !configured}
+            disabled={!draft.trim() || models.length === 0}
             aria-label="Send message"
             className="p-3 rounded-xl bg-accent hover:bg-accent-hover text-white transition-colors disabled:opacity-40 shrink-0"
           >
