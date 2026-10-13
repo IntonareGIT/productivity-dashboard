@@ -30,6 +30,16 @@ async function getUser(req: ApiRequest): Promise<VerifiedUser | null> {
 }
 
 export default async function handler(req: ApiRequest, res: ApiResponse): Promise<void> {
+  try {
+    await handleRequest(req, res);
+  } catch (e) {
+    const err = e as Error;
+    console.error('[extract-chunk] unexpected error', { name: err.name });
+    json(res, 500, { error: 'server_error', step: 'handler' });
+  }
+}
+
+async function handleRequest(req: ApiRequest, res: ApiResponse): Promise<void> {
   setCors(req, res, 'POST, OPTIONS');
   if (req.method === 'OPTIONS') {
     res.status(204).end();
@@ -87,19 +97,6 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     json(res, 400, { error: 'model_cannot_accept_pdf', message: 'This model does not accept PDFs.' });
     return;
   }
-
-  // Load the resource to get its r2Key and verify ownership
-  // We need to access Dexie - but this is a serverless function.
-  // The resource row is in the user's Dexie Cloud DB, not accessible here.
-  // We'll rely on the R2 key prefix check instead: the r2Key must start with the user's ID.
-  // The resource's r2Key is not available here without a DB call.
-  // For now, we'll download from R2 and verify the key prefix.
-  // The actual ownership check happens at the R2 level via the key prefix.
-
-  // We need the r2Key from the resource. Since we can't query Dexie from here,
-  // we'll need to pass the r2Key from the client, or we need a different approach.
-  // For now, let's require the r2Key in the request.
-  // Actually, the client can pass the r2Key since it has the resource row.
 
   const r2Key = typeof parsed.r2Key === 'string' ? parsed.r2Key.trim() : '';
   if (!r2Key) {

@@ -98,38 +98,54 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
     const pdfModels = models.filter((m) => m.capabilities.acceptsPdf && m.hasKey);
     const hasMultipleModels = pdfModels.length > 1;
     const defaultModelId = pdfModels[0]?.id;
+    const [selectedModelId, setSelectedModelId] = useState<string>(defaultModelId ?? '');
 
     const handleStart = () => {
       if (extractStatus === 'none') {
-        // For 'none', create note first then start
         if (pdfModels.length === 0) {
           toast('info', 'No PDF-capable model', 'Add one in Settings → AI Models');
           return;
         }
         toast('info', 'Retry clicked', resource.title);
-        onStartExtraction?.(resource.id, hasMultipleModels ? undefined : defaultModelId);
+        onStartExtraction?.(resource.id, hasMultipleModels ? selectedModelId : defaultModelId);
       } else if (extractStatus === 'queued') {
-        // For 'queued', just start the runner
         toast('info', 'Extraction started', resource.title);
         onStartExtraction?.(resource.id);
       } else if (extractStatus === 'failed') {
-        // For 'failed', retry the failed chunk
         toast('info', 'Retry clicked', resource.title);
-        onStartExtraction?.(resource.id);
+        onStartExtraction?.(resource.id, hasMultipleModels ? selectedModelId : defaultModelId);
       }
     };
+
+    const modelPicker = hasMultipleModels && (extractStatus === 'none' || extractStatus === 'failed') ? (
+      <select
+        value={selectedModelId}
+        onChange={(e) => setSelectedModelId(e.target.value)}
+        className="text-[11px] px-2 py-1 rounded border border-border bg-bg-elevated text-content-primary"
+        aria-label="Choose extraction model"
+      >
+        {pdfModels.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.displayName} ({m.modelId})
+          </option>
+        ))}
+      </select>
+    ) : null;
 
     switch (extractStatus) {
       case 'none':
         return (
-          <button
-            onClick={handleStart}
-            disabled={pdfModels.length === 0}
-            className={`flex items-center gap-1 text-[11px] font-semibold ${pdfModels.length === 0 ? 'text-slate-400 cursor-not-allowed' : 'text-amber-500 hover:underline'}`}
-            title={pdfModels.length === 0 ? 'Add a PDF-capable model in Settings → AI Models' : 'Start extraction'}
-          >
-            <Clock className="w-3 h-3" /> {pdfModels.length === 0 ? 'No model' : 'Extract'}
-          </button>
+          <div className="flex items-center gap-2">
+            {modelPicker}
+            <button
+              onClick={handleStart}
+              disabled={pdfModels.length === 0}
+              className={`flex items-center gap-1 text-[11px] font-semibold ${pdfModels.length === 0 ? 'text-slate-400 cursor-not-allowed' : 'text-amber-500 hover:underline'}`}
+              title={pdfModels.length === 0 ? 'Add a PDF-capable model in Settings → AI Models' : 'Start extraction'}
+            >
+              <Clock className="w-3 h-3" /> {pdfModels.length === 0 ? 'No model' : 'Extract'}
+            </button>
+          </div>
         );
       case 'queued':
         return (
@@ -155,13 +171,25 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
         );
       case 'failed':
         return (
-          <button
-            onClick={handleStart}
-            className="flex items-center gap-1 text-xs font-semibold text-rose-500 hover:underline"
-            title="Retry extraction"
-          >
-            <AlertTriangle className="w-3 h-3" /> Retry
-          </button>
+          <div className="flex items-center gap-2">
+            {modelPicker}
+            <button
+              onClick={handleStart}
+              className="flex items-center gap-1 text-xs font-semibold text-rose-500 hover:underline"
+              title="Retry extraction"
+            >
+              <AlertTriangle className="w-3 h-3" /> Retry
+            </button>
+            {pdfModels.length === 0 && (
+              <a
+                href="/settings?section=ai"
+                className="text-[11px] font-semibold text-rose-500 hover:underline"
+                onClick={(e) => e.stopPropagation()}
+              >
+                Add model
+              </a>
+            )}
+          </div>
         );
       default:
         return null;
@@ -705,9 +733,14 @@ renderResources={(groupId) => {
                         });
                         await initNoteForExtraction(fileId, modelId ?? note?.modelId ?? '');
                       } else if (note.status === 'failed') {
-                        // For failed, reset status to processing so runner can resume
-                        const { db } = await import('../../../db/db');
-                        await db.notes.put({ ...note, status: 'processing', updatedAt: new Date().toISOString() });
+                        // For failed, update modelId if provided and reset status to processing
+                        if (modelId && modelId !== note.modelId) {
+                          const { db } = await import('../../../db/db');
+                          await db.notes.put({ ...note, modelId, status: 'processing', updatedAt: new Date().toISOString() });
+                        } else {
+                          const { db } = await import('../../../db/db');
+                          await db.notes.put({ ...note, status: 'processing', updatedAt: new Date().toISOString() });
+                        }
                       }
                       console.log('[extract] calling startExtraction for', fileId);
                       startExtraction(fileId);

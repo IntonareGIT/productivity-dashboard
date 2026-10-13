@@ -860,8 +860,10 @@ const HANDLERS: Record<string, (a: Args) => Promise<ReturnType<typeof ok>>> = {
     const modelId = typeof a.modelId === 'string' ? a.modelId : (note.modelId ?? '');
     await initNoteForExtraction(fileId, modelId);
 
-    // The runner will pick it up automatically when status is 'queued'
-    return ok(`Extraction queued for this file. Progress will appear on the file card.`, { fileId, status: 'queued' });
+    // Start the runner immediately
+    startExtraction(fileId);
+
+    return ok(`Extraction started for this file. Progress will appear on the file card.`, { fileId, status: 'processing' });
   },
 
   /**
