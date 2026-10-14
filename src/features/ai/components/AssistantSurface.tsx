@@ -58,8 +58,6 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
   const confirmPending = useAssistantStore((s) => s.confirmPending);
   const cancelPending = useAssistantStore((s) => s.cancelPending);
 
-  const draft = useAssistantStore((s) => s.draft);
-  const setDraft = useAssistantStore((s) => s.setDraft);
   const listScrollTop = useAssistantStore((s) => s.listScrollTop);
   const setListScrollTop = useAssistantStore((s) => s.setListScrollTop);
   const readerMsgId = useAssistantStore((s) => s.readerMsgId);
@@ -71,6 +69,7 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
   const setHistoryDrawerOpen = useAssistantStore((s) => s.setHistoryDrawerOpen);
 
   const [showDetails, setShowDetails] = useState(false);
+  const [localDraft, setLocalDraft] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -116,15 +115,15 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
     el.style.height = `${Math.min(el.scrollHeight, MAX_COMPOSER_HEIGHT_PX)}px`;
   }, []);
 
-  useEffect(resize, [draft, resize]);
+  useEffect(resize, [localDraft, resize]);
 
   const submit = useCallback(() => {
-    const text = draft.trim();
+    const text = localDraft.trim();
     if (!text || busy) return;
-    setDraft('');
+    setLocalDraft('');
     void send(text);
     requestAnimationFrame(() => inputRef.current?.focus());
-  }, [draft, busy, send]);
+  }, [localDraft, busy, send]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Escape') {
@@ -392,7 +391,7 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
                   const idx = view.findIndex((m) => m.id === msgId);
                   if (idx > 0 && view[idx - 1].role === 'user') {
                     const userMsg = view[idx - 1];
-                    setDraft(userMsg.text);
+                    setLocalDraft(userMsg.text);
                     void send(userMsg.text, true);
                   }
                 }}
@@ -561,8 +560,8 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
               <textarea
                 ref={inputRef}
                 rows={1}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
+                value={localDraft}
+                onChange={(e) => setLocalDraft(e.target.value)}
                 onKeyDown={onKeyDown}
                 placeholder={hasUsableModel ? 'Ask about today, a file, or a task.' : 'Add a model in Settings'}
                 disabled={!hasUsableModel}
@@ -582,7 +581,7 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
               ) : (
                 <button
                   type="submit"
-                  disabled={!draft.trim() || !hasUsableModel}
+                  disabled={!localDraft.trim() || !hasUsableModel}
                   aria-label="Send message"
                   className="p-3 rounded-xl bg-accent hover:bg-accent-hover text-white transition-colors disabled:opacity-40 shrink-0"
                 >
@@ -597,7 +596,7 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
                 <button
                   key={s}
                   type="button"
-                  onClick={() => setDraft(s)}
+                  onClick={() => setLocalDraft(s)}
                   disabled={!hasUsableModel || busy}
                   className="px-3 py-1.5 rounded-full bg-bg-elevated border border-border text-xs text-content-primary hover:bg-bg-surface hover:border-accent/40 transition-colors disabled:opacity-50"
                 >
