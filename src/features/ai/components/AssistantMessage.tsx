@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Copy, Check, Clock, RotateCcw, Bot, User, Zap, AlertTriangle, RefreshCw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 
 export interface AssistantViewMsg {
   id: string;
@@ -115,23 +118,66 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
           )}
           <div className="whitespace-pre-wrap break-words">
             <ReactMarkdown
-              rehypePlugins={[rehypeHighlight]}
+              remarkPlugins={[remarkMath]}
+              rehypePlugins={[rehypeHighlight, rehypeKatex]}
               components={{
-                code: ({ children, ...props }) => (
-                  <code {...props} className={`font-mono text-[12px] ${isUser ? 'text-white/90' : 'text-content-primary'}`}>
+                code: ({ children, ...props }) => {
+                  const text = typeof children === 'string' ? children : Array.isArray(children) ? children.join('') : String(children);
+                  const isInline = !text.includes('\n');
+                  if (isInline) {
+                    return (
+                      <code {...props} className={`font-mono text-[12px] ${isUser ? 'text-white/90' : 'text-content-primary'}`}>
+                        {children}
+                      </code>
+                    );
+                  }
+                  // Block code - show with copy button
+                  const [copied, setCopied] = useState(false);
+                  return (
+                    <div className="relative my-2">
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(text);
+                          setCopied(true);
+                          setTimeout(() => setCopied(false), 2000);
+                        }}
+                        className="absolute right-2 top-2 p-1 rounded text-[10px] bg-bg-surface/80 hover:bg-bg-elevated text-content-tertiary hover:text-content-primary transition-colors"
+                        title={copied ? 'Copied!' : 'Copy code'}
+                      >
+                        {copied ? <Check className="w-3.5 h-3.5 text-accent" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                      <div className="overflow-x-auto rounded-lg bg-bg-surface/50 p-2 text-[11px] my-2">
+                        <pre className="m-0 p-0"><code className={`font-mono text-[11px] ${isUser ? 'text-white/90' : 'text-content-primary'}`}>{children}</code></pre>
+                      </div>
+                    </div>
+                  );
+                },
+                pre: ({ children }) => (
+                  <div className="overflow-x-auto rounded-lg bg-bg-surface/50 p-2 text-[11px] my-2">
                     {children}
-                  </code>
-                ),
-                pre: ({ children, ...props }) => (
-                  <pre {...props} className="overflow-x-auto rounded-lg bg-bg-surface/50 p-2 text-[11px]">
-                    {children}
-                  </pre>
+                  </div>
                 ),
                 a: ({ href, children, ...props }) => (
                   <a href={href} target="_blank" rel="noopener noreferrer" className="underline hover:no-underline text-accent" {...props}>
                     {children}
                   </a>
                 ),
+                table: ({ children }) => (
+                  <div className="overflow-x-auto my-3">
+                    <table className="min-w-full border-collapse border border-border">
+                      {children}
+                    </table>
+                  </div>
+                ),
+                th: ({ children }) => (
+                  <th className="border border-border px-3 py-1.5 bg-bg-elevated/50 font-semibold text-left">{children}</th>
+                ),
+                td: ({ children }) => (
+                  <td className="border border-border px-3 py-1.5">{children}</td>
+                ),
+                tr: ({ children }) => <tr>{children}</tr>,
+                thead: ({ children }) => <thead>{children}</thead>,
+                tbody: ({ children }) => <tbody>{children}</tbody>,
               }}
             >
               {msg.text}

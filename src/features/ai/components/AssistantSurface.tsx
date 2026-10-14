@@ -2,6 +2,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bot, Check, Copy, RotateCcw, SendHorizonal, Square, Zap, AlertTriangle, User, Sparkles, Info, X, ChevronDown, Circle, HelpCircle, History } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import { useAssistantStore, assistantUndo } from '../../../stores/useAssistantStore';
 import { AssistantMessage } from './AssistantMessage';
 
@@ -483,7 +486,8 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
           <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
             <div className="text-[14px] leading-relaxed text-content-primary">
               <ReactMarkdown
-                rehypePlugins={[rehypeHighlight]}
+                remarkPlugins={[remarkMath]}
+                rehypePlugins={[rehypeHighlight, rehypeKatex]}
                 components={{
                   h1: ({ children }) => <h1 className="text-lg font-bold mt-3 mb-1">{children}</h1>,
                   h2: ({ children }) => <h2 className="text-base font-bold mt-3 mb-1">{children}</h2>,
@@ -492,21 +496,48 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
                   ul: ({ children }) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
                   ol: ({ children }) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
                   li: ({ children }) => <li className="text-[13px] leading-relaxed">{children}</li>,
-                  code: ({ children, ...props }) => (
-                    <code {...props} className="font-mono text-[12px] bg-bg-elevated border border-border rounded px-1 py-0.5">
-                      {children}
-                    </code>
-                  ),
+                  code: ({ children, ...props }) => {
+                    const text = typeof children === 'string' ? children : Array.isArray(children) ? children.join('') : String(children);
+                    const isInline = !text.includes('\n');
+                    if (isInline) {
+                      return (
+                        <code {...props} className="font-mono text-[12px] bg-bg-elevated border border-border rounded px-1 py-0.5">
+                          {children}
+                        </code>
+                      );
+                    }
+                    return (
+                      <div className="overflow-x-auto rounded-lg bg-bg-surface border border-border p-3 text-[12px] my-2">
+                        <pre className="m-0 p-0"><code className="font-mono text-[12px]">{children}</code></pre>
+                      </div>
+                    );
+                  },
                   pre: ({ children }) => (
-                    <pre className="overflow-x-auto rounded-lg bg-bg-surface border border-border p-3 text-[12px] my-2">
-                      {children}
-                    </pre>
+                    <div className="overflow-x-auto rounded-lg bg-bg-surface border border-border p-3 text-[12px] my-2">
+                      <pre className="m-0 p-0">{children}</pre>
+                    </div>
                   ),
                   a: ({ href, children }) => (
                     <a href={href} target="_blank" rel="noopener noreferrer" className="underline text-accent">
                       {children}
                     </a>
                   ),
+                  table: ({ children }) => (
+                    <div className="overflow-x-auto my-3">
+                      <table className="min-w-full border-collapse border border-border">
+                        {children}
+                      </table>
+                    </div>
+                  ),
+                  th: ({ children }) => (
+                    <th className="border border-border px-3 py-1.5 bg-bg-elevated/50 font-semibold text-left">{children}</th>
+                  ),
+                  td: ({ children }) => (
+                    <td className="border border-border px-3 py-1.5">{children}</td>
+                  ),
+                  tr: ({ children }) => <tr>{children}</tr>,
+                  thead: ({ children }) => <thead>{children}</thead>,
+                  tbody: ({ children }) => <tbody>{children}</tbody>,
                 }}
               >
                 {view.find((m) => m.id === readerMsgId)?.text ?? ''}

@@ -53,7 +53,8 @@ export default defineConfig({
         // Belt and braces: never let a stale precache entry point at a file
         // that a new build no longer emits, or the SW 404s on a cache hit.
         navigateFallback: 'index.html',
-        runtimeCaching: []
+        runtimeCaching: [],
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5 MiB
       }
     })
   ],
