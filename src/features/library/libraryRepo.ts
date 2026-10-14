@@ -576,6 +576,7 @@ export async function updateNoteChunk(
 /**
  * Join all completed chunks in order with headings and save as final markdown.
  * Validates that all chunks are ready with non-empty markdown before marking ready.
+ * Clears chunk markdowns after joining to avoid duplicate storage.
  */
 export async function finalizeNote(fileId: string): Promise<void> {
   const note = await db.notes.get(fileId);
@@ -608,8 +609,15 @@ export async function finalizeNote(fileId: string): Promise<void> {
     return;
   }
 
+  // Clear chunk markdowns to avoid duplicate storage (keep status and page ranges)
+  const clearedChunks = note.chunks.map((c) => ({
+    ...c,
+    markdown: '',
+  }));
+
   await db.notes.put({
     ...note,
+    chunks: clearedChunks,
     status: 'ready',
     markdown,
     updatedAt: new Date().toISOString(),
@@ -1087,6 +1095,82 @@ export async function toggleAssessmentStatus(assessment: Assessment): Promise<vo
 
 export async function deleteAssessment(id: string): Promise<void> {
   await db.assessments.delete(id);
+}
+
+/**
+ * Measure the approximate size of each Dexie table in bytes.
+ * Uses JSON.stringify to approximate the serialized size.
+ * Returns an object with per-table sizes and total.
+ */
+export async function measureStorage(): Promise<{
+  tables: Record<string, number>;
+  totalBytes: number;
+  notesBreakdown?: { totalMarkdown: number; totalChunks: number; count: number };
+}> {
+  const tables = [
+    'subjects',
+    'topics',
+    'resources',
+    'resourceGroups',
+    'assessments',
+    'calendarEvents',
+    'weeklySchedules',
+    'shiftOverrides',
+    'pomodoroSessions',
+    'themeStatusMap',
+    'appSettings',
+    'aiProviders',
+    'chatSessions',
+    'chatMessages',
+    'uiState',
+    'notes',
+  ] as const;
+
+  const result: Record<string, number> = {};
+  let totalBytes = 0;
+  let notesMarkdownTotal = 0;
+  let notesChunksTotal = 0;
+  let notesCount = 0;
+
+  for (const tableName of tables) {
+    try {
+      const table = (db as any)[tableName];
+      if (!table) {
+        result[tableName] = 0;
+        continue;
+      }
+      const rows = await table.toArray();
+      const json = JSON.stringify(rows);
+      const size = new Blob([json]).size;
+      result[tableName] = size;
+      totalBytes += size;
+
+      // Detailed breakdown for notes
+      if (tableName === 'notes') {
+        notesCount = rows.length;
+        for (const note of rows) {
+          if (note.markdown) notesMarkdownTotal += note.markdown.length;
+          if (note.chunks) {
+            for (const chunk of note.chunks) {
+              if (chunk.markdown) notesChunksTotal += chunk.markdown.length;
+            }
+          }
+        }
+      }
+    } catch {
+      result[tableName] = 0;
+    }
+  }
+
+  return {
+    tables: result,
+    totalBytes,
+    notesBreakdown: notesCount > 0 ? {
+      totalMarkdown: notesMarkdownTotal,
+      totalChunks: notesChunksTotal,
+      count: notesCount,
+    } : undefined,
+  };
 }
 
 

@@ -121,8 +121,8 @@ export interface Note {
   status: 'none' | 'queued' | 'processing' | 'ready' | 'failed';
   modelId?: string;        // Model used/selected for extraction
   pageCount: number;       // Total pages in the PDF
-  chunks: NoteChunk[];     // Per-chunk progress and markdown
-  markdown: string;        // Full extracted markdown (concatenated chunks)
+  chunks: NoteChunk[];     // Per-chunk progress and markdown (markdown cleared after finalize)
+  markdown: string;        // Full extracted markdown (built from chunks, not stored in chunks)
   lastError?: string;      // Short error text, never a key
   checked: boolean;        // User has reviewed
   editedByUser: boolean;   // User edited the markdown
