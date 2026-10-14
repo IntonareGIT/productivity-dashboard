@@ -162,6 +162,16 @@ export async function runExtraction(
   // All chunks done, finalize
   console.log('[extract] all chunks completed, finalizing', { fileId });
   await finalizeNote(fileId);
+  
+  // Check if finalizeNote failed (it calls failNote internally)
+  const finalNote = await db.notes.get(fileId);
+  if (finalNote?.status === 'failed') {
+    console.log('[extract] finalizeNote failed', { fileId, error: finalNote.lastError });
+    toast('error', 'Extraction failed', finalNote.lastError);
+    callbacks.onError?.(fileId, finalNote.lastError ?? 'Extraction failed');
+    return;
+  }
+  
   toast('success', 'Extraction complete', 'Markdown ready');
   callbacks.onComplete?.(fileId);
 }

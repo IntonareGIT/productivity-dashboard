@@ -4,8 +4,8 @@
  * No secrets or provider responses leave this module.
  */
 import { PDFDocument } from 'pdf-lib';
-import { getModelKey } from './models';
-import type { StoredModel } from './models';
+import { getModelKey } from './models.js';
+import type { StoredModel } from './models.js';
 
 export interface ExtractChunkResult {
   markdown: string;

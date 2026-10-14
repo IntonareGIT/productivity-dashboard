@@ -575,15 +575,39 @@ export async function updateNoteChunk(
 
 /**
  * Join all completed chunks in order with headings and save as final markdown.
+ * Validates that all chunks are ready with non-empty markdown before marking ready.
  */
 export async function finalizeNote(fileId: string): Promise<void> {
   const note = await db.notes.get(fileId);
   if (!note) return;
+
+  // Check that all chunks are ready
+  const notReady = note.chunks.filter((c) => c.status !== 'ready');
+  if (notReady.length > 0) {
+    const pages = notReady.map((c) => `${c.pageStart}–${c.pageEnd}`).join(', ');
+    await failNote(fileId, `Extraction incomplete for pages ${pages}. Retry extraction.`);
+    return;
+  }
+
+  // Check that every ready chunk has non-empty markdown
+  const emptyChunks = note.chunks.filter((c) => !c.markdown || c.markdown.trim() === '');
+  if (emptyChunks.length > 0) {
+    const pages = emptyChunks.map((c) => `${c.pageStart}–${c.pageEnd}`).join(', ');
+    await failNote(fileId, `Extraction produced no text for pages ${pages}. Retry extraction.`);
+    return;
+  }
+
+  // All checks passed - join markdown and save atomically
   const parts = note.chunks
-    .filter((c) => c.status === 'ready')
     .sort((a, b) => a.index - b.index)
     .map((c) => `## Pages ${c.pageStart}–${c.pageEnd}\n\n${c.markdown}`);
   const markdown = parts.join('\n\n');
+
+  if (!markdown.trim()) {
+    await failNote(fileId, 'Extraction produced no text. Retry extraction.');
+    return;
+  }
+
   await db.notes.put({
     ...note,
     status: 'ready',
@@ -604,6 +628,25 @@ export async function failNote(fileId: string, reason: string): Promise<void> {
     lastError: reason,
     updatedAt: new Date().toISOString(),
   });
+}
+
+/**
+ * Repair notes that are "ready" but have empty markdown.
+ * Sets them to "failed" so the user can retry.
+ * Returns the number of notes repaired.
+ */
+export async function repairEmptyReadyNotes(): Promise<number> {
+  const badNotes = await db.notes
+    .where('status')
+    .equals('ready')
+    .and((note) => !note.markdown || note.markdown.trim() === '')
+    .toArray();
+  
+  for (const note of badNotes) {
+    await failNote(note.fileId, 'No text was saved. Retry extraction.');
+  }
+  
+  return badNotes.length;
 }
 
 /**
@@ -647,12 +690,21 @@ export async function readNote(fileId: string, section?: string | null): Promise
 } | null> {
   const note = await db.notes.get(fileId);
   if (!note) return null;
+
+  if (note.status !== 'ready' || !note.markdown?.trim()) {
+    return {
+      markdown: 'This file has no saved text yet. Retry extraction.',
+      status: note.status,
+      pageCount: note.pageCount,
+    };
+  }
+
   if (section) {
     // Simple section extraction - just return the full markdown for now
     // Could be enhanced to parse headings
   }
   return {
-    markdown: note.markdown || (note.status === 'ready' ? '' : 'No markdown available yet.'),
+    markdown: note.markdown,
     status: note.status,
     pageCount: note.pageCount,
   };
