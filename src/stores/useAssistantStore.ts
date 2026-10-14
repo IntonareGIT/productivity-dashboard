@@ -287,10 +287,12 @@ interface AssistantState {
   assistantRedesign: boolean;
   setAssistantRedesign: (v: boolean) => void;
 
-  /** Reader pane state (for long messages). */
+/** Reader pane state (for long messages). */
   readerMsgId: string | null;
   readerQuestion: string | null;
-  openReader: (msgId: string, question: string) => void;
+  /** Scroll position of the list before reader opened. */
+  readerSavedScrollTop: number;
+  openReader: (msgId, question) => void;
   closeReader: () => void;
 
   /** History drawer state. */
@@ -574,11 +576,12 @@ providerReady: false,
     // User's AI models (fetched from server)
     models: [] as UserModel[],
     // Currently selected model ID (from user's models with keys)
-    selectedModelId: null as string | null,
+selectedModelId: null as string | null,
 
-    // Reader pane state (for long messages)
-    readerMsgId: null as string | null,
-    readerQuestion: null as string | null,
+  // Reader pane state (for long messages)
+  readerMsgId: null as string | null,
+  readerQuestion: null as string | null,
+  readerSavedScrollTop: 0,
 
 // Fetch user's models from the server
     fetchModels: async () => {
@@ -613,8 +616,23 @@ providerReady: false,
     setAssistantRedesign: (v) => set({ assistantRedesign: v }),
 
     // Reader pane
-    openReader: (msgId, question) => set({ readerMsgId: msgId, readerQuestion: question }),
-    closeReader: () => set({ readerMsgId: null, readerQuestion: null }),
+    openReader: (msgId, question) => {
+      // Save current scroll position before opening reader
+      const listEl = document.querySelector('[data-autoscroll-list]');
+      const scrollTop = listEl ? listEl.scrollTop : 0;
+      set({ readerMsgId: msgId, readerQuestion: question, readerSavedScrollTop: scrollTop });
+    },
+    closeReader: () => {
+      const savedScrollTop = get().readerSavedScrollTop;
+      set({ readerMsgId: null, readerQuestion: null });
+      // Restore scroll position after a frame to let the list remount
+      if (savedScrollTop > 0) {
+        requestAnimationFrame(() => {
+          const listEl = document.querySelector('[data-autoscroll-list]');
+          if (listEl) listEl.scrollTop = savedScrollTop;
+        });
+      }
+    },
 
     // History drawer
     setHistoryDrawerOpen: (v) => set({ historyDrawerOpen: v }),
