@@ -85,16 +85,19 @@ interface ResourceRowProps {
   note?: Note | null;
   /** Called when user clicks Extract/Start on a PDF. */
   onStartExtraction?: (fileId: string, modelId?: string) => void;
+  /** Called when user clicks View markdown on a PDF. */
+  onViewMarkdown?: (fileId: string, fileTitle: string) => void;
 }
 
-function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onPreview, onDownload, onSplitWithNotes, fallbackTopicId, groups, note, onStartExtraction }: ResourceRowProps) {
+function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onPreview, onDownload, onSplitWithNotes, fallbackTopicId, groups, note, onStartExtraction, onViewMarkdown }: ResourceRowProps) {
   const meta = dueMeta(resource);
   const isFile = resource.kind === 'file';
   const isPdf = isFile && (resource.mimeType === 'application/pdf' || resource.fileName?.toLowerCase().endsWith('.pdf'));
-  const extractStatus = note?.status;
+  const extractStatus = note?.status ?? 'none';
+  const hasNote = !!note;
 
   const renderExtractStatus = () => {
-    if (!isPdf || !extractStatus) return null;
+    if (!isPdf) return null;
     const models = useAssistantStore.getState().models;
     const pdfModels = models.filter((m) => m.capabilities.acceptsPdf && m.hasKey);
     const hasMultipleModels = pdfModels.length > 1;
