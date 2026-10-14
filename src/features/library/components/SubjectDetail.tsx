@@ -16,6 +16,7 @@ import { AssessmentModal } from './AssessmentModal';
 import { MoveToGroupMenu } from './MoveToGroupMenu';
 import { GroupNameEditor, NewGroupButton } from './ResourceGroups';
 import { GroupTree } from './GroupTree';
+import MarkdownViewer from './MarkdownViewer';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
 import { startExtraction } from '../../../features/ai/extractionRunner';
 import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, moveGroup, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes, saveNote } from '../libraryRepo';
@@ -335,6 +336,7 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   const [pendingDelete, setPendingDelete] = useState<{ id: string; r2Key: string | null } | null>(null);
   const [deleteTopicId, setDeleteTopicId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [markdownViewerFile, setMarkdownViewerFile] = useState<{ fileId: string; fileTitle: string } | null>(null);
   /**
    * Collapsed group ids, remembered PER SUBJECT.
    *
@@ -888,6 +890,26 @@ onStartExtraction={async (fileId, modelId) => {
       )}
       {/* The same shared full-screen preview the split view uses. */}
       <ResourceFullScreen resource={fullScreenResource} onClose={closeFullScreen} />
+
+      {/* Markdown viewer modal */}
+      {markdownViewerFile && (
+        <MarkdownViewer
+          fileId={markdownViewerFile.fileId}
+          fileTitle={markdownViewerFile.fileTitle}
+          note={noteByFileId.get(markdownViewerFile.fileId) ?? null}
+          onClose={() => setMarkdownViewerFile(null)}
+          onReExtract={() => {
+            const fileId = markdownViewerFile.fileId;
+            const note = noteByFileId.get(fileId);
+            if (note?.modelId) {
+              startExtraction(fileId);
+            }
+          }}
+          onSave={() => {
+            setMarkdownViewerFile({ ...markdownViewerFile });
+          }}
+        />
+      )}
     </div>
   );
 };
