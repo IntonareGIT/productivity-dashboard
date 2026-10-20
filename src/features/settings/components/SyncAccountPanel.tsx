@@ -3,6 +3,7 @@ import { Cloud, CloudOff, Download, LogIn, LogOut, RefreshCw, TriangleAlert } fr
 import { exportAllData } from '../../../db/backup';
 import { Card } from '../../../components/ui/Card';
 import { useCloudAccount } from './useCloudAccount';
+import { StoragePanel } from './SyncStoragePanel';
 
 const TONE = {
   ok: 'text-emerald-500',
@@ -158,3 +159,7 @@ export const SyncAccountPanel: React.FC<SyncAccountPanelProps> = ({
   }
   return body;
 };
+
+export { useCloudAccount } from './useCloudAccount';
+export { SyncSettings } from './SyncSettings';
+export { StoragePanel as SyncStoragePanel } from './SyncStoragePanel';

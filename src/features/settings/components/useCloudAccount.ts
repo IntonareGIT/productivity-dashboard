@@ -93,9 +93,14 @@ export function useCloudAccount(): CloudAccount {
         case 'offline':
           setState({ ...base, signedIn: true, email, status: 'Offline — changes will sync later', tone: 'warn', pendingWork: true, errorMessage: null, diagnostics: base });
           break;
-        case 'error':
-          setState({ ...base, signedIn: true, email, status: 'Sync error', tone: 'error', pendingWork: true, errorMessage: sync?.error?.message ?? 'The last sync failed.', diagnostics: base });
+        case 'error': {
+          const raw = sync?.error?.message ?? 'The last sync failed.';
+          const friendly = /Too many changes in a single sync request/i.test(raw)
+            ? 'Sync has too many pending changes. Your file copies are being cleared, so try again in a few minutes.'
+            : raw;
+          setState({ ...base, signedIn: true, email, status: 'Sync error', tone: 'error', pendingWork: true, errorMessage: friendly, diagnostics: base });
           break;
+        }
         default:
           setState({ ...base, signedIn: true, email, status: 'Syncing…', tone: 'busy', pendingWork: true, errorMessage: null, diagnostics: base });
       }

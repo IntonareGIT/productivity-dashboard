@@ -32,6 +32,10 @@ export interface SignedDownloadUrl {
   expiresIn: number;
 }
 
+export interface R2ObjectCheck {
+  exists: boolean;
+}
+
 /** POST a JSON body to one of the gateway functions, returning parsed JSON. */
 async function gateway<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getCloudAccessToken();
@@ -120,6 +124,37 @@ export async function uploadToR2(
     };
     xhr.send(file);
   });
+}
+
+/** Check if an R2 object exists via HEAD request through the gateway. */
+export async function checkR2Object(key: string): Promise<boolean> {
+  const token = getCloudAccessToken();
+  if (!token) throw new CloudApiError('Not signed in to Dexie Cloud.', 401);
+  const res = await fetch('/api/check-r2-object', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ key }),
+  });
+  let body: unknown = null;
+  const text = await res.text();
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = text;
+    }
+  }
+  if (!res.ok) {
+    const message =
+      body && typeof body === 'object' && typeof (body as { message?: unknown }).message === 'string'
+        ? (body as { message: string }).message
+        : `Request failed (${res.status})`;
+    throw new CloudApiError(message, res.status);
+  }
+  return (body as { exists: boolean }).exists ?? false;
 }
 
 /** Fetch a presigned download URL and return the object's bytes as a Blob. */
