@@ -107,12 +107,15 @@ export async function runExtraction(
   }
 
   toast('info', 'Extraction started', resource.title);
-  console.log('[extract] processing chunks', { fileId, totalChunks: note.chunks.length, startingAt: nextIndex });
+  console.log('[extract] processing chunks', { fileId, totalChunks: note.chunks.length, startingAt: nextIndex, skipped: note.chunks.map((c, ix) => ({ index: ix, status: c.status, range: `${c.pageStart}–${c.pageEnd}` })) });
 
   // Process chunks starting from nextIndex
   for (let i = nextIndex; i < note.chunks.length; i++) {
     const chunk = note.chunks[i];
-    if (chunk.status === 'ready') continue;
+    if (chunk.status === 'ready') {
+      console.log('[extract] skipping chunk', { fileId, chunkIndex: i, status: 'ready', range: `${chunk.pageStart}–${chunk.pageEnd}` });
+      continue;
+    }
 
     // Update chunk to processing
     await updateNoteChunk(fileId, i, { status: 'processing', error: undefined });
@@ -127,6 +130,10 @@ export async function runExtraction(
           throw new Error('Cancelled');
         }
         attempts = attempt + 1;
+        const token = getCloudAccessToken();
+        if (!token) {
+          throw new Error('Sign in again from Settings → Sync.');
+        }
         console.log('[extract] calling /api/extract-chunk', { fileId, chunkIndex: i, pageStart: chunk.pageStart, pageEnd: chunk.pageEnd, attempt });
         res = await fetch('/api/extract-chunk', {
           method: 'POST',
@@ -151,7 +158,7 @@ export async function runExtraction(
         console.log('[extract] chunk attempt failed', { fileId, chunkIndex: i, status: res.status, attempt, msg: lastError });
 
         if (!TRANSIENT_STATUSES.has(res.status)) {
-          throw new Error(lastError);
+          throw new Error(res.status === 401 ? 'Sign in again from Settings → Sync.' : lastError);
         }
         if (attempt < MAX_ATTEMPTS) {
           const waitMs = RETRY_WAITS_MS[attempt - 1];
@@ -181,6 +188,9 @@ export async function runExtraction(
 
       console.log('[extract] chunk succeeded', { fileId, chunkIndex: i, markdownLength: markdown.length });
       await updateNoteChunk(fileId, i, { index: i, status: 'ready', markdown });
+      const confirmNote = await db.notes.get(fileId);
+      const c = confirmNote?.chunks[i];
+      console.log('[extract] chunk stored', { fileId, chunkIndex: i, status: c?.status, length: c?.markdown?.length ?? 0 });
       callbacks.onProgress?.(fileId, i, 'ready');
     } catch (e) {
       if (e instanceof Error && e.message === 'Cancelled') {
