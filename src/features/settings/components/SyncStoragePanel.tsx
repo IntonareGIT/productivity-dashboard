@@ -100,14 +100,24 @@ export const StoragePanel: React.FC = () => {
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [scanProgress, setScanProgress] = useState({ current: 0, total: 0 });
+  const [scanStatus, setScanStatus] = useState<'idle' | 'scanning' | 'done' | 'error'>('idle');
+  const [scanMessage, setScanMessage] = useState<string>('');
   const [errorDetail, setErrorDetail] = useState<SyncErrorDetail | null>(null);
   const [copied, setCopied] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
-const [clearResult, setClearResult] = useState<{ before: number; after: number; count: number } | null>(null);
+  const [clearResult, setClearResult] = useState<{ before: number; after: number; count: number } | null>(null);
 
   const scan = useCallback(async () => {
-    if (!state.signedIn) return;
-    
+    setScanStatus('scanning');
+    setScanMessage('Scan started.');
+    setErrorDetail(null);
+
+    if (!state.signedIn) {
+      setScanStatus('error');
+      setScanMessage('Not signed in. Sign in under Sync first.');
+      return;
+    }
+
     setScanning(true);
     setResult(null);
     setScanProgress({ current: 0, total: 0 });
@@ -118,10 +128,17 @@ const [clearResult, setClearResult] = useState<{ before: number; after: number; 
       const resources = await db.resources.toArray();
       const withBlob = resources.filter(r => r.blob && r.blob instanceof Blob);
 
+      setScanProgress({ current: 0, total: withBlob.length });
+
+      if (withBlob.length === 0) {
+        setScanStatus('done');
+        setScanMessage('Scan finished: 0 files checked.');
+        setResult({ groups: { a: [], b: [], c: [] }, totals: { a: 0, b: 0, c: 0 }, tableSizes: {}, totalBytes: 0 });
+        return;
+      }
+
       const groups = { a: [], b: [], c: [] } as { a: ResourceInfo[]; b: ResourceInfo[]; c: ResourceInfo[] };
       let totalBytesA = 0, totalBytesB = 0, totalBytesC = 0;
-
-      setScanProgress({ current: 0, total: withBlob.length });
 
       for (let i = 0; i < withBlob.length; i++) {
         const resource = withBlob[i];
@@ -149,7 +166,7 @@ const [clearResult, setClearResult] = useState<{ before: number; after: number; 
           }
         }
 
-        const info: ResourceInfo = { id: resource.id, title: resource.title, size, r2Key: resource.r2Key, r2Exists, group };
+        const info: ResourceInfo = { id: resource.id, title: title, size, r2Key: resource.r2Key, r2Exists, group };
         groups[group].push(info);
 
         if (group === 'a') totalBytesA += size;
@@ -171,15 +188,20 @@ const [clearResult, setClearResult] = useState<{ before: number; after: number; 
       };
 
       setResult(result);
+      setScanStatus('done');
+      setScanMessage(`Scan finished: ${withBlob.length} files checked.`);
     } catch (e) {
       console.error('Scan failed:', e);
+      setScanStatus('error');
+      setScanMessage('Scan failed.');
       if (e instanceof CloudApiError) {
         setErrorDetail({ status: e.status, body: e.message });
+        setScanMessage(`Scan failed: HTTP ${e.status}.`);
       }
     } finally {
       setScanning(false);
     }
-  }, []);
+  }, [state.signedIn]);
 
   return (
     <div className="space-y-4">
@@ -239,6 +261,16 @@ const [clearResult, setClearResult] = useState<{ before: number; after: number; 
               'Scan local files and cloud copies'
             )}
           </button>
+
+          {!scanning && !state.signedIn && (
+            <span className="text-xs text-rose-500">Disabled: sign in under Sync first.</span>
+          )}
+
+          {scanMessage && (
+            <div className={`text-xs font-mono rounded p-2 ${scanStatus === 'error' ? 'bg-rose-500/10 text-rose-500 border border-rose-500/40' : 'bg-bg-surface/50 text-content-secondary border border-bg-surface/50'}`}>
+              {scanMessage}
+            </div>
+          )}
 
           {scanning && (
             <div className="text-xs text-content-secondary font-mono">
