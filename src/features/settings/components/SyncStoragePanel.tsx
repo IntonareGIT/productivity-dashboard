@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { db } from '../../../db/db';
 import { SyncAccountPanel, useCloudAccount } from './SyncAccountPanel';
 import { measureStorage } from '../../library/libraryRepo';
@@ -106,6 +106,17 @@ export const StoragePanel: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [clearResult, setClearResult] = useState<{ before: number; after: number; count: number } | null>(null);
+  const [diag, setDiag] = useState<{ dbName: string; email: string | null; resources: number; withBlob: number } | null>(null);
+
+  useEffect(() => {
+    let loaded = false;
+    (async () => {
+      const resources = await db.resources.toArray();
+      const withBlob = resources.filter((r) => r.blob && r.blob instanceof Blob).length;
+      if (!loaded) setDiag({ dbName: db.name, email: state.email ?? null, resources: resources.length, withBlob });
+    })();
+    return () => { loaded = true; };
+  }, [state.email]);
 
   const scan = useCallback(async () => {
     setScanStatus('scanning');
@@ -234,6 +245,20 @@ export const StoragePanel: React.FC = () => {
             <Copy className="w-3.5 h-3.5" />
             {copied ? 'Copied!' : 'Copy error details'}
           </button>
+        </div>
+      )}
+
+      {/* Database identity diagnostics */}
+      {diag && (
+        <div className="rounded-xl border p-3 bg-bg-surface/50 space-y-2 text-xs font-mono text-content-secondary">
+          <div>Database: {diag.dbName} (does not change with account)</div>
+          <div>Account: {diag.email ?? '(not signed in)'}</div>
+          <div>
+            Resources: {diag.resources} rows · with local blob: {diag.withBlob}
+          </div>
+          {diag.resources === 0 && !state.signedIn && (
+            <div className="text-rose-500">Database not yet open or no realm loaded.</div>
+          )}
         </div>
       )}
 
