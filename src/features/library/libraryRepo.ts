@@ -583,6 +583,8 @@ export async function finalizeNote(fileId: string): Promise<void> {
   const note = await db.notes.get(fileId);
   if (!note) return;
 
+  console.log('[finalize] note chunks', { fileId, chunks: note.chunks.map((c) => ({ index: c.index, range: `${c.pageStart}–${c.pageEnd}`, status: c.status, length: c.markdown?.length ?? 0 })) });
+
   // Check that all chunks are ready
   const notReady = note.chunks.filter((c) => c.status !== 'ready');
   if (notReady.length > 0) {

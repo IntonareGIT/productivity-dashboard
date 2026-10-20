@@ -180,18 +180,18 @@ export async function runExtraction(
       }
 
       console.log('[extract] chunk succeeded', { fileId, chunkIndex: i, markdownLength: markdown.length });
-      await updateNoteChunk(fileId, i, { status: 'ready', markdown });
+      await updateNoteChunk(fileId, i, { index: i, status: 'ready', markdown });
       callbacks.onProgress?.(fileId, i, 'ready');
     } catch (e) {
       if (e instanceof Error && e.message === 'Cancelled') {
         console.log('[extract] chunk cancelled', { fileId, chunkIndex: i });
-        await updateNoteChunk(fileId, i, { status: 'failed', error: 'Cancelled' });
+        await updateNoteChunk(fileId, i, { index: i, status: 'failed', error: 'Cancelled' });
         callbacks.onError?.(fileId, `Chunk ${i + 1} cancelled`);
         return;
       }
       const msg = e instanceof Error ? e.message : 'Chunk extraction failed';
       console.log('[extract] chunk error', { fileId, chunkIndex: i, error: msg });
-      await updateNoteChunk(fileId, i, { status: 'failed', error: msg });
+      await updateNoteChunk(fileId, i, { index: i, status: 'failed', error: msg });
       await failNote(fileId, `Chunk ${i + 1} failed: ${msg}`);
       toast('error', 'Extraction failed', msg);
       callbacks.onError?.(fileId, `Chunk ${i + 1} failed: ${msg}`);
