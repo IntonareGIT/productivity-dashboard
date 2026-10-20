@@ -8,6 +8,7 @@ import { DashboardPage } from '../dashboard/DashboardPage';
 import type { NavTab } from '../../components/layout/Sidebar';
 import type { Resource } from '../../types';
 import { NotesPane } from './NotesPane';
+import MarkdownViewer from '../library/components/MarkdownViewer';
 import { useAssistantStore } from '../../stores/useAssistantStore';
 import type { PaneSlot } from './splitModel';
 
@@ -50,11 +51,16 @@ export const PaneContent: React.FC<PaneContentProps> = ({
   // images are both "a resource with a blob", just routed to different viewers.
   const resourceId = slot.kind === 'pdf' ? slot.resourceId
     : slot.kind === 'image' ? slot.imageId
+    : slot.kind === 'markdown' ? slot.resourceId
     : undefined;
   const resource = useLiveQuery(
     () => (resourceId ? db.resources.get(resourceId) : Promise.resolve(undefined)),
     [resourceId],
   ) as Resource | undefined;
+  const markdownNote = useLiveQuery(
+    () => (slot.kind === 'markdown' && slot.resourceId ? db.notes.get(slot.resourceId) : undefined),
+    [slot.kind, slot.resourceId],
+  );
 
   const assistantRedesign = useAssistantStore((s) => s.assistantRedesign);
 
@@ -97,6 +103,20 @@ export const PaneContent: React.FC<PaneContentProps> = ({
 
     case 'notes':
       return <NotesPane topicId={slot.topicId} />;
+
+    case 'markdown':
+      if (!slot.resourceId) return <Blank>Pick a file with extracted notes in this pane&apos;s header.</Blank>;
+      if (!resource) return <Blank>Loading resource…</Blank>;
+      return (
+        <div className="flex flex-col h-full min-h-0 min-w-0 w-full overflow-hidden p-1">
+          <MarkdownViewer
+            fileId={slot.resourceId}
+            fileTitle={resource.fileName || resource.title}
+            note={markdownNote}
+            onClose={() => { /* panes are closed by the pane header */ }}
+          />
+        </div>
+      );
 
     case 'pdf':
       if (!slot.resourceId) return <Blank>Pick a PDF in this pane&apos;s header.</Blank>;

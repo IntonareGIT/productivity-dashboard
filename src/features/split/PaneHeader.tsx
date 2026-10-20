@@ -117,6 +117,7 @@ export const PaneHeader: React.FC<PaneHeaderProps> = ({
     const next: PaneSlot = { kind: patch.kind };
     if (patch.kind === 'pdf') next.resourceId = patch.resourceId ?? slot.resourceId;
     if (patch.kind === 'image') next.imageId = patch.imageId ?? slot.imageId;
+    if (patch.kind === 'markdown') next.resourceId = patch.resourceId ?? slot.resourceId;
     if (patch.kind === 'notes') next.topicId = patch.topicId ?? slot.topicId;
     setState((s) => setPane(s, index, next));
   };
@@ -127,6 +128,10 @@ export const PaneHeader: React.FC<PaneHeaderProps> = ({
   // cannot end up trying to render a file the picker thought it could not.
   const pickFile = (r: Resource) => {
     setPickerOpen(false);
+    // Markdown panes keep the markdown view regardless of the file's preview kind.
+    if (slot.kind === 'markdown') {
+      return select({ kind: 'markdown', resourceId: r.id });
+    }
     select(previewKindFor(r) === 'image'
       ? { kind: 'image', imageId: r.id }
       : { kind: 'pdf', resourceId: r.id });
@@ -157,6 +162,7 @@ export const PaneHeader: React.FC<PaneHeaderProps> = ({
         <option value="image">Image</option>
         <option value="notes">Notes</option>
         <option value="assistant">Assistant</option>
+        <option value="markdown">Markdown</option>
       </select>
 
       {/* The FILE selector is the drill-down picker, not a flat list.

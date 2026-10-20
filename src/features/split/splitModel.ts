@@ -8,12 +8,12 @@
  * so a refresh always returns to the default single full-width dashboard.
  */
 
-export type PaneKind = 'empty' | 'dashboard' | 'pdf' | 'image' | 'notes' | 'assistant';
+export type PaneKind = 'empty' | 'dashboard' | 'pdf' | 'image' | 'markdown' | 'notes' | 'assistant';
 
 /** What one pane is showing. `resourceId`/`topicId` are per-kind. */
 export interface PaneSlot {
   kind: PaneKind;
-  /** For kind 'pdf': the resource being previewed. */
+  /** For kind 'pdf' or 'markdown': the resource being previewed. */
   resourceId?: string;
   /** For kind 'image': the image resource being previewed. */
   imageId?: string;
