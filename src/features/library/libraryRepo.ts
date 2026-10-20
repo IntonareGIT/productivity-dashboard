@@ -10,7 +10,7 @@ import { newId } from '../../utils/id';
 import { markdownToEditorHtml } from './noteEditor/markdownToHtml';
 import { htmlToPlainText, sanitizeEditorHtml } from './noteEditor/sanitizeHtml';
 import { parentOf, validateGroupPlacement } from './groupTree';
-import { EXTRACTION_CONFIG } from '../../../lib/config/extraction';
+import { EXTRACTION_CONFIG, chunkPagesFor } from '../../../lib/config/extraction';
 
 /* ---------------- Subjects ---------------- */
 
@@ -515,8 +515,9 @@ export async function saveNote(input: NoteInput): Promise<string> {
  * Generate chunk ranges for a PDF based on pageCount and chunkPages config.
  * Returns array of { pageStart, pageEnd } (1-based, inclusive).
  */
-export function getChunkRanges(pageCount: number): { pageStart: number; pageEnd: number }[] {
-  const { chunkPages, maxChunks } = EXTRACTION_CONFIG;
+export function getChunkRanges(pageCount: number, isScanned: boolean = false): { pageStart: number; pageEnd: number }[] {
+  const chunkPages = chunkPagesFor(isScanned);
+  const { maxChunks } = EXTRACTION_CONFIG;
   const ranges: { pageStart: number; pageEnd: number }[] = [];
   for (let start = 1; start <= pageCount; start += chunkPages) {
     const end = Math.min(start + chunkPages - 1, pageCount);
@@ -530,7 +531,7 @@ export function getChunkRanges(pageCount: number): { pageStart: number; pageEnd:
  * Initialize a note for extraction: set up chunks based on page count.
  * Call this when status changes to 'queued'.
  */
-export async function initNoteForExtraction(fileId: string, modelId: string): Promise<void> {
+export async function initNoteForExtraction(fileId: string, modelId: string, isScanned: boolean = false): Promise<void> {
   const note = await db.notes.get(fileId);
   if (!note) return;
   const pageCount = note.pageCount;
@@ -539,7 +540,7 @@ export async function initNoteForExtraction(fileId: string, modelId: string): Pr
     await db.notes.put({ ...note, status: 'failed', lastError: 'Could not read this PDF.', updatedAt: new Date().toISOString() });
     return;
   }
-  const ranges = getChunkRanges(note.pageCount);
+  const ranges = getChunkRanges(note.pageCount, isScanned);
   const chunks: NoteChunk[] = ranges.map((r, i) => ({
     index: i,
     pageStart: r.pageStart,

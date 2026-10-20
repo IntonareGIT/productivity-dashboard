@@ -17,8 +17,18 @@ import { toast } from '../../stores/useToastStore';
 
 interface RunnerCallbacks {
   onProgress?: (fileId: string, chunkIndex: number, status: string) => void;
+  onRetry?: (fileId: string, chunkIndex: number, attempt: number, maxAttempts: number, waitMs: number) => void;
   onComplete?: (fileId: string) => void;
   onError?: (fileId: string, reason: string) => void;
+  isCancelled?: () => boolean;
+}
+
+const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const MAX_ATTEMPTS = 3;
+const RETRY_WAITS_MS = [15_000, 45_000, 90_000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -109,33 +119,57 @@ export async function runExtraction(
     callbacks.onProgress?.(fileId, i, 'processing');
 
     try {
-      console.log('[extract] calling /api/extract-chunk', { fileId, chunkIndex: i, pageStart: chunk.pageStart, pageEnd: chunk.pageEnd });
-      const res = await fetch('/api/extract-chunk', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          fileId,
-          modelId: model.id,
-          pageStart: chunk.pageStart,
-          pageEnd: chunk.pageEnd,
-          r2Key: resource.r2Key,
-        }),
-      });
+      let res: Response;
+      let lastError = '';
+      let attempts = 0;
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        if (callbacks.isCancelled?.()) {
+          throw new Error('Cancelled');
+        }
+        attempts = attempt + 1;
+        console.log('[extract] calling /api/extract-chunk', { fileId, chunkIndex: i, pageStart: chunk.pageStart, pageEnd: chunk.pageEnd, attempt });
+        res = await fetch('/api/extract-chunk', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            fileId,
+            modelId: model.id,
+            pageStart: chunk.pageStart,
+            pageEnd: chunk.pageEnd,
+            r2Key: resource.r2Key,
+          }),
+        });
+
+        if (res.ok) break;
+
+        const data = await res.json().catch(() => ({}));
+        lastError = data.message ?? 'Extraction failed';
+        console.log('[extract] chunk attempt failed', { fileId, chunkIndex: i, status: res.status, attempt, msg: lastError });
+
+        if (!TRANSIENT_STATUSES.has(res.status)) {
+          throw new Error(lastError);
+        }
+        if (attempt < MAX_ATTEMPTS) {
+          const waitMs = RETRY_WAITS_MS[attempt - 1];
+          callbacks.onRetry?.(fileId, i, attempts, MAX_ATTEMPTS, waitMs);
+          callbacks.onProgress?.(fileId, i, `Model busy. Retrying chunk ${i + 1} of ${note.chunks.length} in ${waitMs / 1000} s (attempt ${attempts} of ${MAX_ATTEMPTS}).`);
+          // Sleep in small increments so cancellation is responsive
+          const end = Date.now() + waitMs;
+          while (Date.now() < end) {
+            if (callbacks.isCancelled?.()) {
+              throw new Error('Cancelled');
+            }
+            await sleep(Math.min(1000, end - Date.now()));
+          }
+        }
+      }
 
       if (!res.ok) {
-        let msg = 'Extraction failed';
-        if (res.status === 401) msg = 'Session expired';
-        else if (res.status === 403) msg = 'Model has no key or file access denied';
-        else if (res.status === 400) msg = 'Model cannot accept PDF';
-        else if (res.status === 502) msg = 'Model returned empty output';
-        const data = await res.json().catch(() => ({}));
-        msg = data.message ?? msg;
-        console.log('[extract] chunk failed', { fileId, chunkIndex: i, status: res.status, msg });
-        throw new Error(msg);
+        throw new Error(lastError);
       }
 
       const data = await res.json();
@@ -149,6 +183,12 @@ export async function runExtraction(
       await updateNoteChunk(fileId, i, { status: 'ready', markdown });
       callbacks.onProgress?.(fileId, i, 'ready');
     } catch (e) {
+      if (e instanceof Error && e.message === 'Cancelled') {
+        console.log('[extract] chunk cancelled', { fileId, chunkIndex: i });
+        await updateNoteChunk(fileId, i, { status: 'failed', error: 'Cancelled' });
+        callbacks.onError?.(fileId, `Chunk ${i + 1} cancelled`);
+        return;
+      }
       const msg = e instanceof Error ? e.message : 'Chunk extraction failed';
       console.log('[extract] chunk error', { fileId, chunkIndex: i, error: msg });
       await updateNoteChunk(fileId, i, { status: 'failed', error: msg });

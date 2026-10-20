@@ -142,9 +142,9 @@ Rules:
       throw { error: 'no_key', status: 403 };
     }
     if (response.status === 404) {
-      throw { error: 'Model not found at provider', status: 400 };
+      throw { error: 'Model not found at provider', status: 404 };
     }
-    throw { error: `Provider error (status ${response.status})`, status: 502 };
+    throw { error: `Provider error (status ${response.status})`, status: response.status };
   }
 
   let markdown = '';

@@ -127,6 +127,7 @@ async function handleRequest(req: ApiRequest, res: ApiResponse): Promise<void> {
   } catch (e) {
     const err = e as ExtractChunkError;
     if (err && typeof err === 'object' && 'status' in err) {
+      const status = Number(err.status);
       if (err.error === 'no_key') {
         json(res, 403, { error: 'no_key', message: 'Model has no API key saved.' });
         return;
@@ -135,7 +136,22 @@ async function handleRequest(req: ApiRequest, res: ApiResponse): Promise<void> {
         json(res, 502, { error: 'empty_output', message: 'Model returned empty output.' });
         return;
       }
-      json(res, err.status ?? 502, { error: 'extraction_failed', message: err.error ?? 'Extraction failed.' });
+      let mappedStatus = status;
+      let mappedMessage = err.error ?? 'Extraction failed.';
+      if (status === 429) {
+        mappedStatus = 429;
+        mappedMessage = 'Rate limit reached.';
+      } else if (status === 503) {
+        mappedStatus = 503;
+        mappedMessage = 'The model is busy.';
+      } else if (status === 504) {
+        mappedStatus = 504;
+        mappedMessage = 'The model timed out.';
+      } else if (status >= 500 && status < 600) {
+        mappedStatus = 502;
+        mappedMessage = 'The model had an error.';
+      }
+      json(res, mappedStatus, { error: 'extraction_failed', message: mappedMessage });
       return;
     }
     json(res, 502, { error: 'extraction_failed', message: 'Extraction failed.' });
