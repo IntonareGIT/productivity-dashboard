@@ -221,6 +221,16 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
                   {resource.fileSize != null && <span className="text-content-tertiary">({fmtBytes(resource.fileSize)})</span>}
                 </span>
                 <button onClick={onPreview} className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><Eye className="w-3 h-3" /> Preview</button>
+                {isPdf && note && (
+                  <button
+                    onClick={() => onViewMarkdown?.(resource.id, resource.title)}
+                    disabled={!note.markdown.trim().length}
+                    className={`flex items-center gap-1 text-[11px] font-semibold ${note.markdown.trim().length ? 'text-accent hover:underline' : 'text-content-tertiary opacity-60'} hover:underline`}
+                    title={note.markdown.trim().length ? 'Open extracted markdown' : 'No text yet — run extraction first'}
+                  >
+                    <FileText className="w-3 h-3 shrink-0" /> {note.markdown.trim().length ? 'View markdown' : 'No text yet'}
+                  </button>
+                )}
                 {onSplitWithNotes && (
                   <button
                     onClick={() => onSplitWithNotes(resource.id, resource.topicId ?? fallbackTopicId ?? null)}
@@ -725,6 +735,7 @@ renderResources={(groupId) => {
                       fallbackTopicId={selectedTopic?.id ?? null}
                       groups={sortedGroups}
                       note={noteByFileId.get(resource.id) ?? null}
+                      onViewMarkdown={(fileId, fileTitle) => setMarkdownViewerFile({ fileId, fileTitle })}
                       onStartExtraction={async (fileId, modelId) => {
                       console.log('[extract] onStartExtraction called', { fileId, modelId });
                       const note = noteByFileId.get(fileId);
@@ -772,7 +783,8 @@ renderResources={(groupId) => {
                         fallbackTopicId={selectedTopic?.id ?? null}
                         groups={sortedGroups}
                         note={noteByFileId.get(resource.id) ?? null}
-onStartExtraction={async (fileId, modelId) => {
+                        onViewMarkdown={(fileId, fileTitle) => setMarkdownViewerFile({ fileId, fileTitle })}
+                      onStartExtraction={async (fileId, modelId) => {
                       const note = noteByFileId.get(fileId);
                       if (!note || note.status === 'none') {
                         // Create note and initialize extraction
