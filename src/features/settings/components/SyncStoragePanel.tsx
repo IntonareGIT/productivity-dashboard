@@ -103,6 +103,7 @@ export const StoragePanel: React.FC = () => {
   const [errorDetail, setErrorDetail] = useState<SyncErrorDetail | null>(null);
   const [copied, setCopied] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+const [clearResult, setClearResult] = useState<{ before: number; after: number; count: number } | null>(null);
 
   const scan = useCallback(async () => {
     if (!state.signedIn) return;
@@ -350,17 +351,26 @@ export const StoragePanel: React.FC = () => {
                         </li>
                       ))}
                     </ul>
-                    <p className="text-[11px] text-rose-500/80">
-                      Removal is not implemented yet — this is a preview of the confirmation
-                      step only.
-                    </p>
+<p className="text-[11px] text-content-secondary">
+                       Clearing local copies…
+                     </p>
                     <div className="flex flex-wrap gap-2">
                       <button
-                        disabled={true}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-500/50 text-white rounded-lg opacity-50 cursor-not-allowed"
+                        onClick={async () => {
+                          const before = await measureStorage();
+                          for (const r of result.groups.a) {
+                            const row = await db.resources.get(r.id);
+                            if (row) await db.resources.put({ ...row, blob: null });
+                          }
+                          const after = await measureStorage();
+                          setClearResult({ before: before.totalBytes, after: after.totalBytes, count: result.groups.a.length });
+                          setConfirmRemove(false);
+                          setResult(null);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-500 text-white rounded-lg hover:bg-rose-600 transition-colors"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
-                        Confirm remove (disabled)
+                        Confirm remove
                       </button>
                       <button
                         onClick={() => setConfirmRemove(false)}
