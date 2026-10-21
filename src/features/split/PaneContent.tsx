@@ -113,6 +113,7 @@ export const PaneContent: React.FC<PaneContentProps> = ({
             fileId={slot.resourceId}
             fileTitle={resource.fileName || resource.title}
             note={markdownNote}
+            inline
             onClose={() => { /* panes are closed by the pane header */ }}
           />
         </div>
