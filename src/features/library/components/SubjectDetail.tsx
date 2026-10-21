@@ -334,10 +334,55 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
     if (!selectedTopic) return;
     const text = selectedTopic.notes || '';
     const title = selectedTopic.title;
+
+    const escapeHtml = (t: string) => t.replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;" }[c]!));
+    const isArabic = (t: string) => /[\u0600-\u06ff]/.test(t);
+    const inlineMd = (t: string) => escapeHtml(t)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/`([^`]+)`/g, '<code style="font-family:ui-monospace,SFMono-Regular,monospace;background:#f3f3f3;padding:.1rem .3rem;border-radius:.3rem">$1</code>');
+    const blockMd = (md: string): string => {
+      const lines = md.split('\n');
+      const out: string[] = [];
+      let inList = false, inTable = false;
+      const close = () => { if (inList) { out.push('</ul>'); inList = false; } if (inTable) { out.push('</table>'); inTable = false; } };
+      for (const raw of lines) {
+        const line = raw.replace(/\r$/,'');
+        const mHead = line.match(/^(#{1,3})\s+(.*)/);
+        if (mHead) { close(); const lvl = mHead[1].length; out.push(`<h${lvl}>${inlineMd(mHead[2])}</h${lvl}>`); continue; }
+        const mTable = line.match(/^\s*\|(.+)\|\s*$/);
+        if (mTable) {
+          if (!inTable) { out.push('<table border="1" cellspacing="0" cellpadding="4">'); inTable = true; }
+          const cells = line.split('|').slice(1,-1).map((c) => c.trim());
+          const isSep = cells.every((c) => /^[-:]+$/.test(c));
+          if (isSep) continue;
+          const tag = inTable && out[out.length-1]?.startsWith('<tr>') ? 'td' : 'th';
+          out.push(`<tr>${cells.map((c)=>`<${tag}>${inlineMd(c)}</${tag}>`).join('')}</tr>`);
+          if (tag === 'th') out.push('<tr>' + cells.map(() => '<td></td>').join('') + '</tr>');
+          continue;
+        }
+        close();
+        if (/^\s*[-*]\s+/.test(line)) { if (!inList) { out.push('<ul>'); inList = true; } out.push(`<li>${inlineMd(line.replace(/^\s*[-*]\s+/,''))}</li>`); continue; }
+        if (/^\s*\d+\.\s+/.test(line)) { if (!inList) { out.push('<ol>'); inList = true; } out.push(`<li>${inlineMd(line.replace(/^\s*\d+\.\s+/,''))}</li>`); continue; }
+        if (line.trim() === '') { if (!inList) out.push('<p></p>'); continue; }
+        const mImg = line.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+        if (mImg) { out.push(`<p><img src="${escapeHtml(mImg[2])}" alt="${escapeHtml(mImg[1])}" style="max-width:100%"/></p>`); continue; }
+        if (!inList) out.push(`<p dir="${isArabic(line)?'rtl':'ltr'}">${inlineMd(line)}</p>`);
+      }
+      close();
+      return out.join('');
+    };
+    const markdownHtml = blockMd(text);
+
     if (format === 'pdf') {
-      const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${title}</title>
-<style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;line-height:1.6;padding:2rem}pre{background:#f3f3f3;padding:1rem;border-radius:.4rem;overflow:auto;white-space:pre-wrap}</style></head>
-<body><h1>${title}</h1><pre>${text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre></body></html>`;
+      const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;line-height:1.6;padding:2rem}
+h1{font-size:1.5rem;border-bottom:1px solid #ddd;padding-bottom:.5rem}h2{font-size:1.25rem}h3{font-size:1.1rem}
+p{margin:.6rem 0}ul,ol{margin:.6rem 0 .6rem 1.5rem}
+table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:.4rem .6rem}
+img{max-width:100%}code{background:#f3f3f3}pre{background:#f3f3f3;padding:.7rem;border-radius:.4rem;overflow:auto}
+blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style></head>
+<body><h1>${escapeHtml(title)}</h1>${markdownHtml}</body></html>`;
       const win = window.open('', '_blank');
       if (!win) return;
       win.document.write(html);
@@ -345,13 +390,22 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
       win.focus();
       setTimeout(() => { win.print(); win.close(); }, 250);
     } else {
+      const escapeXml = (t: string) => t.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&apos;"}[c]!));
+      const wordBody = markdownHtml
+        .replace(/<h([1-3])>(.*?)<\/h[1-3]>/g, '<w:p><w:pPr><w:pStyle w:val="Heading$1"/></w:pPr><w:r><w:t>$2</w:t></w:r></w:p>')
+        .replace(/<ul>(.*?)<\/ul>/gs, '<w:p><w:pPr><w:pStyle w:val="ListBullet"/></w:pPr><w:r><w:t>$1</w:t></w:r></w:p>')
+        .replace(/<ol>(.*?)<\/ol>/gs, '<w:p><w:pPr><w:pStyle w:val="ListNumber"/></w:pPr><w:r><w:t>$1</w:t></w:r></w:p>')
+        .replace(/<li>(.*?)<\/li>/g, '<w:p><w:r><w:t>• $1</w:t></w:r></w:p>')
+        .replace(/<p>(.*?)<\/p>/g, '<w:p><w:r><w:t xml:space="preserve">$1</w:t></w:r></w:p>')
+        .replace(/<strong>(.*?)<\/strong>/g, '<w:r><w:rPr><w:b/></w:rPr><w:t>$1</w:t></w:r>')
+        .replace(/<em>(.*?)<\/em>/g, '<w:r><w:rPr><w:i/></w:rPr><w:t>$1</w:t></w:r>');
       const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <?mso-application progid="Word.Document"?>
-<w:wordDocument xmlns:w="urn:schemas-microsoft-com:office:word"><w:body><w:p><w:r><w:t xml:space="preserve">${text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</w:t></w:r></w:p></w:body></w:wordDocument>`;
+<w:wordDocument xmlns:w="urn:schemas-microsoft-com:office:word"><w:body>${wordBody}</w:body></w:wordDocument>`;
       const blob = new Blob([xml], { type: 'application/msword' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = `${title}.doc`; document.body.appendChild(a);
+      a.href = url; a.download = `${escapeHtml(title)}.doc`; document.body.appendChild(a);
       a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
     }
   };
