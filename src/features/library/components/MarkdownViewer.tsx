@@ -31,6 +31,37 @@ const MarkdownViewer: React.FC<MarkdownViewerProps> = ({
   const [originalMarkdown, setOriginalMarkdown] = useState(note?.markdown ?? '');
   const [edited, setEdited] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [exportMenu, setExportMenu] = useState(false);
+
+  const exportPdf = () => {
+    const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>${fileTitle}</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;line-height:1.6;padding:2rem}
+h1{font-size:1.5rem;border-bottom:1px solid #ddd;padding-bottom:.5rem}
+h2{font-size:1.25rem}h3{font-size:1.1rem}
+p{margin:.6rem 0}
+ul,ol{margin:.6rem 0 .6rem 1.5rem}
+table{border-collapse:collapse;width:100%;margin:.8rem 0}
+th,td{border:1px solid #999;padding:.4rem .6rem;text-align:left}
+code{background:#f3f3f3;padding:.1rem .3rem;border-radius:.3rem;font-family:ui-monospace,SFMono-Regular,monospace}
+pre{background:#f3f3f3;padding:.7rem;border-radius:.4rem;overflow:auto}
+blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem;color:#444}
+</style></head>
+<body>
+<h1>${fileTitle}</h1>
+<div>${markdown.replace(/^/gm, '')}</div>
+</body></html>`;
+    const win = window.open('', '_blank');
+    if (!win) return;
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => { win.print(); win.close(); }, 250);
+    setExportMenu(false);
+  };
 
   useEffect(() => {
     if (note?.markdown !== undefined) {
@@ -174,6 +205,31 @@ const MarkdownViewer: React.FC<MarkdownViewerProps> = ({
 
       {/* Actions */}
       <div className="flex items-center justify-end gap-2 border-t border-border/50 pt-4">
+        <button
+          onClick={() => setExportMenu(true)}
+          className="px-3 min-h-[44px] rounded-xl border border-border text-sm text-content-secondary hover:bg-bg-elevated transition-colors"
+        >
+          Export
+        </button>
+        {exportMenu && (
+          <div className="absolute z-50 mt-1 w-48 bg-bg-surface border border-border rounded-xl shadow-lg py-1 text-xs">
+            <button
+              onClick={exportPdf}
+              className="w-full text-left px-3 py-2 text-content-secondary hover:bg-accent/10 hover:text-accent transition-colors"
+            >
+              PDF
+            </button>
+            <button
+              onClick={() => {
+                setExportMenu(false);
+                toast('error', 'Word export', 'The .docx exporter needs the `docx` library installed.');
+              }}
+              className="w-full text-left px-3 py-2 text-content-secondary hover:bg-accent/10 hover:text-accent transition-colors"
+            >
+              Word (.docx)
+            </button>
+          </div>
+        )}
         <button onClick={onClose} className="px-4 min-h-[44px] rounded-xl text-sm text-content-secondary hover:text-content-primary transition-colors">
           Close
         </button>
