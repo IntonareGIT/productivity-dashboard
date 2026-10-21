@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { endOfWeek, format, isBefore, isToday, isWithinInterval, parseISO, startOfWeek } from 'date-fns';
-import { ArrowLeft, BookOpenCheck, CalendarClock, Check, ChevronRight, Clock, Columns2, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Loader2, Pencil, Plus, Search, Timer, Trash2, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, BookOpenCheck, CalendarClock, Check, ChevronDown, ChevronUp, ChevronRight, Clock, Columns2, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Loader2, Pencil, Plus, Search, Timer, Trash2, AlertTriangle } from 'lucide-react';
 import { db } from '../../../db/db';
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
@@ -327,7 +327,34 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [editingNotes, setEditingNotes] = useState(false);
   const [notesSaved, setNotesSaved] = useState(false);
+  const [notesMinimized, setNotesMinimized] = useState(true);
   const [filter, setFilter] = useState('');
+
+  const exportTopicNotes = (format: 'pdf' | 'word') => {
+    if (!selectedTopic) return;
+    const text = selectedTopic.notes || '';
+    const title = selectedTopic.title;
+    if (format === 'pdf') {
+      const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${title}</title>
+<style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;line-height:1.6;padding:2rem}pre{background:#f3f3f3;padding:1rem;border-radius:.4rem;overflow:auto;white-space:pre-wrap}</style></head>
+<body><h1>${title}</h1><pre>${text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre></body></html>`;
+      const win = window.open('', '_blank');
+      if (!win) return;
+      win.document.write(html);
+      win.document.close();
+      win.focus();
+      setTimeout(() => { win.print(); win.close(); }, 250);
+    } else {
+      const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:w="urn:schemas-microsoft-com:office:word"><w:body><w:p><w:r><w:t xml:space="preserve">${text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</w:t></w:r></w:p></w:body></w:wordDocument>`;
+      const blob = new Blob([xml], { type: 'application/msword' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `${title}.doc`; document.body.appendChild(a);
+      a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    }
+  };
   const [addingTopic, setAddingTopic] = useState(false);
   const [editingTopic, setEditingTopic] = useState<Topic | null>(null);
   const [addingResource, setAddingResource] = useState(false);
@@ -633,43 +660,78 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
         >
           {!selectedTopic ? (
             <p className="text-xs text-content-tertiary">No topic selected.</p>
-          ) : editingNotes ? (
-            <div>
-              <NoteTitleInput
-                topic={selectedTopic}
-                className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 mb-1"
-              />
-              <NotesEditorBody
-                topic={selectedTopic}
-                minHeight="min-h-[280px]"
-                onSaved={() => {
-                  setNotesSaved(true);
-                  window.setTimeout(() => setNotesSaved(false), 1500);
-                }}
-              />
-              <div className="flex items-center justify-end gap-2 mt-2">
-                <button onClick={() => setEditingNotes(false)} className="px-4 min-h-[40px] rounded-xl text-xs text-content-secondary hover:text-content-primary transition-colors">Done</button>
-                {notesSaved && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
-              </div>
-            </div>
           ) : (
-            <div>
-              {/* Same title input as the split pane, above the body. */}
-              <NoteTitleInput
-                topic={selectedTopic}
-                className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 mb-1"
-              />
-              <MarkdownNotes
-                text={selectedTopic.notes}
-                html={selectedTopic.contentHtml}
-                hasHtml={topicUsesHtml(selectedTopic)}
-              />
-              <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-border/50">
-                {notesSaved && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
-                <button onClick={() => setEditingNotes(true)} className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-border-strong transition-colors">
-                  <Pencil className="w-3.5 h-3.5" /> Edit notes
+            <div className="mt-2">
+              <div className="flex items-center justify-between mb-2">
+                <button
+                  onClick={() => setNotesMinimized((p) => !p)}
+                  aria-label={notesMinimized ? 'Expand notes' : 'Collapse notes'}
+                  className="flex items-center gap-1 text-xs font-semibold text-content-secondary hover:text-content-primary transition-colors"
+                >
+                  {notesMinimized ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+                  {notesMinimized ? 'Show notes' : 'Hide notes'}
                 </button>
+                {selectedTopic.notes && !editingNotes && (
+                  <>
+                    <button
+                      onClick={() => exportTopicNotes('pdf')}
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-accent transition-colors"
+                      title="Export notes as PDF"
+                    >
+                      <Download className="w-3 h-3" /> PDF
+                    </button>
+                    <button
+                      onClick={() => exportTopicNotes('word')}
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-accent transition-colors"
+                      title="Export notes as Word"
+                    >
+                      <Download className="w-3 h-3" /> Word
+                    </button>
+                  </>
+                )}
               </div>
+              {notesMinimized ? null : (
+                <div className="mt-3">
+                  {editingNotes ? (
+                    <div>
+                      <NoteTitleInput
+                        topic={selectedTopic}
+                        className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 mb-1"
+                      />
+                      <NotesEditorBody
+                        topic={selectedTopic}
+                        minHeight="min-h-[280px]"
+                        onSaved={() => {
+                          setNotesSaved(true);
+                          window.setTimeout(() => setNotesSaved(false), 1500);
+                        }}
+                      />
+                      <div className="flex items-center justify-end gap-2 mt-2">
+                        <button onClick={() => setEditingNotes(false)} className="px-4 min-h-[40px] rounded-xl text-xs text-content-secondary hover:text-content-primary transition-colors">Done</button>
+                        {notesSaved && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <NoteTitleInput
+                        topic={selectedTopic}
+                        className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 mb-1"
+                      />
+                      <MarkdownNotes
+                        text={selectedTopic.notes}
+                        html={selectedTopic.contentHtml}
+                        hasHtml={topicUsesHtml(selectedTopic)}
+                      />
+                      <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-border/50">
+                        {notesSaved && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
+                        <button onClick={() => setEditingNotes(true)} className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-border-strong transition-colors">
+                          <Pencil className="w-3 h-3" /> Edit notes
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </Card>
