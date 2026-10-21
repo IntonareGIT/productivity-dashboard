@@ -450,7 +450,7 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
       {/* Reader pane — opens inline, keeping the list mounted but hidden */}
       {readerMsgId && (
         <div
-          className="fixed inset-0 z-50 flex flex-col overflow-hidden"
+          className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-bg-surface"
           role="dialog"
           aria-modal="true"
           aria-label="Message reader"
@@ -482,7 +482,7 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
             </button>
           </div>
 
-          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 bg-bg-surface">
             <div className="text-[14px] leading-relaxed text-content-primary">
               <ReactMarkdown
                 remarkPlugins={[remarkMath]}
