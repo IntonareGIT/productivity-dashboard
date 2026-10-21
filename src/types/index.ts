@@ -348,6 +348,8 @@ export interface ChatMessageRow {
   sessionId: string;   // FK -> ChatSession.id
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;     // Text for the UI; '' for pure tool-call turns
+  /** A small inline thumbnail (<~20 KB) for an attached photo, or null. Full image bytes are never stored. */
+  image?: string | null;
   /** Full message object as sent/received, including extra_content. */
   raw: Record<string, unknown>;
   /** Tool-call ids this message requests (assistant turns). */

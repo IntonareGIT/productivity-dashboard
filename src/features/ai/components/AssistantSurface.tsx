@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, Check, Copy, RotateCcw, SendHorizonal, Square, Zap, AlertTriangle, User, Sparkles, Info, X, ChevronDown, Circle, HelpCircle, History } from 'lucide-react';
+import { Bot, Check, Copy, Image as ImageIcon, RotateCcw, SendHorizonal, Square, Zap, AlertTriangle, User, Sparkles, Info, X, ChevronDown, Circle, HelpCircle, History } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import { useAssistantStore, assistantUndo } from '../../../stores/useAssistantStore';
+import { toast } from '../../../stores/useToastStore';
 import { AssistantMessage } from './AssistantMessage';
 
 export type AssistantLayout = 'bubble' | 'fullscreen' | 'split';
@@ -70,6 +71,8 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
 
   const [showDetails, setShowDetails] = useState(false);
   const [localDraft, setLocalDraft] = useState('');
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const [imageDataUrls, setImageDataUrls] = useState<string[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -117,13 +120,68 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
 
   useEffect(resize, [localDraft, resize]);
 
+  const MAX_IMAGE_SIDE = 1280;
+  const MAX_IMAGE_BYTES = 1024 * 1024;
+
+  const resizeImage = useCallback((file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new (globalThis as { Image: new () => HTMLImageElement }).Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let { width, height } = img;
+        const scale = Math.min(1, MAX_IMAGE_SIDE / Math.max(width, height));
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return reject(new Error('Could not resize image.'));
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob((blob) => {
+          if (!blob) return reject(new Error('Could not resize image.'));
+          if (blob.size > MAX_IMAGE_BYTES) {
+            return reject(new Error('Image too large. Use a smaller photo.'));
+          }
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.onerror = () => reject(new Error('Could not read image.'));
+          reader.readAsDataURL(blob);
+        }, 'image/jpeg', 0.8);
+        URL.revokeObjectURL(img.src);
+      };
+      img.onerror = () => reject(new Error('Could not load image.'));
+      img.src = URL.createObjectURL(file);
+    });
+  }, []);
+
+  const onAttach = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (!files.length) return;
+    const accepted = files.filter((f) => /^image\/(jpe?g|png|webp)$/i.test(f.type));
+    if (accepted.length !== files.length) {
+      toast('error', 'Unsupported file type', 'Use JPG, PNG, or WebP.');
+    }
+    const urls: string[] = [];
+    for (const f of accepted) {
+      try {
+        urls.push(await resizeImage(f));
+      } catch (err) {
+        toast('error', 'Image error', err instanceof Error ? err.message : 'Could not attach image.');
+      }
+    }
+    if (urls.length) setImageDataUrls((prev) => [...prev, ...urls]);
+  }, [resizeImage]);
+
   const submit = useCallback(() => {
     const text = localDraft.trim();
     if (!text || busy) return;
     setLocalDraft('');
-    void send(text);
+    void send(text, imageDataUrls);
+    setImageDataUrls([]);
+    setAttachments([]);
     requestAnimationFrame(() => inputRef.current?.focus());
-  }, [localDraft, busy, send]);
+  }, [localDraft, busy, send, imageDataUrls]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Escape') {
@@ -392,7 +450,7 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
                   if (idx > 0 && view[idx - 1].role === 'user') {
                     const userMsg = view[idx - 1];
                     setLocalDraft(userMsg.text);
-                    void send(userMsg.text, true);
+                    void send(userMsg.text, [], true);
                   }
                 }}
                 onRetry={isLastError ? (msgId) => void retryLast() : undefined}
@@ -557,6 +615,29 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
             className="flex flex-col gap-2"
           >
             <div className="flex items-end gap-2">
+              <input
+                id="attach-image"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                onChange={onAttach}
+                className="sr-only"
+              />
+              <label
+                htmlFor="attach-image"
+                onClick={(e) => {
+                  if (!selectedModel?.capabilities?.acceptsImages || busy) return;
+                  e.stopPropagation();
+                  document.getElementById('attach-image')?.click();
+                }}
+                aria-disabled={!selectedModel?.capabilities?.acceptsImages || busy}
+                aria-label={selectedModel?.capabilities?.acceptsImages ? 'Attach photo' : 'This model can\'t read images. Choose one that does.'}
+                title={selectedModel?.capabilities?.acceptsImages ? 'Attach a JPG, PNG or WebP photo' : 'This model can\'t read images. Choose one that does.'}
+                className={`p-3 rounded-xl shrink-0 transition-colors ${selectedModel?.capabilities?.acceptsImages && !busy ? 'bg-accent hover:bg-accent-hover text-white cursor-pointer' : 'bg-bg-elevated/50 border border-border text-content-tertiary opacity-60'}`}
+              >
+                <ImageIcon className="w-4 h-4" />
+                {imageDataUrls.length > 0 && <span className="ml-1 text-[10px] font-semibold">{imageDataUrls.length}</span>}
+              </label>
               <textarea
                 ref={inputRef}
                 rows={1}
@@ -581,7 +662,7 @@ export const AssistantSurface: React.FC<AssistantSurfaceProps> = ({ layout }) =>
               ) : (
                 <button
                   type="submit"
-                  disabled={!localDraft.trim() || !hasUsableModel}
+                  disabled={((!localDraft.trim() && imageDataUrls.length === 0) || !hasUsableModel)}
                   aria-label="Send message"
                   className="p-3 rounded-xl bg-accent hover:bg-accent-hover text-white transition-colors disabled:opacity-40 shrink-0"
                 >

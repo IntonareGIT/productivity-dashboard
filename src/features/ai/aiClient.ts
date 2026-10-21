@@ -221,7 +221,7 @@ export interface ChatCompletionResult {
 
 interface WireMessage {
   role: string;
-  content?: string | null;
+  content?: string | null | Array<{ type: string; text?: string; image_url?: { url: string } }>;
   tool_calls?: { id: string; type: 'function'; function: { name: string; arguments: string } }[];
   tool_call_id?: string;
   name?: string;
@@ -263,6 +263,15 @@ function toWire(messages: ChatMessage[]): WireMessage[] {
         content: m.content,
         tool_call_id: m.toolCallId,
         name: m.name,
+      };
+    }
+    if (m.role === 'user' && m.image) {
+      return {
+        role: 'user',
+        content: [
+          { type: 'text', text: m.content },
+          { type: 'image_url', image_url: { url: m.image } },
+        ],
       };
     }
     return { role: m.role, content: m.content };

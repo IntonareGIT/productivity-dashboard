@@ -241,7 +241,7 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
                 if (idx > 0 && view[idx - 1].role === 'user') {
                   const userMsg = view[idx - 1];
                   setDraft(userMsg.text);
-                  void send(userMsg.text, true);
+                  void send(userMsg.text, [], true);
                 }
               }}
               onRetry={isLastError ? (msgId) => void retryLast() : undefined}

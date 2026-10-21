@@ -88,6 +88,7 @@ export async function appendMessage(sessionId: string, msg: ChatMessage): Promis
     toolName: msg.name ?? null,
     display: msg.display ?? null,
     reasoning: msg.reasoning ?? null,
+    image: msg.image ?? null,
     error: msg.error ?? false,
     createdAt: new Date().toISOString(),
   };
@@ -187,6 +188,7 @@ function toChatMessage(row: ChatMessageRow): ChatMessage {
   if (row.toolName) msg.name = row.toolName;
   if (row.display) msg.display = row.display;
   if (row.error) msg.error = true;
+  if (row.image) msg.image = row.image;
   return msg;
 }
 
@@ -194,6 +196,8 @@ export interface AssistantViewMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool';
   text: string;
+  /** A small inline thumbnail (<~20 KB) for an attached photo, or null. */
+  image?: string | null;
   toolName?: string;
   /**
    * Model reasoning for this turn, extracted from `<think>`-style tags or the

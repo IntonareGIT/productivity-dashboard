@@ -258,7 +258,7 @@ interface AssistantState {
 
   setOpen: (open: boolean) => void;
   ask: (text: string) => void;
-  send: (text: string, isRetry?: boolean) => Promise<void>;
+  send: (text: string, images?: string[], isRetry?: boolean) => Promise<void>;
   /** Re-send the last turn without adding a second copy of the user message. */
   retryLast: () => Promise<void>;
   /** Abort the turn in flight: fetch, stream, backoff wait and tool rounds. */
@@ -401,7 +401,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     return { model, error: null };
   }
 
-  function pushView(msg: Omit<AssistantViewMsg, 'id'>): string {
+  function pushView(msg: Omit<AssistantViewMsg, 'id'> & { image?: string | null }): string {
     const id = newId();
     set((s) => ({ view: [...s.view, { ...msg, id }] }));
     return id;
@@ -720,11 +720,10 @@ selectedModelId: null as string | null,
      * transcript never gains a duplicate of what the user already sees. Only the
      * model request is made again.
      */
-    send: async (text, isRetry = false) => {
+    send: async (text, images = [], isRetry = false) => {
       const prompt = text.trim();
       if (!prompt || get().busy) return;
-      if (!isRetry) pushView({ role: 'user', text: prompt });
-      // A fresh turn replaces any previous failure notice and any retry line.
+      if (!isRetry) pushView({ role: 'user', text: prompt, image: images[0] ?? null });      // A fresh turn replaces any previous failure notice and any retry line.
       set({ busy: true, failure: null, retryStatus: null, fallbackNotice: null });
       turnController = new AbortController();
       lastUserPrompt = prompt;
@@ -760,7 +759,8 @@ selectedModelId: null as string | null,
         }
 
         if (!isRetry) {
-          await persist(sessionId, { role: 'user', content: prompt });
+          const note = images.length ? `${prompt}\n[Photo attached]` : prompt;
+          await persist(sessionId, { role: 'user', content: note, image: null });
         }
 
         // Only the most recent messages are replayed, tool sequences intact.
@@ -913,7 +913,7 @@ selectedModelId: null as string | null,
      */
     retryLast: async () => {
       if (get().busy || !lastUserPrompt) return;
-      await get().send(lastUserPrompt, true);
+      await get().send(lastUserPrompt, [], true);
     },
 
     /**
