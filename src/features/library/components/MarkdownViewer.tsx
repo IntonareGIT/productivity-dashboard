@@ -33,33 +33,89 @@ const MarkdownViewer: React.FC<MarkdownViewerProps> = ({
   const [saving, setSaving] = useState(false);
   const [exportMenu, setExportMenu] = useState(false);
 
+  const escapeHtml = (t: string) => t.replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;" }[c]!));
+  const isArabic = (t: string) => /[\u0600-\u06ff]/.test(t);
+  const inlineMd = (t: string) => escapeHtml(t)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code style="font-family:ui-monospace,SFMono-Regular,monospace;background:#f3f3f3;padding:.1rem .3rem;border-radius:.3rem">$1</code>');
+  const blockMd = (text: string): string => {
+    const lines = text.split('\n');
+    const out: string[] = [];
+    let inList = false, inTable = false;
+    const close = () => { if (inList) { out.push('</ul>'); inList = false; } if (inTable) { out.push('</table>'); inTable = false; } };
+    for (const raw of lines) {
+      const line = raw.replace(/\r$/,'');
+      const mHead = line.match(/^(#{1,3})\s+(.*)/);
+      if (mHead) { close(); const lvl = mHead[1].length; out.push(`<h${lvl}>${inlineMd(mHead[2])}</h${lvl}>`); continue; }
+      const mTable = line.match(/^\s*\|(.+)\|\s*$/);
+      if (mTable) {
+        if (!inTable) { out.push('<table border="1" cellspacing="0" cellpadding="4">'); inTable = true; }
+        const cells = line.split('|').slice(1,-1).map((c) => c.trim());
+        const isSep = cells.every((c) => /^[-:]+$/.test(c));
+        if (isSep) continue;
+        const tag = inTable && out[out.length-1]?.startsWith('<tr>') ? 'td' : 'th';
+        out.push(`<tr>${cells.map((c)=>`<${tag}>${inlineMd(c)}</${tag}>`).join('')}</tr>`);
+        if (tag==='th') { out.push('<tr>'+cells.map(()=>'<td></td>').join('')+'</tr>'); }
+        continue;
+      }
+      close();
+      if (/^\s*[-*]\s+/.test(line)) {
+        if (!inList) { out.push('<ul>'); inList = true; }
+        out.push(`<li>${inlineMd(line.replace(/^\s*[-*]\s+/,''))}</li>`);
+        continue;
+      }
+      if (/^\s*\d+\.\s+/.test(line)) {
+        if (!inList) { out.push('<ol>'); inList = true; }
+        out.push(`<li>${inlineMd(line.replace(/^\s*\d+\.\s+/,''))}</li>`);
+        continue;
+      }
+      if (line.trim() === '') { if (!inList) out.push('<p></p>'); continue; }
+      if (!inList) out.push(`<p dir="${isArabic(line)?'rtl':'ltr'}">${inlineMd(line)}</p>`);
+    }
+    close();
+    return out.join('');
+  };
+  const markdownHtml = blockMd(markdown);
+
   const exportPdf = () => {
-    const html = `
-<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><title>${fileTitle}</title>
-<style>
-body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;line-height:1.6;padding:2rem}
-h1{font-size:1.5rem;border-bottom:1px solid #ddd;padding-bottom:.5rem}
-h2{font-size:1.25rem}h3{font-size:1.1rem}
-p{margin:.6rem 0}
-ul,ol{margin:.6rem 0 .6rem 1.5rem}
-table{border-collapse:collapse;width:100%;margin:.8rem 0}
-th,td{border:1px solid #999;padding:.4rem .6rem;text-align:left}
-code{background:#f3f3f3;padding:.1rem .3rem;border-radius:.3rem;font-family:ui-monospace,SFMono-Regular,monospace}
-pre{background:#f3f3f3;padding:.7rem;border-radius:.4rem;overflow:auto}
-blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem;color:#444}
-</style></head>
-<body>
-<h1>${fileTitle}</h1>
-<div>${markdown.replace(/^/gm, '')}</div>
-</body></html>`;
+    const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(fileTitle)}</title>
+<style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;line-height:1.6;padding:2rem}
+h1{font-size:1.5rem;border-bottom:1px solid #ddd;padding-bottom:.5rem}h2{font-size:1.25rem}h3{font-size:1.1rem}
+p{margin:.6rem 0}ul,ol{margin:.6rem 0 .6rem 1.5rem}table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #999;padding:.4rem .6rem}code{background:#f3f3f3}pre{background:#f3f3f3;padding:.7rem;border-radius:.4rem;overflow:auto}
+blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style></head>
+<body><h1>${escapeHtml(fileTitle)}</h1>${markdownHtml}</body></html>`;
     const win = window.open('', '_blank');
     if (!win) return;
     win.document.write(html);
     win.document.close();
     win.focus();
     setTimeout(() => { win.print(); win.close(); }, 250);
+    setExportMenu(false);
+  };
+
+  const downloadBlob = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fileName; document.body.appendChild(a);
+    a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  };
+
+  const escapeXml = (t: string) => t.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&apos;"}[c]!));
+  const exportWord = () => {
+    const rtl = isArabic(markdown);
+    const body = markdownHtml.replace(/<p>/g, `<p w:dir="${rtl?'rtl':'ltr'}">`);
+    const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:w="urn:schemas-microsoft-com:office:word"
+                xmlns:o="urn:schemas-microsoft-com:office:office">
+  <w:docPr><w:zoom w:percent="100"/></w:docPr>
+  <w:fonts><w:defaultFonts w:ascii="Noto Sans Arabic" w:hAnsi="Noto Sans Arabic" w:cs="Noto Sans Arabic"/></w:fonts>
+  <w:body>${body}</w:body>
+</w:wordDocument>`;
+    const blob = new Blob([xml], { type: 'application/msword' });
+    downloadBlob(blob, `${escapeHtml(fileTitle)}.doc`);
     setExportMenu(false);
   };
 
@@ -220,13 +276,10 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem;color:#
               PDF
             </button>
             <button
-              onClick={() => {
-                setExportMenu(false);
-                toast('error', 'Word export', 'The .docx exporter needs the `docx` library installed.');
-              }}
+              onClick={exportWord}
               className="w-full text-left px-3 py-2 text-content-secondary hover:bg-accent/10 hover:text-accent transition-colors"
             >
-              Word (.docx)
+              Word (.doc)
             </button>
           </div>
         )}
