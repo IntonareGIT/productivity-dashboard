@@ -26,6 +26,7 @@ import type { ToolSpec } from './types';
 import type { AiProvider } from '../../types';
 import { listProviders, setDefaultProvider } from './aiProviderRepo';
 import { getCloudAccessToken } from './cloudAuth';
+import { searchNotesIndex, type SearchResult } from './notesIndex';
 
 /**
  * Library / calendar / status functions for the assistant.
@@ -413,7 +414,7 @@ export const EXTENDED_TOOL_SPECS: ToolSpec[] = [
     function: {
       name: 'searchNotes',
       description:
-        'Search extracted notes by query. Returns matching sections with file name and heading. Searches only ready, non-orphaned notes unless the user asks otherwise.',
+        'Search extracted notes by keyword. Returns the best matching sections with file name, page range and a snippet. Searches only ready, non-empty notes. Use this when the user does not name a specific file.',
       parameters: {
         type: 'object',
         properties: {
@@ -1242,12 +1243,28 @@ async function markNoteChecked(args: Record<string, unknown>): Promise<ToolExecu
 async function searchNotes(args: Record<string, unknown>): Promise<ToolExecution> {
   const query = requireString(args, 'query');
   const includeAll = Boolean(args.includeAll);
-  
-  // TODO: Implement actual note search when extraction feature exists
+
+  const results = await searchNotesIndex(query);
+  // Only ready, non-empty notes are indexed; includeAll does not change that
+  // because failed/queued/empty notes have no searchable markdown.
+  const items = results.map((r) => ({
+    file: r.fileName,
+    pages: r.pageRange,
+    heading: r.heading,
+    snippet: r.snippet,
+    needsReview: r.needsReview,
+  }));
+  const summary = results.length
+    ? `Found ${results.length} matching section(s) for "${query}".`
+    : `No matching notes for "${query}".`;
+
   return {
     ok: true,
-    summary: `No notes found for "${query}". Extraction feature not yet implemented.`,
-    data: { query, includeAll, results: [] },
+    summary,
+    data: { query, includeAll, results: items },
+    ...(results.some((r) => r.needsReview)
+      ? { warning: 'Some results come from sections flagged as needing review; treat them as possibly incomplete.' }
+      : {}),
   };
 }
 

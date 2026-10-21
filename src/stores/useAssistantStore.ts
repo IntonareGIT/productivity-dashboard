@@ -98,6 +98,7 @@ function systemPrompt(now: Date): string {
     "- getTodaysSchedule(): today's shift, events and focus progress.",
     '- getUpcomingDeadlines(days): study deadlines and assessments due soon.',
     '- searchLibrary(query): find subjects, topics and study resources. Returns resources as { id, title, type, subject, topic } — any other tool needing a resource_id must use the "id" field from that list, never the file name.',
+    '- searchNotes(query): search all ready, extracted notes by keyword. Returns matching sections with file name, page range and a snippet. Use this FIRST whenever the user asks about note content and does not name a specific file.',
     '- getWeekSchedule(weekStartDate): resolve one week to per-day work/off/PTO, including one-off exceptions.',
     '- getFocusStats(range): total focus time for "today", "week" or "month", per subject.',
     '- getSubjectProgress(subjectId): topic counts by status plus the next upcoming assessment.',
@@ -151,6 +152,13 @@ function systemPrompt(now: Date): string {
     // "tomorrow" or "next Sunday" into the exact YYYY-MM-DD the tools require.
     dateContext(now, WEEK_STARTS_ON),
     calendarPromptSection(),
+    '',
+    'SEARCHING NOTES:',
+    '- When the user asks about note content without naming a file, call searchNotes(query) with the user\'s question.',
+    '- Answer ONLY from the search results. Cite the file name and page range for each claim.',
+    '- If nothing matches, say the information is not in your notes — do not guess or invent an answer.',
+    '- If a result is flagged as needing review, say the source may be incomplete.',
+    '',
   ].join('\n');
 }
 
