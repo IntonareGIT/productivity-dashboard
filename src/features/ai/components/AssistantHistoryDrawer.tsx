@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Check, MessageSquarePlus, Pencil, Search, Trash2, X } from 'lucide-react';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
 import { Z } from '../../../components/ui/zIndex';
+import { groupSessions, formatSessionDate } from '../sessionGroups';
 
 interface AssistantHistoryDrawerProps {
   open: boolean;
@@ -27,28 +28,13 @@ export const AssistantHistoryDrawer: React.FC<AssistantHistoryDrawerProps> = ({ 
   const [query, setQuery] = useState('');
   const [confirmId, setConfirmId] = useState<string | null>(null);
 
-  const now = new Date();
-  const todayKey = now.toDateString();
-  const yesterdayKey = new Date(now.getTime() - 86400000).toDateString();
-
   const filtered = sessions.filter((s) => {
     if (!query.trim()) return true;
     const q = query.trim().toLowerCase();
     return s.title.toLowerCase().includes(q);
   });
 
-  const groups: { label: string; sessions: typeof sessions }[] = [
-    { label: 'Today', sessions: [] },
-    { label: 'Yesterday', sessions: [] },
-    { label: 'Earlier', sessions: [] },
-  ];
-  for (const s of filtered) {
-    const d = new Date(s.updatedAt);
-    const key = d.toDateString();
-    if (key === todayKey) groups[0].sessions.push(s);
-    else if (key === yesterdayKey) groups[1].sessions.push(s);
-    else groups[2].sessions.push(s);
-  }
+  const groups = groupSessions(filtered);
 
   const handleDelete = async (id: string) => {
     await removeSession(id);
@@ -101,7 +87,11 @@ export const AssistantHistoryDrawer: React.FC<AssistantHistoryDrawerProps> = ({ 
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-4">
-          {groups.map((g) =>
+          {[
+            { label: 'Today', sessions: groups.today },
+            { label: 'Yesterday', sessions: groups.yesterday },
+            { label: 'Earlier', sessions: groups.earlier },
+          ].map((g) =>
             g.sessions.length === 0 ? null : (
               <div key={g.label}>
                 <h3 className="text-[10px] font-semibold uppercase tracking-wider text-content-tertiary px-2 mb-1">
@@ -146,7 +136,7 @@ export const AssistantHistoryDrawer: React.FC<AssistantHistoryDrawerProps> = ({ 
                             >
                               <span className="block text-xs text-content-primary truncate">{s.title}</span>
                               <span className="block text-[10px] text-content-tertiary">
-                                {new Date(s.updatedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                {formatSessionDate(s.updatedAt)}
                               </span>
                             </button>
                             <button

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { db } from '../../../db/db';
 import {
   ChevronLeft, ChevronRight, Download, Loader2, Maximize2, Minimize2,
   Minus, Plus, RotateCw, TriangleAlert,
@@ -25,6 +26,8 @@ interface PdfViewerProps {
   url?: string;
   /** Accessible label, e.g. the resource title. */
   title?: string;
+  /** The file's resource id, used to persist/restore the last page read. */
+  resourceId?: string;
   /** `inline` sits in the Library modal; `standalone` fills its host height. */
   variant?: 'inline' | 'standalone';
   /**
@@ -150,16 +153,21 @@ const isCancel = (e: unknown) =>
  * lands after a newer render has started.
  */
 export const PdfViewer: React.FC<PdfViewerProps> = ({
-  blob, url, title, variant = 'inline', onDownload, onRegisterControls,
+  blob, url, title, resourceId, variant = 'inline', onDownload, onRegisterControls,
 }) => {
   const docRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
   // In pdf.js v6 destroy() lives on the loading task, so the task is what we
   // must abort on cleanup — holding only the document would leak the worker.
   const taskRef = useRef<pdfjsLib.PDFDocumentLoadingTask | null>(null);
+  // Debounces writes of the last-read page so scrolling doesn't hit the DB on
+  // every frame; flushed on unmount so closing a pane still saves.
+  const savePageTimeoutRef = useRef<number | null>(null);
 
   const [pageCount, setPageCount] = useState(0);
   const [page, setPage] = useState(1);
   const [pageInput, setPageInput] = useState('1');
+  /** Page the viewer resumed from; shown in a small banner for 3 seconds. */
+  const [resumePage, setResumePage] = useState<number | null>(null);
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [fullScreen, setFullScreen] = useState(false);
@@ -829,6 +837,24 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         docRef.current = doc;
         setPageCount(doc.numPages);
         setStatus('ready');
+        // Restore the last page read for this file, clamped to the page count.
+        if (resourceId) {
+          const saved = await db.resources.get(resourceId);
+          const last = saved?.lastPage;
+          const total = doc.numPages;
+          const start = last != null && last >= 1 && last <= total ? last : 1;
+          if (!cancelled) {
+            setPage(start);
+            setPageInput(String(start));
+            if (last != null && last >= 1 && last <= total && last !== 1) {
+              setResumePage(last);
+              resumeTargetRef.current = last;
+              resumeDoneRef.current = false;
+              // Auto-hide the resume banner after 3 seconds.
+              window.setTimeout(() => setResumePage(null), 3000);
+            }
+          }
+        }
       } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : 'Could not read this PDF.');
@@ -844,6 +870,34 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       void task?.destroy();
     };
   }, [blob, url]);
+
+  // Persist the last-read page for this file, debounced so scrolling does not
+  // write on every frame. Flushed immediately on unmount so closing a pane (or
+  // the split view) still saves the position.
+  useEffect(() => {
+    if (!resourceId) return;
+    if (savePageTimeoutRef.current !== null) {
+      window.clearTimeout(savePageTimeoutRef.current);
+    }
+    savePageTimeoutRef.current = window.setTimeout(() => {
+      savePageTimeoutRef.current = null;
+      void db.resources.update(resourceId, {
+        lastPage: page,
+        lastPageAt: new Date().toISOString(),
+      });
+    }, 500);
+    return () => {
+      if (savePageTimeoutRef.current !== null) {
+        window.clearTimeout(savePageTimeoutRef.current);
+        savePageTimeoutRef.current = null;
+      }
+      // Flush on unmount so the position is saved when the pane/viewer closes.
+      void db.resources.update(resourceId, {
+        lastPage: page,
+        lastPageAt: new Date().toISOString(),
+      });
+    };
+  }, [resourceId, page]);
 
   const goToPage = useCallback((n: number) => {
     const total = pageCount || 1;
@@ -1307,6 +1361,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     setPageSizes({});
     renderTasksRef.current.clear();
     renderTokensRef.current.clear();
+    resumeTargetRef.current = null;
+    resumeDoneRef.current = false;
     // Disarm snippet tool when the file changes.
     setSnippetOn(false);
   }, [blob, url]);
@@ -1414,6 +1470,10 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // One ref per page in the stack, so nav can scroll the target page into view
   // rather than guessing an offset.
   const pageElsRef = useRef<Map<number, HTMLDivElement>>(new Map());
+  /** The page the viewer must scroll to after it is measured (resume / start over). */
+  const resumeTargetRef = useRef<number | null>(null);
+  /** Set once the deferred resume scroll has completed, so it never re-applies. */
+  const resumeDoneRef = useRef(false);
   const setPageEl = useCallback((n: number) => (el: HTMLDivElement | null) => {
     if (el) pageElsRef.current.set(n, el);
     else pageElsRef.current.delete(n);
@@ -1424,6 +1484,27 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     const el = pageElsRef.current.get(n);
     if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }, []);
+
+  // Deferred resume scroll: wait until the target page exists in the DOM and has
+  // a measured size, then scroll it into view and align to its real offset.
+  useEffect(() => {
+    const target = resumeTargetRef.current;
+    if (target === null || resumeDoneRef.current || !pageSizes[target]) return;
+    const el = pageElsRef.current.get(target);
+    if (!el) return;
+    const frame = requestAnimationFrame(() => {
+      el.scrollIntoView({ block: 'start', behavior: 'auto' });
+      const shell = shellRef.current;
+      const entry = layout[target - 1];
+      if (shell && entry) {
+        const want = entry.top;
+        if (Math.abs(shell.scrollTop - want) > 1) shell.scrollTop = want;
+      }
+      resumeDoneRef.current = true;
+      resumeTargetRef.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [page, pageSizes, layout]);
 
   const onNextPage = useCallback(() => {
     const next = Math.min(pageCount || 1, page + 1);
@@ -1653,6 +1734,20 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
           <div className="h-11 px-3 flex items-center gap-2 min-w-max justify-between">
             {toolbar}
           </div>
+        </div>
+      )}
+
+      {resumePage != null && (
+        <div className="flex-shrink-0 w-full bg-bg-elevated/60 border-b border-border px-4 py-2 text-[11px]">
+          <p className="flex items-center gap-2 text-content-secondary">
+            Resumed from page <span className="font-semibold text-content-primary">{resumePage}</span>
+            <button
+              onClick={() => { resumeTargetRef.current = 1; resumeDoneRef.current = false; setPage(1); setPageInput('1'); setResumePage(null); }}
+              className="ml-2 text-xs text-accent hover:text-accent-hover underline underline-offset-4"
+            >
+              Start from beginning
+            </button>
+          </p>
         </div>
       )}
 

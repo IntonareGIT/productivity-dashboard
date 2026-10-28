@@ -4,6 +4,7 @@ import { Timer, Play, Pause, RotateCcw, SkipForward } from 'lucide-react';
 import { usePomodoroStore, type PomodoroPhase } from '../../stores/usePomodoroStore';
 import { db } from '../../db/db';
 import { SessionLog } from './components/SessionLog';
+import { PomodoroDots } from '../../components/layout/PomodoroDots';
 
 const PHASE_LABELS: Record<PomodoroPhase, string> = {
   focus: 'Focus',
@@ -31,6 +32,7 @@ export const FocusPage: React.FC = () => {
     totalDuration,
     currentPhase,
     completedFocusCycles,
+    cycleActive,
     currentSubject,
     settings,
     lastEvent,
@@ -44,6 +46,8 @@ export const FocusPage: React.FC = () => {
     focusTopicId,
     setFocusTarget,
   } = usePomodoroStore();
+
+  const [confirmStop, setConfirmStop] = React.useState(false);
 
   const subjects = useLiveQuery(() => db.subjects.toArray()) ?? [];
   const allTopics = useLiveQuery(() => db.topics.toArray()) ?? [];
@@ -152,16 +156,14 @@ export const FocusPage: React.FC = () => {
               {statusText} · {PHASE_LABELS[currentPhase]}
             </span>
             {/* Cycle progress dots */}
-            <span className="flex items-center gap-1.5 mt-3">
-              {Array.from({ length: settings.cyclesBeforeLongBreak }).map((_, i) => (
-                <span
-                  key={i}
-                  className={`w-2 h-2 rounded-full ${
-                    i < completedFocusCycles ? 'bg-accent' : 'bg-bg-surface-elevated'
-                  }`}
-                />
-              ))}
-            </span>
+            <PomodoroDots
+              completed={completedFocusCycles}
+              total={settings.cyclesBeforeLongBreak}
+              isCurrentActive={
+                currentPhase === 'focus' && (isRunning || timeLeft < totalDuration)
+              }
+              className="mt-3"
+            />
           </div>
         </div>
 
@@ -211,7 +213,13 @@ export const FocusPage: React.FC = () => {
         {/* Controls */}
         <div className="flex items-center justify-center gap-3 mt-5 w-full">
           <button
-            onClick={resetTimer}
+            onClick={() => {
+              if (cycleActive) {
+                setConfirmStop(true);
+              } else {
+                resetTimer();
+              }
+            }}
             aria-label="Reset timer"
             className="p-4 rounded-2xl border border-border bg-bg-elevated/50 hover:bg-bg-elevated text-content-secondary hover:text-content-primary transition-colors"
           >
@@ -244,6 +252,39 @@ export const FocusPage: React.FC = () => {
             <SkipForward className="w-5 h-5" />
           </button>
         </div>
+
+        {confirmStop && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div
+              className="fixed inset-0 bg-black/50"
+              onClick={() => setConfirmStop(false)}
+              aria-hidden="true"
+            />
+            <div className="relative bg-bg-surface border border-border rounded-xl p-4 shadow-xl w-full max-w-sm">
+              <p className="text-sm text-content-primary mb-3">
+                End this Pomodoro cycle? Block {completedFocusCycles + 1} of{' '}
+                {settings.cyclesBeforeLongBreak} will be lost.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setConfirmStop(false)}
+                  className="px-3 py-2 rounded-lg text-content-secondary hover:bg-bg-elevated transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setConfirmStop(false);
+                    resetTimer();
+                  }}
+                  className="px-3 py-2 rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors"
+                >
+                  End cycle
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {lastEvent && (
           <p className="text-xs text-content-tertiary mt-4 text-center">{lastEvent}</p>

@@ -403,3 +403,48 @@ html.light {
 .assistant-thinking-dot {
   animation: assistant-thinking-dot 1.2s ease-in-out infinite;
 }
+
+/* ---- Focus timer status tokens -------------------------------------------
+   Status color by timer mode, per theme. Focus uses the theme accent token;
+   short break and long break use dedicated calm tokens. All three are
+   distinct within every theme (dark and light). */
+[data-theme="studying"] {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #10b981;
+  --timer-long-break: #8b5cf6;
+}
+html[data-theme="studying"].light {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #059669;
+  --timer-long-break: #7c3aed;
+}
+[data-theme="working"] {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #22c55e;
+  --timer-long-break: #3b82f6;
+}
+html[data-theme="working"].light {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #16a34a;
+  --timer-long-break: #2563eb;
+}
+[data-theme="researching"] {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #22c55e;
+  --timer-long-break: #6366f1;
+}
+html[data-theme="researching"].light {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #16a34a;
+  --timer-long-break: #4f46e5;
+}
+[data-theme="playing"] {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #22c55e;
+  --timer-long-break: #8b5cf6;
+}
+html[data-theme="playing"].light {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #16a34a;
+  --timer-long-break: #7c3aed;
+}

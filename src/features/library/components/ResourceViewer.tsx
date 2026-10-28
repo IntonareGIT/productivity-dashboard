@@ -279,6 +279,7 @@ export const ResourceViewer: React.FC<ResourceViewerProps> = ({
                   blob={srcUrl ? null : resource.blob}
                   url={srcUrl ?? undefined}
                   title={resource.title}
+                  resourceId={resource.id}
                   variant={embedded ? 'standalone' : 'inline'}
                   onDownload={download}
                   onRegisterControls={onRegisterPdfControls}

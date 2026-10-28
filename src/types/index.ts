@@ -110,6 +110,10 @@ export interface Resource {
   dueDate?: string | null; // ISO 8601 YYYY-MM-DD
   completed?: boolean;
   createdAt: string;       // ISO 8601
+  /** Last page the user was reading in the PDF viewer (per file). */
+  lastPage?: number;
+  /** ISO-8601 timestamp when `lastPage` was last saved. */
+  lastPageAt?: string | null;
 }
 
 /**
