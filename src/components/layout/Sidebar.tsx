@@ -5,6 +5,7 @@ import {
   CalendarDays, 
   CalendarClock, 
   Timer, 
+  ListTodo,
   Settings2,
   ChevronLeft,
   ChevronRight,
@@ -15,7 +16,7 @@ import { usePomodoroStore } from '../../stores/usePomodoroStore';
 import { AssistantSidebarList } from './AssistantSidebarList';
 import { FocusTimerWidget } from './FocusTimerWidget';
 
-export type NavTab = 'dashboard' | 'library' | 'calendar' | 'shifts' | 'focus' | 'settings' | 'about';
+export type NavTab = 'dashboard' | 'library' | 'calendar' | 'todos' | 'shifts' | 'focus' | 'settings' | 'about';
 
 interface SidebarProps {
   activeTab: NavTab;
@@ -39,6 +40,7 @@ export const navItems: {
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'library', label: 'Library', icon: BookMarked },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
+  { id: 'todos', label: 'To-do', icon: ListTodo },
   { id: 'shifts', label: 'Shifts', icon: CalendarClock },
   { id: 'focus', label: 'Focus', icon: Timer },
   { id: 'settings', label: 'Settings', icon: Settings2 },

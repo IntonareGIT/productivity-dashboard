@@ -40,6 +40,7 @@ import {
   describeCalendarToolCall,
   executeCalendarTool,
 } from './toolsCalendar';
+import { TODO_TOOL_SPECS, TODO_TOOL_NAMES, describeTodoToolCall, executeTodoTool } from './toolsTodos';
 import { isAmbiguous, resolveItem } from './toolResolve';
 import { parentOf } from '../library/groupTree';
 import type { ToolSpec } from './types';
@@ -73,6 +74,11 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   'addPTO',
   'addOneOffShiftException',
   'deleteCalendarEvent',
+  // To-do list: add/edit/complete run immediately; delete also asks (below).
+  'addTodo',
+  'updateTodo',
+  'completeTodo',
+  'deleteTodo',
   // Files and extraction
   'queueExtraction',
   'retryExtraction',
@@ -99,6 +105,11 @@ export const CONFIRMATION_TOOL_NAMES: ReadonlySet<string> = new Set([
   'addPTO',
   'addOneOffShiftException',
   'deleteCalendarEvent',
+  // To-do list: add/edit/complete run immediately; delete also asks (below).
+  'addTodo',
+  'updateTodo',
+  'completeTodo',
+  'deleteTodo',
   // Files and extraction - confirm because they use quota
   'startExtraction',
   'readFilePages',
@@ -243,6 +254,7 @@ export const TOOL_SPECS: ToolSpec[] = [
   // periods, day panel, assessments). Spread from one list so a new calendar
   // tool cannot be added without being registered for the model too.
   ...CALENDAR_TOOL_SPECS,
+  ...TODO_TOOL_SPECS,
 ];
 
 /* ---------------- Read-only functions ---------------- */
@@ -826,6 +838,7 @@ export function describeToolCall(name: string, argsJson: string): string {
     default:
       if (LIBRARY_TOOL_NAMES.has(name)) return describeLibraryToolCall(name, args);
       if (CALENDAR_TOOL_NAMES.includes(name)) return describeCalendarToolCall(name, argsJson);
+      if (TODO_TOOL_NAMES.includes(name)) return describeTodoToolCall(name, argsJson);
       return describeExtendedToolCall(name, args);
   }
 }
@@ -867,6 +880,11 @@ export async function executeTool(name: string, argsJson: string): Promise<ToolE
       // Library write / delete functions live in toolsLibrary.ts.
       const library = await executeLibraryTool(name, args);
       if (library) return library;
+      // To-do list tools live in toolsTodos.ts.
+      if (TODO_TOOL_NAMES.includes(name)) {
+        const todo = await executeTodoTool(name, args);
+        if (todo) return todo;
+      }
       // Library / calendar / status functions live in toolsExtended.ts.
       const extended = await executeExtendedTool(name, args);
       if (extended) return extended;
