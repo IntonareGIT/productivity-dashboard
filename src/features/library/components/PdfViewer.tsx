@@ -15,6 +15,26 @@ import { Scissors } from 'lucide-react';
 // a hashed asset URL, so this works in both dev and the production build.
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
+/**
+ * Decoder assets for pdf.js. pdf.js 6 decodes JBIG2 and JPEG2000 images (the
+ * format most scanner apps use for black-and-white pages) and ICC colour
+ * profiles with WebAssembly modules that it loads from `wasmUrl`. With no
+ * `wasmUrl` those images are silently skipped, so a valid scanned PDF renders
+ * as an almost blank page. `cMapUrl` and `standardFontDataUrl` do the same for
+ * CJK fonts and un-embedded standard fonts. The files are copied out of
+ * `pdfjs-dist` into `dist/pdfjs/` by the `copyPdfjsAssets` plugin in
+ * vite.config.ts, so they always match the installed pdf.js version.
+ */
+const pdfjsAsset = (dir: string): string =>
+  new URL(`/pdfjs/${dir}/`, document.baseURI).href;
+const PDFJS_ASSET_OPTIONS = {
+  wasmUrl: pdfjsAsset('wasm'),
+  cMapUrl: pdfjsAsset('cmaps'),
+  cMapPacked: true,
+  standardFontDataUrl: pdfjsAsset('standard_fonts'),
+  iccUrl: pdfjsAsset('iccs'),
+};
+
 interface PdfViewerProps {
   /** The stored PDF bytes. Mutually exclusive with `url`. */
   blob?: Blob;
@@ -829,8 +849,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         // A remote URL (R2-staged file) is loaded straight from the address —
         // pdf.js streams it, so no local copy is ever needed.
         const task = blob
-          ? pdfjsLib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) })
-          : pdfjsLib.getDocument({ url: url! });
+          ? pdfjsLib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()), ...PDFJS_ASSET_OPTIONS })
+          : pdfjsLib.getDocument({ url: url!, ...PDFJS_ASSET_OPTIONS });
         taskRef.current = task;
         const doc = await task.promise;
         if (cancelled) { void task.destroy(); return; }
