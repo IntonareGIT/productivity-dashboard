@@ -16,6 +16,7 @@ import type {
   PomodoroSettingsRow,
   ChatSession,
   ChatMessageRow,
+  InstinctUpdate,
   UiState
 } from '../types';
 import { newId } from '../utils/id';
@@ -63,6 +64,7 @@ export class ProductivityDB extends Dexie {
   chatSessions!: Table<ChatSession, string>;
   chatMessages!: Table<ChatMessageRow, string>;
   uiState!: Table<UiState, string>;
+  instinctUpdates!: Table<InstinctUpdate, string>;
   /**
    * Local cache of R2 blobs, keyed by r2Key. Never synced: it is a pure
    * convenience so re-opening a file in the same session (or after a reload)
@@ -504,10 +506,33 @@ export class ProductivityDB extends Dexie {
       .stores({
         notes: 'fileId, status, updatedAt',
       });
+
+    /**
+     * v18: the "From Instinct" feed shown on the dashboard homepage.
+     *
+     * ADDITIVE ONLY. New `instinctUpdates` table, one row per posted summary
+     * or update; the card renders them newest first. Written from the site
+     * itself (the card's composer, or the console hook below), so Instinct can
+     * post the daily summary without a code deploy.
+     */
+    this.version(18)
+      .stores({
+        instinctUpdates: 'id, createdAt',
+      });
   }
 }
 
 export const db = new ProductivityDB();
+
+/**
+ * Console hook so Instinct's browser session can post to the From Instinct
+ * feed (and inspect synced state) without driving the UI:
+ *   __db.instinctUpdates.add({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), kind: 'daily', title: '...', body: '...' })
+ * Dexie Cloud syncs the write like any UI edit. Not used by the app itself.
+ */
+if (typeof window !== 'undefined') {
+  (window as unknown as { __db?: ProductivityDB }).__db = db;
+}
 
 /**
  * Enable cross-device sync.
