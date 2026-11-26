@@ -19,7 +19,7 @@ import { GroupTree } from './GroupTree';
 import MarkdownViewer from './MarkdownViewer';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
 import { startExtraction } from '../../../features/ai/extractionRunner';
-import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, moveGroup, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes, saveNote, reorderResources } from '../libraryRepo';
+import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, moveGroup, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes, saveNote, reorderResources, reorderTopics } from '../libraryRepo';
 import type { Assessment, Note, Resource, ResourceGroup, Subject, Topic, TopicStatus } from '../../../types';
 
 /**
@@ -574,6 +574,25 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
     await reorderResources(ids);
   }, [resources]);
 
+  /** Move a topic one place up/down in the subject's topic list. */
+  const moveTopicBy = useCallback(async (topic: Topic, delta: -1 | 1) => {
+    const ids = sortedTopics.map((t) => t.id);
+    const i = ids.indexOf(topic.id);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    await reorderTopics(ids);
+  }, [sortedTopics]);
+
+  /** Sort the topics A to Z (natural: "2-x" before "10-x"). Titles are not changed. */
+  const sortTopicsByName = useCallback(async () => {
+    const ids = [...sortedTopics]
+      .sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' }))
+      .map((t) => t.id);
+    await reorderTopics(ids);
+    toast('success', 'Sorted', 'Topics are now A to Z.');
+  }, [sortedTopics]);
+
   /** Sort every sibling set of the open topic A to Z (natural: "2" before "10"). */
   const sortTopicByName = useCallback(async () => {
     if (!selectedTopic) return;
@@ -700,16 +719,25 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
         title="Topics"
         subtitle="Select a topic to see its notes + resources"
         action={
-          <button onClick={() => setAddingTopic(true)} className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl bg-accent hover:bg-accent-hover text-white text-xs font-semibold transition-colors">
-            <Plus className="w-3.5 h-3.5" /> Topic
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void sortTopicsByName()}
+              className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary transition-colors"
+              title="Sort the topics A to Z. You can still move single topics with the arrows."
+            >
+              <ArrowDownAZ className="w-3.5 h-3.5" /> Sort A to Z
+            </button>
+            <button onClick={() => setAddingTopic(true)} className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl bg-accent hover:bg-accent-hover text-white text-xs font-semibold transition-colors">
+              <Plus className="w-3.5 h-3.5" /> Topic
+            </button>
+          </div>
         }
       >
         {sortedTopics.length === 0 ? (
           <p className="text-xs text-content-tertiary py-4 text-center">Creating the first topic…</p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-            {sortedTopics.map((topic) => {
+            {sortedTopics.map((topic, topicIdx) => {
               const meta = STATUS_META[topic.status];
               const count = resources.filter((r) => r.topicId === topic.id).length;
               const active = selectedTopic?.id === topic.id;
@@ -723,6 +751,8 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
                     <p className="text-[11px] text-content-tertiary">{count} resource{count === 1 ? '' : 's'}</p>
                   </button>
                   <div className="flex items-center gap-1 mt-2">
+                    {topicIdx > 0 && <button onClick={() => void moveTopicBy(topic, -1)} aria-label="Move up" title="Move up" className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"><ArrowUp className="w-3.5 h-3.5" /></button>}
+                    {topicIdx < sortedTopics.length - 1 && <button onClick={() => void moveTopicBy(topic, 1)} aria-label="Move down" title="Move down" className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"><ArrowDown className="w-3.5 h-3.5" /></button>}
                     <button onClick={() => setEditingTopic(topic)} aria-label="Edit topic" className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
                     <button
                       onClick={() => (deleteTopicId === topic.id ? void deleteTopicCascade(topic.id).then(() => setDeleteTopicId(null)) : setDeleteTopicId(topic.id))}

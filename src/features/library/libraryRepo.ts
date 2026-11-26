@@ -1036,6 +1036,21 @@ export async function reorderResources(orderedIds: string[]): Promise<void> {
   });
 }
 
+/**
+ * Persist a manual order for the topics of ONE subject. Takes the full ordered
+ * id list; each topic gets order = its index. Only `order` is written: titles
+ * (e.g. "1-Introduction") and every other field are left exactly as they are.
+ */
+export async function reorderTopics(orderedIds: string[]): Promise<void> {
+  if (orderedIds.length === 0) return;
+  await db.transaction('rw', db.topics, async () => {
+    for (let i = 0; i < orderedIds.length; i += 1) {
+      const t = await db.topics.get(orderedIds[i]);
+      if (t && t.order !== i) await db.topics.put({ ...t, order: i });
+    }
+  });
+}
+
 /** Move several resources at once, skipping any that would cross a subject. */
 export async function moveResourcesToGroup(resourceIds: string[], groupId: string | null): Promise<void> {
   if (resourceIds.length === 0) return;
@@ -1189,5 +1204,4 @@ export async function measureStorage(): Promise<{
     } : undefined,
   };
 }
-
 
