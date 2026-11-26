@@ -238,6 +238,8 @@ export interface PomodoroSession {
   focusSubject: string;    // free-text label (kept; prefilled from subject/topic picker)
   subjectId?: string | null; // optional FK -> Subject.id (v5)
   topicId?: string | null;   // optional FK -> Topic.id (v5)
+  /** Optional FK -> TodoItem.id picked as the session's task (v19). Never auto-completed. */
+  taskId?: string | null;
   durationMinutes: number;
   sessionType: 'focus' | 'short_break' | 'long_break';
   completedAt: string;     // ISO 8601
@@ -418,4 +420,31 @@ export interface InstinctUpdate {
   title: string;
   /** Plain text body; line breaks are preserved when rendered. */
   body: string;
+}
+
+/**
+ * One task on the to-do list (schema v19).
+ *
+ * A task stands alone or links to one spot in the Library: a whole subject, a
+ * topic, or a specific resource. topicId implies its subject; resourceId sits
+ * under a topic. All links are optional so quick brain-dumps stay cheap.
+ */
+export interface TodoItem {
+  id: string;
+  title: string;
+  done: boolean;
+  /** ISO 8601 creation time. */
+  createdAt: string;
+  /** ISO 8601 completion time; cleared if the task is reopened. */
+  completedAt?: string | null;
+  /** Optional due date, YYYY-MM-DD. */
+  dueDate?: string | null;
+  /** Optional FK -> Subject.id. */
+  subjectId?: string | null;
+  /** Optional FK -> Topic.id. */
+  topicId?: string | null;
+  /** Optional FK -> Resource.id. */
+  resourceId?: string | null;
+  /** Manual ordering within the open list; lower sorts first. */
+  sortIndex?: number;
 }

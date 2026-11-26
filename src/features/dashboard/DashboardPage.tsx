@@ -8,6 +8,7 @@ import { WeeklyHoursCard } from './components/WeeklyHoursCard';
 import { StatsCard } from './components/StatsCard';
 import { SignInBanner } from './components/SignInBanner';
 import { InstinctUpdatesCard } from './components/InstinctUpdatesCard';
+import { TodoCard } from './components/TodoCard';
 import type { NavTab } from '../../components/layout/Sidebar';
 import { format } from 'date-fns';
 import { occursOn } from '../calendar/recurrence';
@@ -83,6 +84,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, fill =
         {/* Full-width: the From Instinct feed (daily summary + updates) */}
         <div className="md:col-span-3">
           <InstinctUpdatesCard />
+        <TodoCard onNavigateTodos={() => onNavigate('todos')} />
         </div>
 
         {/* Small card: Pomodoro mini-widget */}

@@ -45,12 +45,24 @@ export const FocusPage: React.FC = () => {
     focusSubjectId,
     focusTopicId,
     setFocusTarget,
+    focusTaskId,
+    setFocusTask,
   } = usePomodoroStore();
 
   const [confirmStop, setConfirmStop] = React.useState(false);
 
   const subjects = useLiveQuery(() => db.subjects.toArray()) ?? [];
   const allTopics = useLiveQuery(() => db.topics.toArray()) ?? [];
+  const allTodos = useLiveQuery(() => db.todos.toArray(), []) ?? [];
+  // Optional task for the session: open tasks only; ones linked to the picked
+  // subject/topic float to the top. Never auto-completed - ticking stays manual.
+  const openTodos = allTodos
+    .filter((t) => !t.done)
+    .sort((a, b) => {
+      const score = (t: typeof a) =>
+        (focusTopicId && t.topicId === focusTopicId ? 0 : focusSubjectId && t.subjectId === focusSubjectId ? 1 : 2);
+      return score(a) - score(b) || a.createdAt.localeCompare(b.createdAt);
+    });
   const selectedSubject = focusSubjectId ? subjects.find((s) => s.id === focusSubjectId) ?? null : null;
   const subjectTopics = focusSubjectId
     ? allTopics.filter((t) => t.subjectId === focusSubjectId).sort((a, b) => a.order - b.order)
@@ -197,6 +209,19 @@ export const FocusPage: React.FC = () => {
               ))}
             </select>
           </div>
+          {openTodos.length > 0 && (
+            <select
+              value={focusTaskId ?? ''}
+              onChange={(e) => setFocusTask(e.target.value || null)}
+              aria-label="Focus task (optional)"
+              className="w-full bg-bg-elevated/50 border border-border rounded-xl px-3 py-3 text-sm text-content-primary outline-none focus:border-accent"
+            >
+              <option value="">No task (optional)</option>
+              {openTodos.map((t) => (
+                <option key={t.id} value={t.id}>{t.title}</option>
+              ))}
+            </select>
+          )}
           <input
             value={currentSubject}
             onChange={(e) => setSubject(e.target.value)}

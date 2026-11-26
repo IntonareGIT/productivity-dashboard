@@ -16,7 +16,7 @@ import type {
   PomodoroSettingsRow,
   ChatSession,
   ChatMessageRow,
-  InstinctUpdate,
+  InstinctUpdate, TodoItem,
   UiState
 } from '../types';
 import { newId } from '../utils/id';
@@ -65,6 +65,7 @@ export class ProductivityDB extends Dexie {
   chatMessages!: Table<ChatMessageRow, string>;
   uiState!: Table<UiState, string>;
   instinctUpdates!: Table<InstinctUpdate, string>;
+  todos!: Table<TodoItem, string>;
   /**
    * Local cache of R2 blobs, keyed by r2Key. Never synced: it is a pure
    * convenience so re-opening a file in the same session (or after a reload)
@@ -518,6 +519,17 @@ export class ProductivityDB extends Dexie {
     this.version(18)
       .stores({
         instinctUpdates: 'id, createdAt',
+      });
+
+    /**
+     * v19: the to-do list. ADDITIVE ONLY. New `todos` table, one row per task;
+     * optional links point at a library subject/topic/resource. The Focus page
+     * offers open tasks as an optional session target alongside the existing
+     * subject picker.
+     */
+    this.version(19)
+      .stores({
+        todos: 'id, done, createdAt, dueDate, subjectId, topicId',
       });
   }
 }

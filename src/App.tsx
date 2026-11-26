@@ -13,6 +13,7 @@ import {
 import { useSplitCommandStore } from './stores/useSplitCommandStore';
 import { LibraryPage } from './features/library/LibraryPage';
 import { CalendarPage } from './features/calendar/CalendarPage';
+import { TodoPage } from './features/todos/TodoPage';
 import { ShiftsPage } from './features/shifts/ShiftsPage';
 import { FocusPage } from './features/focus/FocusPage';
 import { SettingsPage } from './features/settings/SettingsPage';
@@ -284,6 +285,8 @@ export const App: React.FC = () => {
         return <LibraryPage onSplitWithNotes={openPdfWithNotes} />;
       case 'calendar':
         return <CalendarPage quickAddNonce={quickAddEventNonce} />;
+      case 'todos':
+        return <TodoPage />;
       case 'shifts':
         return <ShiftsPage />;
       case 'focus':
