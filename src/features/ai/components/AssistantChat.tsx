@@ -1,6 +1,24 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Bot, Check, SendHorizonal, TriangleAlert } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Bot, Check, Info, RefreshCw, SendHorizonal, Square, TriangleAlert, Zap, Key, ExternalLink, Copy, RotateCcw, Clock, Settings, Sparkles } from 'lucide-react';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
+import { ThoughtBlock } from './ThoughtBlock';
+import { AssistantMessage, AssistantViewMsg } from './AssistantMessage';
+
+/** Roughly six lines at the composer's font size; past this it scrolls. */
+const MAX_COMPOSER_HEIGHT_PX = 132;
+
+/**
+ * True when the primary input is touch rather than a hardware keyboard.
+ *
+ * Checked at keydown time rather than cached at mount, because a tablet with a
+ * folio keyboard can report both. `pointer: coarse` is the reliable signal that
+ * there is no physical Enter key; a touch-capable laptop still has one, so
+ * `maxTouchPoints` alone would wrongly turn Enter into a newline there.
+ */
+function isTouchDevice(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia?.('(pointer: coarse)').matches === true;
+}
 
 interface AssistantChatProps {
   onOpenSettings: () => void;
@@ -26,14 +44,144 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
   const busy = useAssistantStore((s) => s.busy);
   const view = useAssistantStore((s) => s.view);
   const pending = useAssistantStore((s) => s.pending);
+  const activeTool = useAssistantStore((s) => s.activeTool);
   const configured = useAssistantStore((s) => s.providerReady);
+  const retryStatus = useAssistantStore((s) => s.retryStatus);
+  const failure = useAssistantStore((s) => s.failure);
+  const fallbackNotice = useAssistantStore((s) => s.fallbackNotice);
+  const providerLabel = useAssistantStore((s) => s.providerLabel);
+  const models = useAssistantStore((s) => s.models);
+  const selectedModelId = useAssistantStore((s) => s.selectedModelId);
+  const setModel = useAssistantStore((s) => s.setModel);
   const setOpen = useAssistantStore((s) => s.setOpen);
   const send = useAssistantStore((s) => s.send);
+  const stop = useAssistantStore((s) => s.stop);
+  const retryLast = useAssistantStore((s) => s.retryLast);
   const confirmPending = useAssistantStore((s) => s.confirmPending);
   const cancelPending = useAssistantStore((s) => s.cancelPending);
 
-  const [draft, setDraft] = useState('');
+  const draft = useAssistantStore((s) => s.draft);
+  const setDraft = useAssistantStore((s) => s.setDraft);
+  const [showDetails, setShowDetails] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // The composer is enabled when the SELECTED model has a key.
+  // The store already filters models to only those with hasKey, so we just
+  // check if the selected model exists in that filtered list.
+  const selectedModel = models.find((m) => m.id === selectedModelId) ?? null;
+  const hasUsableModel = Boolean(selectedModel);
+
+  /**
+   * Restore the transcript scroll position after a remount.
+   *
+   * The panel unmounts this whole component when it closes, so the browser's
+   * scroll position is destroyed with it. Without this, reopening a long
+   * conversation dumps the user back at the very top of their own transcript.
+   * The offset is only restored once the messages have actually rendered, or
+   * the list would be empty and the assignment would be a no-op.
+   */
+  useEffect(() => {
+    const el = listRef.current;
+    const top = useAssistantStore.getState().listScrollTop;
+    if (!el || top <= 0) return;
+    // After paint, so the transcript has its final height.
+    const raf = requestAnimationFrame(() => {
+      if (listRef.current) listRef.current.scrollTop = top;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [view.length]);
+
+  /** Remember the offset as the user scrolls, so the restore above has something. */
+  const onScroll = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    useAssistantStore.getState().setListScrollTop(el.scrollTop);
+  }, []);
+
+  /**
+   * Grow with the content, up to ~6 lines, then scroll.
+   *
+   * The height is reset to `auto` before measuring, because a textarea will not
+   * shrink back on its own once it has grown. `scrollHeight` is the content
+   * height; clamping it with `maxHeight` + `overflow-y-auto` is what makes the
+   * box scroll instead of continuing to grow forever.
+   */
+  const resize = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, MAX_COMPOSER_HEIGHT_PX)}px`;
+  }, []);
+
+  useEffect(resize, [draft, resize]);
+
+  /**
+   * Send, then keep focus so the next message can be typed straight away.
+   *
+   * Focus is restored after the send because clearing the draft and the store
+   * updating can otherwise leave the caret in the transcript.
+   */
+  const submit = useCallback(() => {
+    const text = draft.trim();
+    if (!text || busy) return;
+    setDraft('');
+    void send(text);
+    // Focus after paint, so it lands on the now-empty, enabled box.
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [draft, busy, send]);
+
+  /**
+   * Enter sends, Shift+Enter inserts a newline.
+   *
+   * Three cases matter and each is easy to get wrong:
+   *
+   * 1. **IME composition.** While composing (a Japanese or Chinese keyboard
+   *    picking a candidate), Enter means "accept this candidate", NOT "send".
+   *    `event.isComposing` is the only reliable signal; `keyCode === 229` is
+   *    the legacy fallback for browsers that report it inconsistently.
+   * 2. **Shift+Enter** always inserts a newline, so we return without
+   *    preventing the default.
+   * 3. **Mobile.** The on-screen keyboard's Enter key reports `Enter` with no
+   *    Shift, which is indistinguishable from a hardware Enter. Treating it as
+   *    "send" is the classic mobile chat bug: you cannot start a new line at
+   *    all. We detect a hardware keyboard and, on touch, Enter inserts a
+   *    newline and the Send button is the way to send.
+   */
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Escape stops a turn in flight, from inside the composer. Scoped to this
+    // input on purpose: a global Escape listener would also fire while the user
+    // is in Settings or a PDF viewer, where "stop the assistant" is not what
+    // they mean.
+    if (e.key === 'Escape') {
+      if (busy) {
+        e.preventDefault();
+        stop();
+      }
+      return;
+    }
+    if (e.key !== 'Enter') return;
+    // 1. Never send mid-composition.
+    if (e.nativeEvent.isComposing || (e.nativeEvent as unknown as { keyCode?: number }).keyCode === 229) {
+      return;
+    }
+    // 2. Shift+Enter is a newline: let the textarea insert it.
+    if (e.shiftKey) return;
+    // 3. On a touch device, Enter is a newline; Send is the button.
+    if (isTouchDevice()) return;
+    // 4. While a turn is running, Enter does not send: the button is Stop, and
+    //    starting a second turn would race the first. The text is still here
+    //    when the turn ends.
+    if (busy) return;
+    e.preventDefault();
+    submit();
+  };
+
+  // A new failure gets a collapsed Details panel, so a stale expansion from a
+  // previous error never carries over and hides the new raw message.
+  useEffect(() => {
+    if (failure) setShowDetails(false);
+  }, [failure]);
 
   useEffect(() => {
     if (open) listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -48,53 +196,115 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-content-primary leading-tight">Assistant</p>
           <p className="text-[11px] text-content-tertiary truncate">
-            {configured ? 'Connected — can act on your data' : 'Needs an AI provider'}
+            {hasUsableModel ? 'Ready — can act on your data' : models.length > 0 ? 'Select a model to start' : 'Needs an AI model'}
           </p>
         </div>
+        {models.length > 0 && (
+          <select
+            value={selectedModelId ?? ''}
+            onChange={(e) => setModel(e.target.value)}
+            className="ml-auto mr-2 bg-bg-elevated border border-border text-content-primary text-xs rounded-xl px-2 py-1.5 outline-none focus:border-accent cursor-pointer min-w-[160px]"
+            aria-label="Select model"
+          >
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.displayName}
+              </option>
+            ))}
+          </select>
+        )}
         {headerExtra}
       </div>
 
-      {!configured && (
+      {models.length === 0 && (
         <button
           onClick={() => { setOpen(false); onOpenSettings(); }}
           className="m-3 mb-0 flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-left"
         >
           <TriangleAlert className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
           <span className="text-xs text-content-primary">
-            AI is disabled. <span className="font-semibold underline">Add a provider in Settings → AI Providers</span> to enable it.
+            AI is disabled. <span className="font-semibold underline">Add a model in Settings → AI Models</span> to enable it.
           </span>
         </button>
       )}
 
-      <div ref={listRef} className={`flex-1 overflow-y-auto px-3 py-3 space-y-2.5 min-h-[180px] ${className}`}>
-        {view.map((msg) => (
-          <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div
-              className={`max-w-[85%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap ${
-                msg.role === 'user'
-                  ? 'bg-accent text-white rounded-br-md'
-                  : msg.error
-                    ? 'bg-rose-500/10 border border-rose-500/40 text-content-primary rounded-bl-md'
-                    : 'bg-bg-elevated/60 border border-border text-content-primary rounded-bl-md'
-              }`}
-            >
-              {msg.role === 'tool' && (
-                <p className={`text-[10px] font-bold uppercase tracking-wide mb-1 ${msg.error ? 'text-rose-500' : 'text-accent'}`}>
-                  Action{msg.toolName ? ` · ${msg.toolName}` : ''}
-                </p>
-              )}
-              {msg.text}
+      <div ref={listRef} onScroll={onScroll} className={`flex-1 overflow-y-auto px-3 py-3 space-y-2.5 min-h-[180px] ${className}`}>
+        {view.map((msg, idx) => {
+          const isLastError = msg.error && idx === view.length - 1;
+          return (
+            <AssistantMessage
+              key={msg.id}
+              msg={msg}
+              onCopy={(text) => navigator.clipboard.writeText(text)}
+              onRegenerate={(msgId) => {
+                const idx = view.findIndex((m) => m.id === msgId);
+                if (idx > 0 && view[idx - 1].role === 'user') {
+                  const userMsg = view[idx - 1];
+                  setDraft(userMsg.text);
+                  void send(userMsg.text, [], true);
+                }
+              }}
+              onRetry={isLastError ? (msgId) => void retryLast() : undefined}
+              isLastError={isLastError}
+              isStreaming={busy && view[view.length - 1]?.id === msg.id}
+            />
+          );
+        })}
+        {activeTool ? (
+          <div className="flex justify-start">
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent-subtle px-2.5 py-1 text-[11px] font-semibold text-accent-text">
+              <Zap className="w-3 h-3 animate-pulse" aria-hidden="true" />
+              {activeTool.label}
             </div>
           </div>
-        ))}
-        {busy && (
+        ) : busy && (
           <div className="flex justify-start">
             <div className="rounded-2xl rounded-bl-md bg-bg-elevated/60 border border-border px-3 py-2 text-content-tertiary text-xs">
               Working…
             </div>
           </div>
         )}
+        {/* Retrying is deliberately NOT styled as an error: nothing is wrong
+            with the user's data, the provider is just busy right now, and it
+            usually resolves itself within a few seconds. */}
+        {retryStatus && (
+          <div className="flex justify-start" data-retry-status>
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent-subtle px-2.5 py-1 text-[11px] font-semibold text-accent-text">
+              <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
+              {retryStatus}
+            </div>
+          </div>
+        )}
+{fallbackNotice && (
+          <div className="flex justify-start">
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-elevated px-2.5 py-1 text-[11px] text-content-secondary">
+              <Info className="w-3 h-3" aria-hidden="true" />
+              {fallbackNotice}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* The "no_key" failure shows the add-model banner. Other failures are
+          already in the transcript as chat messages (see reportFailure). */}
+      {failure && failure.message === 'no_key' && (
+        <div className="mx-3 mb-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3" data-failure>
+          <div className="flex items-start gap-2">
+            <Key className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-content-primary">
+                Add a free <span className="font-semibold capitalize">{failure.noKeyProvider ?? 'Gemini'}</span> key in Settings → AI Keys to use the assistant.
+              </p>
+              <button
+                onClick={onOpenSettings}
+                className="mt-2 inline-flex items-center gap-1.5 px-3 min-h-[36px] rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-semibold transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5" /> Open Settings
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {pending && (
         <div className="mx-3 mb-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3">
@@ -125,28 +335,50 @@ export const AssistantChat: React.FC<AssistantChatProps> = ({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          const text = draft.trim();
-          if (!text || busy) return;
-          setDraft('');
-          void send(text);
+          submit();
         }}
-        className="flex items-center gap-2 p-3 border-t border-border/60"
+        className="flex items-end gap-2 p-3 border-t border-border/60"
       >
-        <input
+        {/* A TEXTAREA, not an input: a single-line <input> physically cannot
+            hold a newline, so Shift+Enter had nowhere to put one. The box grows
+            with its content up to ~6 lines and then scrolls. */}
+        {/* The input stays ENABLED while a turn runs, so the next message can
+            be typed straight away. Only sending is blocked, which is what the
+            Stop button below takes over. */}
+        <textarea
+          ref={inputRef}
+          rows={1}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder={configured ? 'Ask or tell me to do something…' : 'Configure a provider first…'}
-          disabled={busy || !configured}
-          className="flex-1 min-w-0 bg-bg-elevated/60 border border-border rounded-xl px-3 py-2.5 text-sm text-content-primary outline-none focus:border-accent placeholder:text-content-tertiary disabled:opacity-50"
+          onKeyDown={onKeyDown}
+          placeholder={hasUsableModel ? 'Ask anything…' : 'Add a model in Settings'}
+          disabled={!hasUsableModel}
+          aria-label="Message the assistant"
+          className="flex-1 min-w-0 resize-none overflow-y-auto bg-bg-elevated/60 border border-border rounded-xl px-3 py-2.5 text-sm text-content-primary outline-none focus:border-accent placeholder:text-content-tertiary disabled:opacity-50"
+          style={{ maxHeight: MAX_COMPOSER_HEIGHT_PX }}
         />
-        <button
-          type="submit"
-          disabled={busy || !draft.trim() || !configured}
-          aria-label="Send message"
-          className="p-3 rounded-xl bg-accent hover:bg-accent-hover text-white transition-colors disabled:opacity-40 shrink-0"
-        >
-          <SendHorizonal className="w-4 h-4" />
-        </button>
+        {/* One button, two jobs. While a turn is running it is Stop, so the
+            control the user reaches for to interrupt is the one already under
+            their thumb, at every width and in both the panel and the page. */}
+        {busy ? (
+          <button
+            type="button"
+            onClick={stop}
+            aria-label="Stop responding"
+            className="p-3 rounded-xl bg-accent hover:bg-accent-hover text-white transition-colors shrink-0"
+          >
+            <Square className="w-4 h-4 fill-current" aria-hidden="true" />
+          </button>
+        ) : (
+          <button
+            type="submit"
+            disabled={!draft.trim() || !hasUsableModel}
+            aria-label="Send message"
+            className="p-3 rounded-xl bg-accent hover:bg-accent-hover text-white transition-colors disabled:opacity-40 shrink-0"
+          >
+            <SendHorizonal className="w-4 h-4" />
+          </button>
+        )}
       </form>
     </>
   );

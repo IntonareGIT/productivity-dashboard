@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Modal } from '../../../components/ui/Modal';
 import { saveTopic } from '../libraryRepo';
+import { db } from '../../../db/db';
+import { getDefaultNoteTitle, uniqueDefaultNoteTitle } from '../../../db/noteTitle';
 import type { Topic, TopicStatus } from '../../../types';
 
 interface TopicModalProps {
@@ -33,13 +35,29 @@ export const TopicModal: React.FC<TopicModalProps> = ({ subjectId, topic, onClos
   }, [topic]);
 
   const submit = async () => {
-    if (!title.trim()) {
+    // A blank title is no longer an error: it becomes the subject's default
+    // ("Thermodynamics's Notes", numbered if that is taken). This is the UI's
+    // half of the SAME rule the AI tools and the migration use, so a note
+    // created by hand and one created by the assistant are named identically.
+    // `saveTopic` still rejects a genuinely empty string, so the fallback is
+    // resolved here where the subject name is available.
+    let finalTitle = title.trim();
+    if (!finalTitle && !topic) {
+      const subject = await db.subjects.get(subjectId);
+      const siblings = await db.topics.where('subjectId').equals(subjectId).toArray();
+      finalTitle = uniqueDefaultNoteTitle(
+        getDefaultNoteTitle(subject),
+        siblings.map((t) => t.title),
+      );
+      setTitle(finalTitle);
+    }
+    if (!finalTitle) {
       setError('Title is required.');
       return;
     }
     setSaving(true);
     try {
-      await saveTopic({ id: topic?.id, subjectId, title, notes, status });
+      await saveTopic({ id: topic?.id, subjectId, title: finalTitle, notes, status });
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save.');

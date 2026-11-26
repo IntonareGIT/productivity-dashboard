@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import { format } from 'date-fns';
-import { chatCompletion } from '../features/ai/aiClient';
-import { getDefaultProvider, providerIsReady } from '../features/ai/aiProviderRepo';
+import { chatCompletion, friendlyError } from '../features/ai/aiClient';
+import { CLOUD_SIGN_IN_REQUIRED, cloudAuthRequired, getCloudAccessToken } from '../features/ai/cloudAuth';
+import { fetchUserModels } from '../features/ai/modelsClient';
+import { NOT_EXECUTED } from '../features/ai/historyNormalizer';
 import {
   DEFAULT_TITLE,
   appendMessage,
@@ -21,9 +23,17 @@ import {
   describeToolCall,
   executeTool,
 } from '../features/ai/tools';
+import {
+  executeCalendarToolConfirmed,
+  calendarPromptSection,
+  CALENDAR_TOOL_NAMES,
+} from '../features/ai/toolsCalendar';
+import { dateContext } from '../features/calendar/dateRules';
+import { WEEK_STARTS_ON } from '../features/calendar/categories';
 import type { AssistantViewMessage } from '../features/ai/chatRepo';
-import type { ChatMessage } from '../features/ai/types';
-import type { AiProvider, ChatSession } from '../types';
+import { describeDeleteCounts } from '../features/ai/toolsLibrary';
+import type { ChatMessage, ToolSpec } from '../features/ai/types';
+import type { ChatSession, UserModel } from '../types';
 import { newId } from '../utils/id';
 import { toast } from './useToastStore';
 
@@ -31,6 +41,42 @@ const MAX_TOOL_ROUNDS = 4;
 
 /** How many stored messages are replayed to the model on a new turn. */
 const CONTEXT_WINDOW = 20;
+
+/**
+ * Ceiling on ONE tool result sent back to the model.
+ *
+ * A tool such as `searchLibrary` or `listEvents` can return hundreds of rows,
+ * and every one of them is re-sent on each of the following tool rounds. That
+ * is the single biggest source of avoidable request size, and request size is
+ * what makes a provider slow to answer and quick to return 503. Truncating the
+ * tool result keeps the transcript small without dropping any instruction or
+ * answer, and the marker tells the model the list was cut so it does not report
+ * a partial list as complete.
+ */
+export const MAX_TOOL_RESULT_CHARS = 4000;
+
+/**
+ * Cap a tool result for the wire, marking it so the model knows it is partial.
+ *
+ * Applied ONLY to the copy sent to the provider. The stored row keeps the full
+ * result, so the UI still shows everything that happened, and the next turn
+ * built from storage is unaffected.
+ */
+export function capToolResult(content: string): string {
+  if (content.length <= MAX_TOOL_RESULT_CHARS) return content;
+  const kept = content.slice(0, MAX_TOOL_RESULT_CHARS);
+  return `${kept}\n[truncated] (${content.length - MAX_TOOL_RESULT_CHARS} more characters. Ask a narrower question if you need the rest.)`;
+}
+
+/** Parse a tool's arguments without throwing; a preview must never be the failure. */
+function safeParseArgs(argsJson: string): Record<string, unknown> {
+  try {
+    const v: unknown = JSON.parse(argsJson || '{}');
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
 
 function systemPrompt(now: Date): string {
   return [
@@ -42,10 +88,17 @@ function systemPrompt(now: Date): string {
     '- listTopics(subjectId): the topics of one subject, with ids.',
     'You must call listSubjects or listTopics FIRST whenever a function needs an id. Never guess, invent or reuse an id. If a name matches more than one subject or topic, ask the user which one they mean instead of picking one. If a function reports that an id does not exist, look it up again rather than trying variations.',
     '',
+    'IDENTIFIING THINGS:',
+    'Every tool takes an id in a parameter whose name ends in "Id" (subjectId, topicId, resourceId, groupId, noteId, eventId, assessmentId). Always use the id from a previous tool result when one is available, never retype ids from memory, and never invent ids.',
+    'Every search, list and create result includes an "id" field that is the exact database id, plus "kind" and the parent subject. Pass that id through unchanged.',
+    'A name is accepted only as a fallback, and only when it matches exactly one item. If a tool replies with several candidates, show them to the user and ask which one, then call again with the id.',
+    'An id from one kind of item will never match a tool that wants a different kind, so do not pass a topicId where a subjectId is expected.',
+    '',
     'READ FUNCTIONS:',
     "- getTodaysSchedule(): today's shift, events and focus progress.",
     '- getUpcomingDeadlines(days): study deadlines and assessments due soon.',
-    '- searchLibrary(query): find subjects, topics and study resources.',
+    '- searchLibrary(query): find subjects, topics and study resources. Returns resources as { id, title, type, subject, topic } — any other tool needing a resource_id must use the "id" field from that list, never the file name.',
+    '- searchNotes(query): search all ready, extracted notes by keyword. Returns matching sections with file name, page range and a snippet. Use this FIRST whenever the user asks about note content and does not name a specific file.',
     '- getWeekSchedule(weekStartDate): resolve one week to per-day work/off/PTO, including one-off exceptions.',
     '- getFocusStats(range): total focus time for "today", "week" or "month", per subject.',
     '- getSubjectProgress(subjectId): topic counts by status plus the next upcoming assessment.',
@@ -54,6 +107,8 @@ function systemPrompt(now: Date): string {
     'WRITE FUNCTIONS (run immediately, each raises a visible toast):',
     '- setStatus(status): switch the active status/theme.',
     '- addCalendarEvent(title, date, time, category, recurrence).',
+    '- addCalendarEvent also accepts subjectId, eventKind (studying/lecture/section/lab) and period (1-6). A period sets the time from the fixed timetable, so omit time unless the user wants a different one.',
+    'Timetable periods: 1=08:30-10:10, 2=10:20-12:00, 3=12:10-13:50, 4=14:00-15:40, 5=15:50-17:30, 6=17:40-19:20. Pass `period` and the app applies these; you do not need to compute the times.',
     '- addResourceLink(topicId, title, url).',
     '- createSubject(name).',
     '- createTopic(subjectId, title).',
@@ -62,18 +117,100 @@ function systemPrompt(now: Date): string {
     '- addAssessment(subjectId, type, date, weight).',
     '- startPomodoroSession(durationMinutes, label?): start a focus timer (1-180 min).',
     '- stopPomodoroSession(): stop the running focus timer.',
+    '- manage_split_screen(action, pane?, viewType?, resourceId?): control the two-pane split view — action is open/close/swap, pane is left/right, viewType is pdf/notes/dashboard/assistant. Use it to put a PDF beside its notes when the user asks to study a document, or to clear the split when they are done. A PDF pane needs a resourceId, which must be the "id" field from searchLibrary results — never the file name.',
+    '- listGroups(subjectId): the resource groups of a subject, with ids and counts.',
+    '- createGroup(subjectId, name, parentGroupId?): create an empty resource group. Pass parentGroupId to nest it inside an existing group.',
+    '- renameGroup(groupId, name): rename a group. Its resources are untouched.',
+    '- moveGroup(groupId, newParentGroupId): move a group and everything inside it under a new parent. Pass null for the top level of the subject.',
+    '- listGroups(subjectId, parentGroupId?): the group tree, with ids, names, depth, parentGroupId, counts and a full "path" such as "Lectures / Week 1". Omit parentGroupId for the top level, or pass one to list just that level.',
+    'GROUPS CAN NEST, up to 5 levels deep. A group name only has to be unique among its SIBLINGS, so "Week 1" can exist in two different branches.',
+    'When a group name matches more than one group, the tool returns the candidates WITH their full paths. Show those paths to the user and ask which one, then call again with that id. Never guess between them.',
+    'Deleting a group does NOT delete its subgroups or resources: they move up one level to the deleted group parent. The confirmation card says how many of each will move.',
+    'moveGroup refuses a move that would put a group inside itself or one of its own subgroups.',
+    '- moveResourceToGroup(resourceId, groupId): move a resource into a group, or pass null to remove it. The group must belong to the same subject as the resource.',
+    '- renameSubject(subjectId, name) / renameTopic(topicId, title) / renameResource(resourceId, title).',
+    '- moveResource(resourceId, topicId): move a resource to another topic in the same subject. This clears its group.',
+    '- createNote(subjectId, title, content?, topicId?): create a new note in a subject, optionally inside a named topic. Use this rather than createTopic when the user wants a NOTE.',
+    '- renameNote(topicId, title) / setNoteTitle(topicId, title): give a note a better title. Both do the same thing.',
+    '',
     '',
     'WRITE FUNCTIONS NEEDING USER CONFIRMATION (the UI always asks before these run — just call them when asked):',
     '- addOrUpdateWeeklySchedule(weekStartDate, offDays, shiftStartTime, shiftLengthHours).',
     '- addPTO(date).',
     '- addOneOffShiftException(date, startTime, hours).',
     '- deleteCalendarEvent(eventId).',
+    '- deleteResource(resourceId).',
+    '- deleteNote(topicId).',
+    '- deleteTopic(topicId): removes the topic AND its resources and uploaded files.',
+    '- deleteSubject(subjectId): removes the subject AND its topics, resources, uploaded files, notes and groups.',
+    '- deleteGroup(groupId): removes ONLY the group. Its resources are kept and become ungrouped, so say so rather than implying files were lost.',
+    '',
+    'BEFORE CALLING ANY DELETE TOOL: state plainly what it will remove and ask the user to confirm. Calling it twice does NOT perform it; only the user pressing Confirm does. If the user declines or moves on, do not retry; tell them nothing was changed.',
     '',
     'offDays uses 0=Sunday..6=Saturday. Topic status is one of not_started / studying / confident. Assessment type is one of exam / quiz / assignment / project. Event category is one of class / deadline / personal / work. Every function returns a short structured result; read it and report accurately what actually happened, including when it failed. Keep replies short and specific.',
+    // Today's date, the timezone and the week start, so the model can turn
+    // "tomorrow" or "next Sunday" into the exact YYYY-MM-DD the tools require.
+    dateContext(now, WEEK_STARTS_ON),
+    calendarPromptSection(),
+    '',
+    'SEARCHING NOTES:',
+    '- When the user asks about note content without naming a file, call searchNotes(query) with the user\'s question.',
+    '- Answer ONLY from the search results. Cite the file name and page range for each claim.',
+    '- If nothing matches, say the information is not in your notes — do not guess or invent an answer.',
+    '- If a result is flagged as needing review, say the source may be incomplete.',
+    '',
   ].join('\n');
 }
 
 export type AssistantViewMsg = AssistantViewMessage;
+
+/** Set a transient action pill, run one tool, and always return a tool turn. */
+type SetState = (partial: Partial<AssistantState>) => void;
+
+/**
+ * Execute one tool call and ALWAYS return the `role: 'tool'` turn answering it.
+ *
+ * Never throws and never returns null: a tool that fails still has to produce a
+ * tool message, because an assistant `tool_calls` turn with no following tool
+ * result is rejected by Gemini with HTTP 400. The error text is what the model
+ * then sees, so it reports the failure honestly instead of stalling.
+ */
+async function runTool(
+  call: { id: string; name: string; arguments: string },
+  set: SetState,
+): Promise<ChatMessage> {
+  // The action pill: visible only while the tool actually runs, so the user sees
+  // WHAT is happening ("⚡ Opening the PDF in the left pane…") instead of an
+  // opaque "Working…".
+  set({ activeTool: { name: call.name, label: describeToolCall(call.name, call.arguments) } });
+  try {
+    const exec = await executeTool(call.name, call.arguments);
+    if (exec.toast) toast(exec.toast.kind, exec.toast.title, exec.toast.description);
+    else toast('info', `${call.name} ran`, exec.summary);
+    return {
+      role: 'tool',
+      // Capped for the wire only. `display` below keeps the full, friendly
+      // summary for the UI, and the row stores the full result too.
+      content: capToolResult(JSON.stringify({ ok: true, result: exec.data })),
+      toolCallId: call.id,
+      name: call.name,
+      display: exec.summary,
+    };
+  } catch (err) {
+    const message = err instanceof ToolError ? err.message : 'Tool execution failed.';
+    return {
+      role: 'tool',
+      content: JSON.stringify({ ok: false, error: message }),
+      toolCallId: call.id,
+      name: call.name,
+      display: message,
+      error: true,
+    };
+  } finally {
+    // The pill is transient: it must disappear whether the tool succeeded or threw.
+    set({ activeTool: null });
+  }
+}
 
 interface PendingCall {
   name: string;
@@ -90,26 +227,89 @@ interface PendingCall {
 interface AssistantState {
   open: boolean;
   busy: boolean;
+  /**
+   * The tool currently executing, for the transient "action pill" in the chat.
+   * Null when nothing is running. Cleared in a `finally`, so the pill can never
+   * get stuck on screen if a tool throws.
+   */
+  activeTool: { name: string; label: string } | null;
+  /**
+   * Display name of the currently selected model (for the header).
+   * Null when no model is selected.
+   */
   providerLabel: string | null;
   providerReady: boolean;
   providerError: string | null;
-  /** Sessions this provider can safely continue (v7). */
+  /**
+   * Transient, non-error line shown while a request is being retried, e.g.
+   * "Model is busy, retrying (2/4)...". Null whenever nothing is retrying, and
+   * the UI hides the row entirely on null, so it can never linger after success.
+   */
+  retryStatus: string | null;
+  /**
+   * The friendly failure to show with a Retry button, with the raw provider
+   * error kept for the Details toggle. Null when there is no failure to offer.
+   * noKeyProvider is set when the error is a 403 no_key from the gateway.
+   */
+  failure: { message: string; details: string; retryable: boolean; noKeyProvider?: string } | null;
+  /** Set when the last answer came from the configured fallback model. */
+  fallbackNotice: string | null;
+  /** Sessions this model can safely continue (v7). */
   sessions: ChatSession[];
   sessionId: string | null;
   view: AssistantViewMsg[];
   pending: PendingCall | null;
+  // User's AI models (fetched from server)
+  models: UserModel[];
+  // Currently selected model ID (from user's models with keys)
+  selectedModelId: string | null;
+
   setOpen: (open: boolean) => void;
   ask: (text: string) => void;
-  send: (text: string) => Promise<void>;
+  send: (text: string, images?: string[], isRetry?: boolean) => Promise<void>;
+  /** Re-send the last turn without adding a second copy of the user message. */
+  retryLast: () => Promise<void>;
+  /** Abort the turn in flight: fetch, stream, backoff wait and tool rounds. */
+  stop: () => void;
   confirmPending: () => Promise<void>;
   cancelPending: () => void;
   clearChat: () => Promise<void>;
-  refreshProvider: () => Promise<void>;
+  /** Fetch user's models from the server. */
+  fetchModels: () => Promise<void>;
   loadSessions: () => Promise<void>;
   newSession: () => Promise<void>;
   selectSession: (id: string) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
+
+  // Plain setters: the values are UI-local state, not persisted chat history,
+  // so they deliberately stay out of Dexie and out of the backup.
+  draft: string;
+  setDraft: (text: string) => void;
+  listScrollTop: number;
+  setListScrollTop: (top: number) => void;
+  /** Select a model for chat. */
+  setModel: (modelId: string) => void;
+
+  /** Whether the new shared assistant surface is enabled. Default OFF. */
+  assistantRedesign: boolean;
+  setAssistantRedesign: (v: boolean) => void;
+
+/** Reader pane state (for long messages). */
+  readerMsgId: string | null;
+  readerQuestion: string | null;
+  /** Scroll position of the list before reader opened. */
+  readerSavedScrollTop: number;
+  openReader: (msgId, question) => void;
+  closeReader: () => void;
+
+  /** History drawer state. */
+  historyDrawerOpen: boolean;
+  setHistoryDrawerOpen: (v: boolean) => void;
+
+  /** Undo toast state (for reversible actions). */
+  undoToast: { id: string; message: string; onUndo: () => void } | null;
+  setUndoToast: (toast: { id: string; message: string; onUndo: () => void } | null) => void;
 }
 
 const WELCOME: AssistantViewMsg[] = [
@@ -120,17 +320,96 @@ const WELCOME: AssistantViewMsg[] = [
   },
 ];
 
+/**
+ * The turn in flight, if any.
+ *
+ * Module-level rather than in the store because it is NOT state the UI renders:
+ * it exists so `stop` can reach an in-flight request from anywhere, including
+ * from an Escape key handler, without the store having to re-render. Exactly one
+ * turn runs at a time (`busy` guards it), so a single slot is sufficient and
+ * two concurrent turns cannot abort each other by accident.
+ */
+let turnController: AbortController | null = null;
+/** The prompt of the turn currently running, so Retry can resume it verbatim. */
+let lastUserPrompt: string | null = null;
+
+/** Incremented on each new request. Responses with a stale ID are ignored. */
+let currentRequestId = 0;
+
+/** Was this turn ended by Stop rather than by finishing or failing? */
+export class TurnStopped extends Error {
+  constructor() {
+    super('Stopped');
+    this.name = 'TurnStopped';
+  }
+}
+
+const isStopped = (err: unknown): boolean =>
+  err instanceof TurnStopped ||
+  (err instanceof Error && (err.name === 'AbortError' || err.message === 'Stopped'));
+
+/**
+ * One pending undo toast, at module level like `turnController`.
+ * Survives panel unmount so tools can call it from anywhere.
+ */
+let undoToast: { id: string; message: string; onUndo: () => void } | null = null;
+let undoTimer: number | null = null;
+
+function showUndo(message: string, onUndo: () => void): void {
+  if (undoTimer) window.clearTimeout(undoTimer);
+  undoToast = { id: `undo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, message, onUndo };
+  undoTimer = window.setTimeout(() => {
+    undoToast = null;
+    undoTimer = null;
+    useAssistantStore.getState().setUndoToast(null);
+  }, 8000);
+  useAssistantStore.getState().setUndoToast(undoToast);
+}
+
+function dismissUndo(): void {
+  if (undoTimer) window.clearTimeout(undoTimer);
+  undoTimer = null;
+  undoToast = null;
+  useAssistantStore.getState().setUndoToast(null);
+}
+
+function actUndo(): void {
+  const toast = undoToast;
+  if (!toast) return;
+  dismissUndo();
+  try { toast.onUndo(); } catch { /* reported by tool */ }
+}
+
+export const assistantUndo = { showUndo, dismissUndo, actUndo };
+
 export const useAssistantStore = create<AssistantState>((set, get) => {
-  async function resolveProvider(): Promise<{ provider: AiProvider | null; error: string | null }> {
-    const provider = await getDefaultProvider();
-    if (!provider || !providerIsReady(provider)) {
-      const msg = 'No AI provider is configured yet. Open Settings → AI Providers, add a provider (or paste an API key).';
-      return { provider: null, error: msg };
+  async function resolveModel(): Promise<{ model: UserModel | null; error: string | null }> {
+    // Ensure models are fetched
+    const { models, selectedModelId, fetchModels } = get();
+    if (models.length === 0) {
+      await fetchModels();
     }
-    return { provider, error: null };
+    const refreshedModels = get().models;
+    if (refreshedModels.length === 0) {
+      const msg = 'No AI model with a saved key is configured. Open Settings → AI Models to add one.';
+      return { model: null, error: msg };
+    }
+    // The gateway only trusts Dexie Cloud sessions: a model row without a
+    // sign-in cannot answer, so say so before any request is issued.
+    if (cloudAuthRequired() && !getCloudAccessToken()) {
+      return { model: null, error: CLOUD_SIGN_IN_REQUIRED };
+    }
+    // Use selected model, or first available
+    const modelId = selectedModelId ?? refreshedModels[0].id;
+    const model = refreshedModels.find((m) => m.id === modelId);
+    if (!model) {
+      // Fallback to first model
+      return { model: refreshedModels[0], error: null };
+    }
+    return { model, error: null };
   }
 
-  function pushView(msg: Omit<AssistantViewMsg, 'id'>): string {
+  function pushView(msg: Omit<AssistantViewMsg, 'id'> & { image?: string | null }): string {
     const id = newId();
     set((s) => ({ view: [...s.view, { ...msg, id }] }));
     return id;
@@ -139,25 +418,24 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
   /**
    * Resolve the session to write into.
    *
-   * Sessions are pinned to a provider. If the user switched the default
-   * provider, the old session's messages (with Gemini-specific
-   * `extra_content`) must never be replayed against the new one, so we start a
-   * fresh session instead.
+   * Sessions are pinned to a model. If the user switched the model,
+   * the old session's messages (with provider-specific fields) must never
+   * be replayed against the new one, so we start a fresh session instead.
    */
-  async function ensureSession(provider: AiProvider): Promise<string> {
+  async function ensureSession(model: UserModel): Promise<string> {
     const current = get().sessionId;
     if (current) {
       const session = (await listSessions()).find((s) => s.id === current);
-      if (session && session.providerId === provider.id) return current;
+      if (session && session.providerId === model.id) return current;
     }
-    // Reuse an existing session for this provider when one is idle.
-    const mine = (await listSessions()).find((s) => s.providerId === provider.id);
+    // Reuse an existing session for this model when one is idle.
+    const mine = (await listSessions()).find((s) => s.providerId === model.id);
     if (mine) {
       const rows = await listMessages(mine.id);
       set({ sessionId: mine.id, view: rows.length ? toViewMessages(rows) : WELCOME, pending: null });
       return mine.id;
     }
-    const created = await createSession(provider.id);
+    const created = await createSession(model.id);
     set({ sessionId: created.id, view: WELCOME, pending: null });
     return created.id;
   }
@@ -170,56 +448,237 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     set({ view: projected.length ? projected : WELCOME });
   }
 
+  /**
+   * Leave the session in a state a provider will accept.
+   *
+   * A turn can end at four awkward places: the user pressed Stop, the request
+   * threw, every retry was exhausted, or the round budget ran out. Any of them can
+   * leave an assistant `tool_calls` row with no `tool` row answering it, and that
+   * row is permanent: it poisons every later request in the chat.
+   *
+   * So the session is REPAIRED AT THE SOURCE rather than only on the way out. The
+   * request-time normalizer is still the backstop for rows written by older builds
+   * or restored from a backup, but a chat that is already stored wrong should not
+   * have to be repaired on every single request.
+   *
+   * Nothing is deleted: an unanswered call gets a stored response saying the
+   * action did not run.
+   */
+  async function repairStoredSession(sessionId: string): Promise<void> {
+    const rows = await listMessages(sessionId);
+    const unanswered: { callId: string; name: string }[] = [];
+    const answered = new Set<string>();
+
+    for (let i = 0; i < rows.length; i += 1) {
+      const r = rows[i];
+      if (r.role === 'tool' && r.toolCallId) answered.add(r.toolCallId);
+      if (r.role !== 'assistant' || !r.toolCallIds?.length) continue;
+      // Only the consecutive tool rows directly after count as answers.
+      for (let j = i + 1; j < rows.length && rows[j].role === 'tool'; j += 1) {
+        if (rows[j].toolCallId) answered.add(rows[j].toolCallId);
+      }
+      for (const id of r.toolCallIds) {
+        if (!answered.has(id)) {
+          const calls = (r.raw?.tool_calls ?? []) as {
+            id: string; function?: { name?: string };
+          }[];
+          const call = calls.find((c) => c.id === id);
+          unanswered.push({ callId: id, name: call?.function?.name ?? r.toolName ?? '' });
+        }
+      }
+    }
+    for (const u of unanswered) {
+      await appendMessage(sessionId, {
+        role: 'tool',
+        content: JSON.stringify({ ok: false, error: NOT_EXECUTED }),
+        toolCallId: u.callId,
+        name: u.name,
+        display: 'Not executed or interrupted.',
+      });
+    }
+  }
+
+  /**
+   * One model request, with the retry status wired to the UI.
+   *
+   * Every request in a turn goes through here, which is what makes the retry
+   * policy single-sourced: the status line, the abort signal, the fallback
+   * model and the request accounting all live in one call site, so a new caller
+   * cannot accidentally get a turn that neither retries nor can be stopped.
+   *
+   * The status is cleared as soon as the call settles, whether it succeeded or
+   * failed, so it can never be left on screen after the turn is over.
+   */
+  async function request(
+    model: UserModel,
+    messages: ChatMessage[],
+    opts: { tools?: ToolSpec[] } = {},
+  ) {
+    try {
+      return await chatCompletion({
+        modelId: model.id,
+        messages,
+        tools: opts.tools,
+        signal: turnController?.signal,
+        // fallbackModel is now per-model, stored on the server
+        onRetry: ({ attempt, max }) => {
+          set({ retryStatus: `Model is busy, retrying (${attempt}/${max})...` });
+        },
+      });
+    } finally {
+      set({ retryStatus: null });
+    }
+  }
+
+  /**
+   * Record a failure in the user's terms, with the raw error behind Details.
+   *
+   * Replaces pushing the provider's raw JSON into the transcript, which is what
+   * produced the "Provider responded HTTP 503 - {"error":{...}}" wall of text.
+   *
+   * Provider errors (not "no_key") are also pushed into the transcript as a
+   * normal assistant message so they appear in-line with the conversation. The
+   * "no_key" case is handled separately and shows the add-model banner instead.
+   */
+  function reportFailure(err: unknown): void {
+    const { message, retryable, noKeyProvider } = friendlyError(err);
+    set({
+      failure: {
+        message,
+        details: err instanceof Error ? err.message : String(err),
+        retryable,
+        noKeyProvider,
+      },
+    });
+    // Provider errors become a chat message; "no_key" shows the add-model banner.
+    if (!noKeyProvider) {
+      pushView({ role: 'assistant', text: message, error: true });
+    }
+  }
+
   return {
     open: false,
     busy: false,
+    // Lifted so the floating panel can unmount its chat without discarding the
+    // unsent composer text or the transcript scroll position.
+    draft: '',
+    listScrollTop: 0,
+    assistantRedesign:
+      typeof window !== 'undefined' && (
+        new URLSearchParams(window.location.search).get('assistantRedesign') === '1' ||
+        localStorage.getItem('assistantRedesignEnabled') === 'true'
+      ),
     providerLabel: null,
-    providerReady: false,
+providerReady: false,
     providerError: null,
+    retryStatus: null,
+    failure: null,
+    fallbackNotice: null,
     sessions: [],
     sessionId: null,
     view: WELCOME,
     pending: null,
+    activeTool: null,
+    undoToast: null,
+    historyDrawerOpen: false,
+    // User's AI models (fetched from server)
+    models: [] as UserModel[],
+    // Currently selected model ID (from user's models with keys)
+selectedModelId: null as string | null,
+
+  // Reader pane state (for long messages)
+  readerMsgId: null as string | null,
+  readerQuestion: null as string | null,
+  readerSavedScrollTop: 0,
+
+// Fetch user's models from the server
+    fetchModels: async () => {
+      const result = await fetchUserModels();
+      if (result.error) {
+        // Only set models to empty on auth/no-token errors; keep existing on network/server errors
+        if (result.error.code === 'NO_TOKEN' || result.error.code === 'UNAUTHORIZED') {
+          set({ models: [] });
+        }
+        return;
+      }
+      // Only models with keys can be used for chat
+      const withKeys = result.models.filter((m: UserModel) => m.hasKey);
+      set({ models: withKeys });
+      // If no model selected yet, pick the first one
+      if (withKeys.length > 0 && !get().selectedModelId) {
+        set({ selectedModelId: withKeys[0].id });
+      }
+    },
 
     setOpen: (open) => {
       set({ open });
       if (open) {
-        void get().refreshProvider();
-        void get().loadSessions();
+        void get().fetchModels();
+        // Do NOT load sessions or select a session here.
+        // The assistant should always open with an empty new conversation (WELCOME).
+        // Past conversations are loaded only when the user explicitly opens them
+        // from the history list (Part 5).
       }
     },
 
+    setAssistantRedesign: (v) => set({ assistantRedesign: v }),
+
+    // Reader pane
+    openReader: (msgId, question) => {
+      // Save current scroll position before opening reader
+      const listEl = document.querySelector('[data-autoscroll-list]');
+      const scrollTop = listEl ? listEl.scrollTop : 0;
+      set({ readerMsgId: msgId, readerQuestion: question, readerSavedScrollTop: scrollTop });
+    },
+    closeReader: () => {
+      const savedScrollTop = get().readerSavedScrollTop;
+      set({ readerMsgId: null, readerQuestion: null });
+      // Restore scroll position after a frame to let the list remount
+      if (savedScrollTop > 0) {
+        requestAnimationFrame(() => {
+          const listEl = document.querySelector('[data-autoscroll-list]');
+          if (listEl) listEl.scrollTop = savedScrollTop;
+        });
+      }
+    },
+
+    // History drawer
+    setHistoryDrawerOpen: (v) => set({ historyDrawerOpen: v }),
+
+    // Undo toast
+    setUndoToast: (toast) => set({ undoToast: toast }),
+
     ask: (text) => {
       set({ open: true });
-      void get().refreshProvider();
+      void get().fetchModels();
       const trimmed = text.trim();
       if (trimmed) void get().send(trimmed);
     },
 
+    // Select a model for chat
+    setModel: (modelId: string) => set({ selectedModelId: modelId }),
+
     loadSessions: async () => {
-      const provider = await getDefaultProvider();
+      const { selectedModelId } = get();
       const all = await listSessions();
-      // Only sessions belonging to the active provider are replayable.
-      const mine = provider ? all.filter((s) => s.providerId === provider.id) : [];
+      // Only sessions belonging to the active model are replayable.
+      const mine = selectedModelId ? all.filter((s) => s.providerId === selectedModelId) : [];
       set({ sessions: mine });
-      const current = get().sessionId;
-      if (current && !mine.some((s) => s.id === current)) {
-        // Provider changed (or session deleted) — start clean rather than
-        // resend another provider's messages.
-        set({ sessionId: null, view: WELCOME, pending: null });
-      }
-      if (!get().sessionId && mine.length > 0) {
-        await get().selectSession(mine[0].id);
-      }
+      // Do NOT auto-select a session. The assistant opens with WELCOME.
+      // The user can select a past session from the history list.
     },
 
     newSession: async () => {
-      const provider = await getDefaultProvider();
-      const created = await createSession(provider ? provider.id : null);
+      const { selectedModelId } = get();
+      const created = await createSession(selectedModelId ?? null);
       set({ sessionId: created.id, view: WELCOME, pending: null, sessions: await listSessions() });
     },
 
     selectSession: async (id) => {
+      // Step 5: an OLD chat, written by a build that could save a broken
+      // sequence, is repaired on load rather than deleted. The user keeps every
+      // message; the chat simply becomes usable again.
+      await repairStoredSession(id).catch(() => {});
       const rows = await listMessages(id);
       set({ sessionId: id, view: rows.length ? toViewMessages(rows) : WELCOME, pending: null });
     },
@@ -240,49 +699,113 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       set({ sessions: await listSessions() });
     },
 
+    // Plain setters: the values are UI-local state, not persisted chat history,
+    // so they deliberately stay out of Dexie and out of the backup.
+    setDraft: (draft) => set({ draft }),
+    setListScrollTop: (listScrollTop) => set({ listScrollTop }),
+
     clearChat: async () => {
       const current = get().sessionId;
       if (current) await deleteSession(current);
-      set({ sessionId: null, view: WELCOME, pending: null, sessions: await listSessions() });
+      // The draft and the scroll offset describe the conversation being cleared,
+      // so they are reset with it rather than being carried into an empty view.
+      set({
+        sessionId: null,
+        view: WELCOME,
+        pending: null,
+        sessions: await listSessions(),
+        draft: '',
+        listScrollTop: 0,
+      });
     },
 
 
-    send: async (text) => {
+    /**
+     * Send one user turn.
+     *
+     * `isRetry` is what makes the Retry button honest: on a retry the user
+     * message is NOT pushed to the view or written to the session again, so the
+     * transcript never gains a duplicate of what the user already sees. Only the
+     * model request is made again.
+     */
+    send: async (text, images = [], isRetry = false) => {
       const prompt = text.trim();
       if (!prompt || get().busy) return;
-      pushView({ role: 'user', text: prompt });
-      set({ busy: true });
+      if (!isRetry) pushView({ role: 'user', text: prompt, image: images[0] ?? null });      // A fresh turn replaces any previous failure notice and any retry line.
+      set({ busy: true, failure: null, retryStatus: null, fallbackNotice: null });
+      turnController = new AbortController();
+      lastUserPrompt = prompt;
       try {
-        const { provider, error } = await resolveProvider();
-        if (!provider) {
-          pushView({ role: 'assistant', text: error ?? 'No AI provider configured.', error: true });
+        const { model, error } = await resolveModel();
+        if (!model) {
+          pushView({ role: 'assistant', text: error ?? 'No AI model configured.', error: true });
           set({ providerReady: false, providerError: error });
           return;
         }
-        set({ providerLabel: provider.label, providerReady: true, providerError: null });
+        set({ providerLabel: model.displayName, providerReady: true, providerError: null });
 
-        // A provider switch starts a fresh session, so nothing from the old
-        // provider (Gemini extra_content) is ever replayed to the new one.
-        const sessionId = await ensureSession(provider);
+        // A model switch starts a fresh session, so nothing from the old
+        // model (provider-specific fields) is ever replayed to the new one.
+        const sessionId = await ensureSession(model);
         await autoTitle(sessionId, prompt);
-        await persist(sessionId, { role: 'user', content: prompt });
+
+        // Typing a new message while a confirmation is still open would store
+        // a user turn directly after that unanswered assistant tool_calls turn.
+        // The provider rejects the resulting sequence with HTTP 400, so the pending
+        // call is resolved as declined first — the write never happened, so this
+        // is also the honest record of what occurred.
+        const stale = get().pending;
+        if (stale) {
+          set({ pending: null });
+          await persist(sessionId, {
+            role: 'tool',
+            content: JSON.stringify({ ok: false, error: 'The user moved on without confirming this action.' }),
+            toolCallId: stale.callId,
+            name: stale.name,
+            display: 'Not confirmed — nothing was changed.',
+          });
+        }
+
+        if (!isRetry) {
+          const note = images.length ? `${prompt}\n[Photo attached]` : prompt;
+          await persist(sessionId, { role: 'user', content: note, image: null });
+        }
 
         // Only the most recent messages are replayed, tool sequences intact.
         let transcript: ChatMessage[] = [
           ...buildTranscript(await listMessages(sessionId), CONTEXT_WINDOW),
         ];
 
+        // Whether the model ever produced a plain-language answer. The round
+        // budget can run out mid-chain; without this flag the loop just falls
+        // through with the transcript ending on a TOOL turn, and the user is
+        // left staring at an action chip with no reply at all.
+        let answered = false;
+
         for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
-          const result = await chatCompletion({
-            provider,
-            messages: [{ role: 'system', content: systemPrompt(new Date()) }, ...transcript],
-            tools: TOOL_SPECS,
-          });
+          // Stop is checked BEFORE each request, so no request is issued after
+          // the user asked for it to stop.
+          if (turnController?.signal.aborted) throw new TurnStopped();
+
+          const result = await request(model, [
+            { role: 'system', content: systemPrompt(new Date()) },
+            ...transcript,
+          ], { tools: TOOL_SPECS });
+
+          if (result.answeredByFallback) {
+            set({ fallbackNotice: `Answered by fallback model ${result.answeredByFallback}` });
+          }
 
           if (result.toolCalls.length === 0) {
-            const reply = result.content.trim() || 'Done.';
-            transcript = [...transcript, { role: 'assistant', content: reply }];
-            await persist(sessionId, { role: 'assistant', content: reply });
+            const raw = result.content.trim() || 'Done.';
+            // The wire/history keeps what the provider actually said (tags and
+            // all); the transcript split into answer + reasoning is produced by
+            // `persist` -> `toViewMessages`, which applies `extractThinking` to
+            // the stored content. Doing it there means live and reloaded
+            // messages render identically, with no second projection path.
+            transcript = [...transcript, { role: 'assistant', content: raw }];
+            await persist(sessionId, { role: 'assistant', content: raw, reasoning: result.reasoning });
+            answered = true;
             break;
           }
 
@@ -303,55 +826,134 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
           const gated = result.toolCalls.filter((c) => CONFIRMATION_TOOL_NAMES.has(c.name));
           if (gated.length > 0) {
             const first = gated[0];
+            // The Confirm card says WHAT will be lost, not just that something
+            // will be. `describeDeleteCounts` reads live counts off the database
+            // and never throws: an unresolvable target simply yields no counts and
+            // the card falls back to the plain description.
+            const baseDescription = describeToolCall(first.name, first.arguments);
+            const counts = await describeDeleteCounts(
+              first.name,
+              safeParseArgs(first.arguments),
+            );
+            const description = counts
+              ? `${baseDescription} This will also remove: ${counts}.`
+              : baseDescription;
             set({
               pending: {
                 name: first.name,
                 argsText: first.arguments,
-                description: describeToolCall(first.name, first.arguments),
+                description,
                 callId: first.id,
               },
             });
-            pushView({ role: 'tool', toolName: first.name, text: describeToolCall(first.name, first.arguments) });
+            pushView({ role: 'tool', toolName: first.name, text: description });
+            // The UNGATED calls in the same turn still have to be answered. A
+            // tool_calls turn followed immediately by a plain user message is
+            // rejected by Gemini with HTTP 400, so they are executed now and the
+            // loop then pauses for the gated one.
+            const ungated = result.toolCalls.filter((c) => !CONFIRMATION_TOOL_NAMES.has(c.name));
+            for (const call of ungated) {
+              const toolMsg = await runTool(call, set);
+              transcript = [...transcript, toolMsg];
+              await persist(sessionId, toolMsg);
+            }
             break;
           }
 
           for (const call of result.toolCalls) {
-            let toolMsg: ChatMessage;
-            try {
-              const exec = await executeTool(call.name, call.arguments);
-              toolMsg = {
-                role: 'tool',
-                content: JSON.stringify({ ok: true, result: exec.data }),
-                toolCallId: call.id,
-                name: call.name,
-                display: exec.summary,
-              };
-              if (exec.toast) toast(exec.toast.kind, exec.toast.title, exec.toast.description);
-              else toast('info', `${call.name} ran`, exec.summary);
-            } catch (err) {
-              const message = err instanceof ToolError ? err.message : 'Tool execution failed.';
-              toolMsg = {
-                role: 'tool',
-                content: JSON.stringify({ ok: false, error: message }),
-                toolCallId: call.id,
-                name: call.name,
-                display: message,
-                error: true,
-              };
-            }
+            const toolMsg = await runTool(call, set);
             transcript = [...transcript, toolMsg];
             await persist(sessionId, toolMsg);
           }
         }
+
+        // The round budget ran out while the model was still calling tools. Give
+        // it one last turn with NO tools available, so it must produce prose
+        // rather than another call. Without this the loop just falls through
+        // with the transcript ending on a TOOL turn and nothing said — the chat
+        // appears to stop dead. The transcript already satisfies the strict order
+        // (user -> model call -> tool response -> ...), so appending the missing
+        // final answer here cannot introduce an HTTP 400.
+        if (!answered) {
+          if (turnController?.signal.aborted) throw new TurnStopped();
+          const closing = await request(model, [
+            { role: 'system', content: systemPrompt(new Date()) },
+            ...transcript,
+          ], { tools: [] });
+          const raw = closing.content.trim() ||
+            'I reached the limit on how many actions I can take in one go. Here is where things stand — tell me what to do next.';
+          transcript = [...transcript, { role: 'assistant', content: raw }];
+          await persist(sessionId, { role: 'assistant', content: raw, reasoning: closing.reasoning });
+        }
+
         set({ sessions: await listSessions() });
       } catch (err) {
-        pushView({
-          role: 'assistant',
-          text: err instanceof Error ? err.message : 'The assistant request failed.',
-          error: true,
-        });
+        // Stop is a normal outcome, not a failure: no error row, no failure
+        // notice, just the "Stopped" line. Distinguishing it here is what keeps
+        // Stop from looking like the assistant broke.
+        if (isStopped(err)) {
+          set({ activeTool: null, retryStatus: null });
+        } else {
+          reportFailure(err);
+        }
       } finally {
-        set({ busy: false });
+        // Whatever happened, the stored history is left valid. This runs on the
+        // success path too, where it is a cheap no-op, and on Stop, error and
+        // retry-exhaustion, where it is what stops the chat becoming unusable.
+        if (get().sessionId) await repairStoredSession(get().sessionId as string).catch(() => {});
+        // The controller is released here and ONLY here, so `stop` can never
+        // abort a turn that has already finished and left a stale controller
+        // behind that a later turn would trip over.
+        turnController = null;
+        // `busy` is cleared unconditionally, so the input is always re-enabled
+        // and the chat can never be stuck in a loading state.
+        set({ busy: false, activeTool: null, retryStatus: null });
+      }
+    },
+
+    /**
+     * Retry the last turn after a failure.
+     *
+     * Sends the SAME prompt again, but with `isRetry` set, so the user message
+     * is neither re-rendered nor stored a second time. Everything the model
+     * needs is already in the session: the tool results from the failed turn
+     * are stored rows, and the next request is rebuilt from them.
+     */
+    retryLast: async () => {
+      if (get().busy || !lastUserPrompt) return;
+      await get().send(lastUserPrompt, [], true);
+    },
+
+    /**
+     * Stop the turn in flight.
+     *
+     * Aborting the controller does three things at once: it aborts the in-flight
+     * fetch, it rejects the backoff wait so no further retry is issued, and the
+     * loop re-checks the signal before the next round, so no new tool call
+     * starts. A tool that is already running is left to finish, because
+     * interrupting a database write halfway is worse than finishing it.
+     *
+     * A pending Confirm card is CANCELLED here too, exactly as if the user had
+     * pressed Cancel. Leaving it open would mean a stop leaves a live delete
+     * waiting for a second press, which is not what "stop" means.
+     */
+    stop: () => {
+      turnController?.abort();
+      const pending = get().pending;
+      if (pending) {
+        set({ pending: null });
+        const sessionId = get().sessionId;
+        // Recorded so the transcript stays well-formed: an assistant tool_calls
+        // turn must be answered by a tool turn, or the next request is a 400.
+        if (sessionId) {
+          void persist(sessionId, {
+            role: 'tool',
+            content: JSON.stringify({ ok: false, error: 'Stopped by the user before confirming. Not executed.' }),
+            toolCallId: pending.callId,
+            name: pending.name,
+            display: 'Cancelled when you stopped, nothing was changed.',
+          });
+        }
       }
     },
 
@@ -360,18 +962,24 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       if (!pending || get().busy) return;
       set({ pending: null, busy: true });
       try {
-        const { provider, error } = await resolveProvider();
-        if (!provider) {
-          pushView({ role: 'assistant', text: error ?? 'No AI provider configured.', error: true });
+        const { model, error } = await resolveModel();
+        if (!model) {
+          pushView({ role: 'assistant', text: error ?? 'No AI model configured.', error: true });
           return;
         }
         const sessionId = get().sessionId;
         if (!sessionId) return;
 
-        const exec = await executeTool(pending.name, pending.argsText);
+        // Confirmed. `createRecurringEvents` is the one tool whose confirmed
+        // run differs from its first run: the first previews and creates
+        // nothing, so it must be re-invoked in its confirmed form. Every other
+        // gated tool runs exactly as it did to produce the card.
+        const exec = CALENDAR_TOOL_NAMES.includes(pending.name)
+          ? await executeCalendarToolConfirmed(pending.name, safeParseArgs(pending.argsText))
+          : await executeTool(pending.name, pending.argsText);
         const toolMsg: ChatMessage = {
           role: 'tool',
-          content: JSON.stringify({ ok: true, result: exec.data }),
+          content: capToolResult(JSON.stringify({ ok: true, result: exec.data })),
           toolCallId: pending.callId,
           name: pending.name,
           display: exec.summary,
@@ -386,7 +994,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
           toolMsg,
         ];
         const followUp = await chatCompletion({
-          provider,
+          modelId: model.id,
           messages: [
             { role: 'system', content: systemPrompt(new Date()) },
             ...transcript,
@@ -397,8 +1005,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
           ],
         });
         const reply = followUp.content.trim() || exec.summary;
-        const replyMsg: ChatMessage = { role: 'assistant', content: reply };
+        const replyMsg: ChatMessage = { role: 'assistant', content: reply, reasoning: followUp.reasoning };
         await persist(sessionId, toolMsg);
+        // `persist` re-projects the transcript through `toViewMessages`, which
+        // splits any reasoning out, so the reply needs no separate view push.
         await persist(sessionId, replyMsg);
         set({ sessions: await listSessions() });
       } catch (err) {
@@ -430,19 +1040,6 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       } else {
         pushView({ role: 'tool', toolName: pending.name, text: 'Cancelled — nothing was changed.' });
       }
-    },
-
-    refreshProvider: async () => {
-      const provider = await getDefaultProvider();
-      if (provider && providerIsReady(provider)) {
-        set({ providerLabel: provider.label, providerReady: true, providerError: null });
-        return;
-      }
-      const reason =
-        provider && !provider.apiKey.trim()
-          ? 'The default provider is missing its API key. Open Settings → AI Providers to add one.'
-          : 'No AI provider is configured yet. Open Settings → AI Providers to add one.';
-      set({ providerLabel: provider?.label ?? null, providerReady: false, providerError: reason });
     },
   };
 });

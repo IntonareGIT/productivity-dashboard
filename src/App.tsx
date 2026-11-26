@@ -5,44 +5,163 @@ import type { NavTab } from './components/layout/Sidebar';
 import { CommandPalette } from './components/ui/CommandPalette';
 import { Toaster } from './components/ui/Toaster';
 import { DashboardPage } from './features/dashboard/DashboardPage';
+import { SplitView } from './features/split/SplitView';
+import {
+  addSecondPane, emptySplitState, initialSplitState, isSplit, setPane, splitWithNotes, swapPanes,
+  type PaneSlot, type SplitState,
+} from './features/split/splitModel';
+import { useSplitCommandStore } from './stores/useSplitCommandStore';
 import { LibraryPage } from './features/library/LibraryPage';
 import { CalendarPage } from './features/calendar/CalendarPage';
 import { ShiftsPage } from './features/shifts/ShiftsPage';
 import { FocusPage } from './features/focus/FocusPage';
 import { SettingsPage } from './features/settings/SettingsPage';
+import { AboutPage } from './features/about/AboutPage';
 import { AssistantLauncher } from './features/ai/components/AssistantLauncher';
 import { AssistantPanel } from './features/ai/components/AssistantPanel';
 import { AssistantPage } from './features/ai/components/AssistantPage';
-import { providerIsReady } from './features/ai/aiProviderRepo';
+import { getCloudAccessToken } from './features/ai/cloudAuth';
 import { useAssistantStore } from './stores/useAssistantStore';
+import { useFloatingAiStore } from './stores/useFloatingAiStore';
+import { useFullScreenStore } from './stores/useFullScreenStore';
+import { shouldShowFloatingAi } from './features/ai/floatingAiVisibility';
 import { useStatusThemeStore } from './stores/useStatusThemeStore';
+import { useThemeStatusMap } from './hooks/useThemeStatusMap';
+import { useUiState } from './hooks/useUiState';
+import { defaultPomodoroSettings } from './db/defaultData';
 import { usePomodoroStore } from './stores/usePomodoroStore';
 import { initializeDatabaseDefaults } from './db/defaultData';
 import { db } from './db/db';
+import type { PomodoroSettingsRow, PomodoroSettings } from './types';
+
+/** Drop the singleton `id` from an appSettings row. */
+function stripId(row: PomodoroSettingsRow): PomodoroSettings {
+  const { id: _id, ...settings } = row;
+  void _id;
+  return settings;
+}
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [paletteOpen, setPaletteOpen] = useState(false);
   // True while the full-page assistant (/assistant) is shown.
   const [assistantPage, setAssistantPage] = useState(false);
+
+  const floatingAiEnabled = useFloatingAiStore((s) => s.enabled);
+  const fullScreenResource = useFullScreenStore((s) => s.fullScreenResource);
+
   // Tab to restore when leaving the full-page assistant.
   const [returnTab, setReturnTab] = useState<NavTab>('dashboard');
   // Bumped whenever "New event" runs from the palette; CalendarPage opens
   // its event modal for today when this changes.
   const [quickAddEventNonce, setQuickAddEventNonce] = useState(0);
-  const initTheme = useStatusThemeStore((s) => s.initTheme);
-  const loadPomodoroSettings = usePomodoroStore((s) => s.loadSettings);
-  const refreshAssistantProvider = useAssistantStore((s) => s.refreshProvider);
+  // Two-pane split view, an APP-LEVEL overlay above whichever tab is active.
+  // React state ONLY — never persisted, so a refresh resets to the default
+  // single full-width dashboard. The active tab is never changed by opening or
+  // closing it, so closing returns to exactly the tab that was showing.
+  const [splitState, setSplitState] = useState<SplitState>(initialSplitState);
+  const [splitOpen, setSplitOpen] = useState(false);
+  // The floating AI button follows ONE rule, evaluated from the same values the
+  // panes are actually rendered from. Deriving it here, rather than inside the
+  // button, gives the rule exactly one owner and makes it testable without
+  // mounting the app.
+  const floatingAiVisible = shouldShowFloatingAi({
+    splitOpen,
+    panes: splitState.panes,
+    assistantPage,
+    settingEnabled: floatingAiEnabled,
+    fullscreenActive: !!fullScreenResource,
+  });
 
-  // Reactive: true once a default provider exists with base URL, key and model.
-  // Keeps the launcher/panel disabled-state correct after Settings edits.
-  const [assistantConfigured, setAssistantConfigured] = useState(false);
-  const providers = useLiveQuery(() => db.aiProviders.toArray());
+
+  // The top-bar icon is the only generic entry point: it opens an empty split
+  // the first time and toggles it closed afterwards.
+  const toggleSplit = useCallback(() => {
+    setSplitOpen((open) => {
+      if (!open) setSplitState((s) => (s.panes.length > 1 ? s : emptySplitState));
+      return !open;
+    });
+  }, []);
+
+  const closeSplit = useCallback(() => setSplitOpen(false), []);
+
+  // ---- AI-driven split commands -------------------------------------------
+  // The assistant's `manage_split_screen` tool cannot touch React state, so it
+  // queues a command in `useSplitCommandStore` and this applies it using the
+  // SAME splitModel functions the UI uses. Keeping App as the single owner of
+  // the split state is what preserves the "React state only, never persisted"
+  // rule documented above.
+  const splitCommand = useSplitCommandStore((s) => s.command);
+  const settleSplitCommand = useSplitCommandStore((s) => s.settle);
+
   useEffect(() => {
-    const flagged = (providers ?? []).find((p) => p.isDefault) ?? (providers ?? [])[0];
-    setAssistantConfigured(providerIsReady(flagged));
-    void refreshAssistantProvider();
-  }, [providers, refreshAssistantProvider]);
+    if (!splitCommand) return;
+    const { action, pane, viewType, resourceId, topicId, id } = splitCommand;
+    // 'left' is index 0, 'right' is index 1; an omitted side defaults to left.
+    const target = pane === 'right' ? 1 : 0;
+    const slot: PaneSlot = { kind: viewType ?? 'empty', resourceId, topicId };
+
+    if (action === 'close') {
+      setSplitOpen(false);
+    } else if (action === 'swap') {
+      setSplitState((s) => swapPanes(s));
+      setSplitOpen(true);
+    } else {
+      // Open: if we are not already split, add the second pane with the
+      // requested view; if we are, retarget the chosen pane in place.
+      setSplitState((s) => (
+        isSplit(s)
+          ? setPane(s, target, slot)
+          : addSecondPane(s, slot)
+      ));
+      setSplitOpen(true);
+    }
+    // Settle by id so a command queued during this apply is not swallowed.
+    settleSplitCommand(id);
+  }, [splitCommand, settleSplitCommand]);
+
+  // Publish the split shape so the tool can report what is actually on screen
+  // rather than what it merely asked for.
+  const publishSplitSnapshot = useSplitCommandStore((s) => s.publish);
+  useEffect(() => {
+    publishSplitSnapshot({
+      open: splitOpen,
+      panes: splitState.panes.map((p) => p.kind),
+      maximized: splitState.maximized,
+    });
+  }, [splitOpen, splitState, publishSplitSnapshot]);
+
+  // Navigating to a different tab closes the split overlay, so the user is
+  // never left staring at the previous tab's content behind an overlay.
+  const selectTab = useCallback((tab: NavTab) => {
+    if (tab !== activeTab) setSplitOpen(false);
+    setActiveTab(tab);
+  }, [activeTab]);
+  const loadPomodoroSettings = usePomodoroStore((s) => s.loadSettings);
+  // Live status -> theme mapping (synced); re-applies the theme when it changes.
+  useThemeStatusMap();
+  // Live synced UI state (current status + theme override).
+  useUiState();
+
+  // Reactive: true once a model with a key exists AND the user is
+  // signed in to Dexie Cloud (the /api/ai gateway authenticates every chat
+  // request with the cloud token). Keeps the launcher/panel disabled-state
+  // correct after Settings edits AND after sign-in / sign-out.
+  const [assistantConfigured, setAssistantConfigured] = useState(false);
+  const { models: assistantModels } = useAssistantStore();
+  useEffect(() => {
+    const evaluate = () => {
+      const hasModelWithKey = (assistantModels ?? []).some((m) => m.hasKey);
+      setAssistantConfigured(hasModelWithKey && !!getCloudAccessToken());
+    };
+    evaluate();
+    // Flip the flag when the session changes: sign-in completes AFTER the
+    // models are already loaded, so the models alone cannot drive this.
+    const sub = (db as {
+      cloud?: { currentUser?: { subscribe?: (fn: () => void) => { unsubscribe(): void } } };
+    }).cloud?.currentUser?.subscribe?.(evaluate);
+    return () => sub?.unsubscribe?.();
+  }, [assistantModels]);
 
   // The assistant's "not configured" affordances jump straight to Settings.
   const openAssistantSettings = useCallback(() => {
@@ -103,23 +222,66 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    initializeDatabaseDefaults().then(async () => {
-      initTheme();
-      // Apply stored pomodoro durations to the timer engine.
+    // Seeding is gated on sign-in state (see defaultData.ts):
+    //  - never signed in  -> seed now, a fresh local start
+    //  - signed in         -> wait for the first sync to finish, so this device
+    //                         can only fill gaps, never overwrite synced rows.
+    const applySettings = async () => {
+      // Apply stored pomodoro durations to the timer engine (falls back to the
+      // code defaults when the synced row has not arrived yet).
       const row = await db.appSettings.get('pomodoro');
-      if (row) {
-        const { id: _id, ...settings } = row;
-        loadPomodoroSettings(settings);
-      }
+      loadPomodoroSettings(row ? stripId(row) : defaultPomodoroSettings);
+    };
+
+    const cloud = db.cloud;
+    if (!cloud) {
+      // No addon (should not happen) or no config: plain local start.
+      initializeDatabaseDefaults().then(applySettings);
+      return;
+    }
+
+    // `currentUserId` is a non-empty string even for the anonymous realm, so
+    // the real test is the addon's isLoggedIn flag.
+    if (!cloud.currentUser?.value?.isLoggedIn) {
+      // Not logged in (anonymous): safe to seed defaults locally.
+      initializeDatabaseDefaults().then(applySettings);
+      return;
+    }
+
+    // Signed in. Wait for the first sync to complete before seeding, so a
+    // device that just signed in pulls the account's settings first.
+    let cancelled = false;
+    const sub = cloud.events.syncComplete.subscribe(async () => {
+      if (cancelled) return;
+      await initializeDatabaseDefaults();
+      await applySettings();
     });
-  }, [initTheme, loadPomodoroSettings]);
+    // Safety net: seed gaps once the DB is open even if offline, so a signed-in
+    // user is never left without the theme/pomodoro defaults. Because seeding
+    // is insert-if-missing, synced rows always win on the next successful sync.
+    initializeDatabaseDefaults().then(applySettings);
+    return () => {
+      cancelled = true;
+      sub.unsubscribe();
+    };
+  }, [loadPomodoroSettings]);
+
+  // A PDF's half-screen mode: the split with that PDF in one pane and its own
+  // topic notes in the other. Opens immediately, from whichever tab the button
+  // was on, WITHOUT navigating anywhere.
+  const openPdfWithNotes = useCallback((resourceId: string, topicId: string | null) => {
+    setAssistantPage(false);
+    useAssistantStore.getState().setOpen(false);
+    setSplitState(splitWithNotes(resourceId, topicId));
+    setSplitOpen(true);
+  }, []);
 
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
         return <DashboardPage onNavigate={(tab) => setActiveTab(tab)} />;
       case 'library':
-        return <LibraryPage />;
+        return <LibraryPage onSplitWithNotes={openPdfWithNotes} />;
       case 'calendar':
         return <CalendarPage quickAddNonce={quickAddEventNonce} />;
       case 'shifts':
@@ -127,14 +289,36 @@ export const App: React.FC = () => {
       case 'focus':
         return <FocusPage />;
       case 'settings':
-        return <SettingsPage />;
+        return <SettingsPage onOpenAbout={() => setActiveTab('about')} />;
+      case 'about':
+        return <AboutPage />;
       default:
         return <DashboardPage onNavigate={(tab) => setActiveTab(tab)} />;
     }
   };
 
   return (
-    <AppLayout activeTab={activeTab} onSelectTab={setActiveTab}>
+    <AppLayout
+      activeTab={activeTab}
+      onSelectTab={selectTab}
+      splitOpen={splitOpen}
+      onToggleSplit={toggleSplit}
+      overlay={
+        /* App-level overlay: sits above whichever tab is active and never
+           changes it, so closing returns to the same tab. */
+        splitOpen ? (
+          <div className="absolute inset-x-0 top-14 bottom-0 z-20 bg-bg overflow-hidden pb-16 md:pb-0">
+            <SplitView
+              state={splitState}
+              setState={setSplitState}
+              onNavigate={(tab) => setActiveTab(tab)}
+              onOpenAssistantSettings={openAssistantSettings}
+              onCloseSplit={closeSplit}
+            />
+          </div>
+        ) : null
+      }
+    >
       {assistantPage ? (
         <AssistantPage
           onOpenSettings={openAssistantSettings}
@@ -152,8 +336,21 @@ export const App: React.FC = () => {
           />
 
           {/* Global AI assistant: floating launcher (every page) + chat panel. */}
-          <AssistantLauncher configured={assistantConfigured} onOpenSettings={openAssistantSettings} />
-          <AssistantPanel onOpenSettings={openAssistantSettings} onExpand={openAssistantPage} />
+          {/* The floating AI button. Its visibility comes from ONE rule
+          (`shouldShowFloatingAi`) rather than from a prop tied directly to
+          whether split view is open, because the rule depends on what the panes
+          are showing, not just on split state. */}
+      <AssistantLauncher
+        configured={assistantConfigured}
+        onOpenSettings={openAssistantSettings}
+        hidden={!floatingAiVisible}
+        mode={splitOpen ? 'split' : 'standalone'}
+      />
+          <AssistantPanel
+          onOpenSettings={openAssistantSettings}
+          onExpand={openAssistantPage}
+          mode={splitOpen ? 'split' : 'standalone'}
+        />
 
           {/* Action confirmations raised by the assistant's function calls. */}
           <Toaster />

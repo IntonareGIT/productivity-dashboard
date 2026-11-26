@@ -1,4 +1,6 @@
 @import './themes.css';
+@import './noteRichMedia.css';
+@import './pdfTextLayer.css';
 
 @tailwind base;
 @tailwind components;

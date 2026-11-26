@@ -1,24 +1,46 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { endOfWeek, format, isBefore, isToday, isWithinInterval, parseISO, startOfWeek } from 'date-fns';
-import { ArrowLeft, BookOpenCheck, CalendarClock, Check, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Pencil, Plus, Search, Timer, Trash2 } from 'lucide-react';
+import { ArrowLeft, BookOpenCheck, CalendarClock, Check, ChevronDown, ChevronUp, ChevronRight, Clock, Columns2, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Loader2, Pencil, Plus, Search, Timer, Trash2, AlertTriangle } from 'lucide-react';
 import { db } from '../../../db/db';
 import { Card } from '../../../components/ui/Card';
-import { MarkdownNotes } from './MarkdownNotes';
+import { Modal } from '../../../components/ui/Modal';
+import { toast } from '../../../stores/useToastStore';
+import { MarkdownNotes, NoteTitleInput } from './MarkdownNotes';
+import { NotesEditorBody } from './NotesEditorBody';
 import { TopicModal } from './TopicModal';
 import { ResourceModal } from './ResourceModal';
+import { ResourceViewer } from './ResourceViewer';
+import { ResourceFullScreen, useResourceFullScreen } from '../../split/useResourceFullScreen';
 import { AssessmentModal } from './AssessmentModal';
-import { deleteAssessment, deleteResource, deleteTopicCascade, ensureDefaultTopic, resourceObjectUrl, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes } from '../libraryRepo';
-import type { Assessment, Resource, Subject, Topic, TopicStatus } from '../../../types';
+import { MoveToGroupMenu } from './MoveToGroupMenu';
+import { GroupNameEditor, NewGroupButton } from './ResourceGroups';
+import { GroupTree } from './GroupTree';
+import MarkdownViewer from './MarkdownViewer';
+import { useAssistantStore } from '../../../stores/useAssistantStore';
+import { startExtraction } from '../../../features/ai/extractionRunner';
+import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, moveGroup, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes, saveNote } from '../libraryRepo';
+import type { Assessment, Note, Resource, ResourceGroup, Subject, Topic, TopicStatus } from '../../../types';
+
+/**
+ * Which groups are collapsed, per subject.
+ *
+ * Module-level so the expanded/collapsed shape of a subject survives leaving it
+ * and coming back. Keyed by subject id, because the same group name can appear
+ * in two subjects and must not share state.
+ */
+const collapsedBySubject = new Map<string, Set<string>>();
 
 interface SubjectDetailProps {
   subject: Subject;
   onBack: () => void;
   onEditSubject: () => void;
   onDeleteSubject: () => void;
+  /** Open the split view with a PDF and its topic notes. */
+  onSplitWithNotes?: (resourceId: string, topicId: string | null) => void;
 }
 
-const isUrl = (value: string) => /^https?:\/\//i.test(value);
+const isUrl = (value: string | undefined) => /^https?:\/\//i.test(value ?? '');
 
 const STATUS_META: Record<TopicStatus, { label: string; classes: string }> = {
   not_started: { label: 'Not started', classes: 'bg-bg-elevated text-content-secondary' },
@@ -44,14 +66,140 @@ function fmtBytes(bytes?: number | null): string {
 
 
 interface ResourceRowProps {
-  resource: Resource; copied: boolean; confirmDelete: boolean;
-  onToggle: () => void; onEdit: () => void; onDelete: () => void;
-  onCopy: () => void; onOpen: () => void; onDownload: () => void;
+  resource: Resource;
+  copied: boolean;
+  confirmDelete: boolean;
+  onToggle: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onCopy: () => void;
+  onPreview: () => void;
+  onDownload: () => void;
+  /** Opens the split with this resource and its topic notes. */
+  onSplitWithNotes?: (resourceId: string, topicId: string | null) => void;
+  /** The topic currently selected in the detail view, for the notes fallback. */
+  fallbackTopicId?: string | null;
+  /** Groups of this subject, for the "Move to group" menu. */
+  groups?: ResourceGroup[];
+  /** Note for extraction status. */
+  note?: Note | null;
+  /** Called when user clicks Extract/Start on a PDF. */
+  onStartExtraction?: (fileId: string, modelId?: string) => void;
+  /** Called when user clicks View markdown on a PDF. */
+  onViewMarkdown?: (fileId: string, fileTitle: string) => void;
 }
 
-function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onOpen, onDownload }: ResourceRowProps) {
+function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onPreview, onDownload, onSplitWithNotes, fallbackTopicId, groups, note, onStartExtraction, onViewMarkdown }: ResourceRowProps) {
   const meta = dueMeta(resource);
   const isFile = resource.kind === 'file';
+  const isPdf = isFile && (resource.mimeType === 'application/pdf' || resource.fileName?.toLowerCase().endsWith('.pdf'));
+  const extractStatus = note?.status ?? 'none';
+  const hasNote = !!note;
+
+  const renderExtractStatus = () => {
+    if (!isPdf) return null;
+    const models = useAssistantStore.getState().models;
+    const pdfModels = models.filter((m) => m.capabilities.acceptsPdf && m.hasKey);
+    const hasMultipleModels = pdfModels.length > 1;
+    const defaultModelId = pdfModels[0]?.id;
+    const [selectedModelId, setSelectedModelId] = useState<string>(defaultModelId ?? '');
+
+    const handleStart = () => {
+      if (extractStatus === 'none') {
+        if (pdfModels.length === 0) {
+          toast('info', 'No PDF-capable model', 'Add one in Settings → AI Models');
+          return;
+        }
+        toast('info', 'Retry clicked', resource.title);
+        onStartExtraction?.(resource.id, hasMultipleModels ? selectedModelId : defaultModelId);
+      } else if (extractStatus === 'queued') {
+        toast('info', 'Extraction started', resource.title);
+        onStartExtraction?.(resource.id);
+      } else if (extractStatus === 'failed') {
+        toast('info', 'Retry clicked', resource.title);
+        onStartExtraction?.(resource.id, hasMultipleModels ? selectedModelId : defaultModelId);
+      }
+    };
+
+    const modelPicker = hasMultipleModels && (extractStatus === 'none' || extractStatus === 'failed') ? (
+      <select
+        value={selectedModelId}
+        onChange={(e) => setSelectedModelId(e.target.value)}
+        className="text-[11px] px-2 py-1 rounded border border-border bg-bg-elevated text-content-primary"
+        aria-label="Choose extraction model"
+      >
+        {pdfModels.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.displayName} ({m.modelId})
+          </option>
+        ))}
+      </select>
+    ) : null;
+
+    switch (extractStatus) {
+      case 'none':
+        return (
+          <div className="flex items-center gap-2">
+            {modelPicker}
+            <button
+              onClick={handleStart}
+              disabled={pdfModels.length === 0}
+              className={`flex items-center gap-1 text-[11px] font-semibold ${pdfModels.length === 0 ? 'text-slate-400 cursor-not-allowed' : 'text-amber-500 hover:underline'}`}
+              title={pdfModels.length === 0 ? 'Add a PDF-capable model in Settings → AI Models' : 'Start extraction'}
+            >
+              <Clock className="w-3 h-3" /> {pdfModels.length === 0 ? 'No model' : 'Extract'}
+            </button>
+          </div>
+        );
+      case 'queued':
+        return (
+          <button
+            onClick={handleStart}
+            className="flex items-center gap-1 text-xs font-semibold text-amber-500 hover:underline"
+            title="Start extraction"
+          >
+            <Clock className="w-3 h-3" /> Start
+          </button>
+        );
+      case 'processing':
+        return (
+          <span className="flex items-center gap-1 text-xs text-blue-500">
+            <Loader2 className="w-3 h-3 animate-spin" /> Processing
+          </span>
+        );
+      case 'ready':
+        return (
+          <span className="flex items-center gap-1 text-xs text-emerald-500">
+            <Check className="w-3 h-3" /> Markdown ready
+          </span>
+        );
+      case 'failed':
+        return (
+          <div className="flex items-center gap-2">
+            {modelPicker}
+            <button
+              onClick={handleStart}
+              className="flex items-center gap-1 text-xs font-semibold text-rose-500 hover:underline"
+              title="Retry extraction"
+            >
+              <AlertTriangle className="w-3 h-3" /> Retry
+            </button>
+            {pdfModels.length === 0 && (
+              <a
+                href="/settings?section=ai"
+                className="text-[11px] font-semibold text-rose-500 hover:underline"
+                onClick={(e) => e.stopPropagation()}
+              >
+                Add model
+              </a>
+            )}
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className={`rounded-xl border p-3 ${resource.completed ? 'border-border bg-bg-elevated/30 opacity-70' : 'border-border bg-bg-elevated/40'}`}>
       <div className="flex items-start gap-2.5">
@@ -72,18 +220,45 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
                   <span className="font-mono truncate">{resource.fileName || resource.title}</span>
                   {resource.fileSize != null && <span className="text-content-tertiary">({fmtBytes(resource.fileSize)})</span>}
                 </span>
-                <button onClick={onOpen} className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><Eye className="w-3 h-3" /> View</button>
-                {resource.blob && <button onClick={onDownload} className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><Download className="w-3 h-3" /> Download</button>}
+                <button onClick={onPreview} className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><Eye className="w-3 h-3" /> Preview</button>
+                {isPdf && note && (
+                  <button
+                    onClick={() => onViewMarkdown?.(resource.id, resource.title)}
+                    disabled={!note.markdown.trim().length}
+                    className={`flex items-center gap-1 text-[11px] font-semibold ${note.markdown.trim().length ? 'text-accent hover:underline' : 'text-content-tertiary opacity-60'} hover:underline`}
+                    title={note.markdown.trim().length ? 'Open extracted markdown' : 'No text yet — run extraction first'}
+                  >
+                    <FileText className="w-3 h-3 shrink-0" /> {note.markdown.trim().length ? 'View markdown' : 'No text yet'}
+                  </button>
+                )}
+                {onSplitWithNotes && (
+                  <button
+                    onClick={() => onSplitWithNotes(resource.id, resource.topicId ?? fallbackTopicId ?? null)}
+                    className="flex items-center gap-1 text-[11px] font-semibold text-content-secondary hover:text-accent hover:underline"
+                    title="Open side by side with this resource's topic notes"
+                  >
+                    <Columns2 className="w-3 h-3" /> Split with notes
+                  </button>
+                )}
+                {resource.blob || resource.r2Key ? (
+                  <button onClick={onDownload} className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><Download className="w-3 h-3" /> Download</button>
+                ) : null}
               </div>
-            ) : isUrl(resource.urlOrPath) ? (
-              <a href={resource.urlOrPath} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-accent hover:underline min-w-0">
-                <ExternalLink className="w-3 h-3 shrink-0" /><span className="truncate">{resource.urlOrPath}</span>
-              </a>
+            ) : resource.urlOrPath ? (
+              isUrl(resource.urlOrPath) ? (
+                <a href={resource.urlOrPath} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-accent hover:underline min-w-0">
+                  <ExternalLink className="w-3 h-3 shrink-0" /><span className="truncate">{resource.urlOrPath}</span>
+                </a>
+              ) : (
+                <button onClick={onCopy} title="Copy path" className="flex items-center gap-1 text-xs text-content-secondary hover:text-accent min-w-0">
+                  <FileText className="w-3 h-3 shrink-0" /><span className="font-mono truncate">{resource.urlOrPath}</span><Copy className="w-3 h-3 shrink-0" />
+                  {copied && <span className="text-emerald-500">copied</span>}
+                </button>
+              )
             ) : (
-              <button onClick={onCopy} title="Copy path" className="flex items-center gap-1 text-xs text-content-secondary hover:text-accent min-w-0">
-                <FileText className="w-3 h-3 shrink-0" /><span className="font-mono truncate">{resource.urlOrPath}</span><Copy className="w-3 h-3 shrink-0" />
-                {copied && <span className="text-emerald-500">copied</span>}
-              </button>
+              // A link row with no URL (e.g. an imported record). Show a
+              // placeholder rather than an empty, dead "copy path" button.
+              <span className="text-[11px] text-content-tertiary">No URL</span>
             )}
           </div>
 
@@ -92,8 +267,17 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
               {resource.tags.map((tag, i) => (<span key={`${tag}-${i}`} className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-accent-subtle text-accent-text">{tag}</span>))}
             </div>
           )}
+
+          {/* Extraction status for PDF files */}
+          {renderExtractStatus()}
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {groups && <MoveToGroupMenu
+            resourceId={resource.id}
+            subjectId={resource.subjectId}
+            currentGroupId={resource.groupId ?? null}
+            groups={groups}
+          />}
           <button onClick={onEdit} aria-label="Edit resource" className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
           <button onClick={onDelete} aria-label="Delete resource" className={`p-2 rounded-lg ${confirmDelete ? 'bg-rose-600 text-white' : 'text-content-tertiary hover:text-rose-500 hover:bg-rose-500/10'}`}>
             <Trash2 className="w-3.5 h-3.5" />
@@ -104,28 +288,228 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
   );
 }
 
+/**
+ * "in 3 days" / "today" / "2 days ago" for an assessment, or null when it
+ * makes no sense (no date, or already marked done).
+ *
+ * Calendar days, not 24-hour spans: an assessment on the 30th is "today" for
+ * the whole of the 30th, and a part-day difference would say "tomorrow" for
+ * something eight hours away.
+ */
+function daysLeftLabel(date: string, status: string): string | null {
+  if (!date || status === 'done') return null;
+  const [y, m, d] = date.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const target = Date.UTC(y, m - 1, d);
+  const days = Math.round((target - todayUtc) / 86_400_000);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Tomorrow';
+  if (days > 1) return `In ${days} days`;
+  if (days === -1) return 'Yesterday';
+  return `${Math.abs(days)} days ago`;
+}
+
 /** Subject detail: progress + topics grid + two-pane topic view + assessments + focus stats. */
-export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, onEditSubject, onDeleteSubject }) => {
+export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, onEditSubject, onDeleteSubject, onSplitWithNotes }) => {
   const topics = useLiveQuery(() => db.topics.where('subjectId').equals(subject.id).toArray(), [subject.id]) ?? [];
   const resources = useLiveQuery(() => db.resources.where('subjectId').equals(subject.id).toArray(), [subject.id]) ?? [];
+  const groups = useLiveQuery(
+    () => db.resourceGroups.where('subjectId').equals(subject.id).toArray(),
+    [subject.id],
+  ) ?? [];
   const assessments = useLiveQuery(() => db.assessments.where('subjectId').equals(subject.id).toArray(), [subject.id]) ?? [];
   const sessions = useLiveQuery(() => db.pomodoroSessions.where('subjectId').equals(subject.id).toArray(), [subject.id]) ?? [];
+  const notes = useLiveQuery(() => db.notes.where('fileId').anyOf(resources.map((r) => r.id)).toArray(), [resources.length]) ?? [];
+  const noteByFileId = useMemo(() => new Map(notes.map((n) => [n.fileId, n])), [notes]);
 
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [editingNotes, setEditingNotes] = useState(false);
-  const [notesDraft, setNotesDraft] = useState('');
   const [notesSaved, setNotesSaved] = useState(false);
+  const [notesMinimized, setNotesMinimized] = useState(true);
   const [filter, setFilter] = useState('');
+
+  const exportTopicNotes = (format: 'pdf' | 'word') => {
+    if (!selectedTopic) return;
+    const text = selectedTopic.notes || '';
+    const title = selectedTopic.title;
+
+    const escapeHtml = (t: string) => t.replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;" }[c]!));
+    const isArabic = (t: string) => /[\u0600-\u06ff]/.test(t);
+    const inlineMd = (t: string) => escapeHtml(t)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/`([^`]+)`/g, '<code style="font-family:ui-monospace,SFMono-Regular,monospace;background:#f3f3f3;padding:.1rem .3rem;border-radius:.3rem">$1</code>');
+    const blockMd = (md: string): string => {
+      const lines = md.split('\n');
+      const out: string[] = [];
+      let inList = false, inTable = false;
+      const close = () => { if (inList) { out.push('</ul>'); inList = false; } if (inTable) { out.push('</table>'); inTable = false; } };
+      for (const raw of lines) {
+        const line = raw.replace(/\r$/,'');
+        const mHead = line.match(/^(#{1,3})\s+(.*)/);
+        if (mHead) { close(); const lvl = mHead[1].length; out.push(`<h${lvl}>${inlineMd(mHead[2])}</h${lvl}>`); continue; }
+        const mTable = line.match(/^\s*\|(.+)\|\s*$/);
+        if (mTable) {
+          if (!inTable) { out.push('<table border="1" cellspacing="0" cellpadding="4">'); inTable = true; }
+          const cells = line.split('|').slice(1,-1).map((c) => c.trim());
+          const isSep = cells.every((c) => /^[-:]+$/.test(c));
+          if (isSep) continue;
+          const tag = inTable && out[out.length-1]?.startsWith('<tr>') ? 'td' : 'th';
+          out.push(`<tr>${cells.map((c)=>`<${tag}>${inlineMd(c)}</${tag}>`).join('')}</tr>`);
+          if (tag === 'th') out.push('<tr>' + cells.map(() => '<td></td>').join('') + '</tr>');
+          continue;
+        }
+        close();
+        if (/^\s*[-*]\s+/.test(line)) { if (!inList) { out.push('<ul>'); inList = true; } out.push(`<li>${inlineMd(line.replace(/^\s*[-*]\s+/,''))}</li>`); continue; }
+        if (/^\s*\d+\.\s+/.test(line)) { if (!inList) { out.push('<ol>'); inList = true; } out.push(`<li>${inlineMd(line.replace(/^\s*\d+\.\s+/,''))}</li>`); continue; }
+        if (line.trim() === '') { if (!inList) out.push('<p></p>'); continue; }
+        const mImg = line.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+        if (mImg) { out.push(`<p><img src="${escapeHtml(mImg[2])}" alt="${escapeHtml(mImg[1])}" style="max-width:100%"/></p>`); continue; }
+        if (!inList) out.push(`<p dir="${isArabic(line)?'rtl':'ltr'}">${inlineMd(line)}</p>`);
+      }
+      close();
+      return out.join('');
+    };
+    const markdownHtml = blockMd(text);
+
+    if (format === 'pdf') {
+      const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;line-height:1.6;padding:2rem}
+h1{font-size:1.5rem;border-bottom:1px solid #ddd;padding-bottom:.5rem}h2{font-size:1.25rem}h3{font-size:1.1rem}
+p{margin:.6rem 0}ul,ol{margin:.6rem 0 .6rem 1.5rem}
+table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:.4rem .6rem}
+img{max-width:100%}code{background:#f3f3f3}pre{background:#f3f3f3;padding:.7rem;border-radius:.4rem;overflow:auto}
+blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style></head>
+<body><h1>${escapeHtml(title)}</h1>${markdownHtml}</body></html>`;
+      const win = window.open('', '_blank');
+      if (!win) return;
+      win.document.write(html);
+      win.document.close();
+      win.focus();
+      setTimeout(() => { win.print(); win.close(); }, 250);
+    } else {
+      const escapeXml = (t: string) => t.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&apos;"}[c]!));
+      const wordBody = markdownHtml
+        .replace(/<h([1-3])>(.*?)<\/h[1-3]>/g, '<w:p><w:pPr><w:pStyle w:val="Heading$1"/></w:pPr><w:r><w:t>$2</w:t></w:r></w:p>')
+        .replace(/<ul>(.*?)<\/ul>/gs, '<w:p><w:pPr><w:pStyle w:val="ListBullet"/></w:pPr><w:r><w:t>$1</w:t></w:r></w:p>')
+        .replace(/<ol>(.*?)<\/ol>/gs, '<w:p><w:pPr><w:pStyle w:val="ListNumber"/></w:pPr><w:r><w:t>$1</w:t></w:r></w:p>')
+        .replace(/<li>(.*?)<\/li>/g, '<w:p><w:r><w:t>• $1</w:t></w:r></w:p>')
+        .replace(/<p>(.*?)<\/p>/g, '<w:p><w:r><w:t xml:space="preserve">$1</w:t></w:r></w:p>')
+        .replace(/<strong>(.*?)<\/strong>/g, '<w:r><w:rPr><w:b/></w:rPr><w:t>$1</w:t></w:r>')
+        .replace(/<em>(.*?)<\/em>/g, '<w:r><w:rPr><w:i/></w:rPr><w:t>$1</w:t></w:r>');
+      const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:w="urn:schemas-microsoft-com:office:word"><w:body>${wordBody}</w:body></w:wordDocument>`;
+      const blob = new Blob([xml], { type: 'application/msword' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `${escapeHtml(title)}.doc`; document.body.appendChild(a);
+      a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    }
+  };
   const [addingTopic, setAddingTopic] = useState(false);
   const [editingTopic, setEditingTopic] = useState<Topic | null>(null);
   const [addingResource, setAddingResource] = useState(false);
   const [editingResource, setEditingResource] = useState<Resource | null>(null);
+  // The resource currently open in the preview modal, if any.
+  const [previewingResource, setPreviewingResource] = useState<Resource | null>(null);
+  // Real-browser full screen for the preview, wired through the SAME shared
+  // hook the split view uses.
+  const { fullScreenResource, openFullScreen, closeFullScreen } = useResourceFullScreen();
   const [addingAssessment, setAddingAssessment] = useState(false);
   const [editingAssessment, setEditingAssessment] = useState<Assessment | null>(null);
   const [confirmDeleteSubject, setConfirmDeleteSubject] = useState(false);
   const [deleteResourceId, setDeleteResourceId] = useState<string | null>(null);
+  /**
+   * A delete that has been confirmed but is waiting on the user to say whether
+   * the cloud copy goes too. `null` = no delete pending; otherwise the id and
+   * the r2Key of the row being deleted.
+   */
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; r2Key: string | null } | null>(null);
   const [deleteTopicId, setDeleteTopicId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [markdownViewerFile, setMarkdownViewerFile] = useState<{ fileId: string; fileTitle: string } | null>(null);
+  /**
+   * Collapsed group ids, remembered PER SUBJECT.
+   *
+   * A module-level map rather than plain component state, so collapsing a deep
+   * branch in one subject survives leaving that subject and coming back, which
+   * is what "remembered expand state per subject" has to mean in practice.
+   */
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    () => collapsedBySubject.get(subject.id) ?? new Set(),
+  );
+  /** Which group is showing its inline rename box. */
+  const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
+
+  // Persist on every change, and drop the entry when the subject is left.
+  useEffect(() => {
+    collapsedBySubject.set(subject.id, collapsedGroups);
+    return () => { collapsedBySubject.set(subject.id, collapsedGroups); };
+  }, [collapsedGroups, subject.id]);
+
+  /**
+   * Run a group write and REPORT the failure.
+   *
+   * These used to be `void saveResourceGroup(...)` with no error handling, so a
+   * rejected Dexie write (or a validation throw) vanished and the UI looked
+   * unresponsive. Every group action now awaits and surfaces the reason as a
+   * toast, so "nothing happened" is never a silent state.
+   */
+  const runGroupAction = useCallback(async (
+    what: string,
+    work: () => Promise<unknown>,
+  ): Promise<boolean> => {
+    try {
+      await work();
+      return true;
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      toast('error', `Could not ${what}`, reason);
+      return false;
+    }
+  }, []);
+
+  /**
+   * Create a group at a level. `parentGroupId === null` is the subject root.
+   *
+   * The one function behind both the top-level "New group" button and every
+   * group's "New subgroup", so the two can never diverge.
+   */
+  const createGroup = useCallback(async (name: string, parentGroupId: string | null = null) => {
+    const ok = await runGroupAction('create group',
+      () => saveResourceGroup({ subjectId: subject.id, name, parentGroupId }));
+    if (ok) toast('success', 'Group created', name);
+  }, [runGroupAction, subject.id]);
+
+  const renameGroup = useCallback(async (groupId: string, name: string) => {
+    const ok = await runGroupAction('rename group', () => renameResourceGroup(groupId, name));
+    if (ok) toast('success', 'Group renamed', name);
+  }, [runGroupAction]);
+
+  const removeGroup = useCallback(async (groupId: string, name: string) => {
+    // Deleting a group moves its resources AND its child groups up one level;
+    // it never deletes them. The confirmation states those counts first.
+    const ok = await runGroupAction('delete group', () => deleteResourceGroup(groupId));
+    if (ok) toast('success', 'Group deleted', `${name} was removed. Its contents were kept.`);
+  }, [runGroupAction]);
+
+  const moveGroupAction = useCallback(async (groupId: string, newParentGroupId: string | null) => {
+    const ok = await runGroupAction('move group', () => moveGroup(groupId, newParentGroupId));
+    if (ok) toast('success', 'Group moved', 'The group is now in its new place.');
+  }, [runGroupAction]);
+
+  // The tree does its own ordering and depth, so the raw list is passed through.
+  const sortedGroups = groups;
+  const toggleGroupCollapsed = (id: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (topics.length === 0) void ensureDefaultTopic(subject.id);
@@ -141,12 +525,12 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   }, [sortedTopics, selectedTopicId]);
 
   useEffect(() => {
-    setSelectedTopicId(null); setEditingNotes(false); setNotesDraft(''); setFilter('');
+    setSelectedTopicId(null); setEditingNotes(false); setFilter('');
     setDeleteResourceId(null); setDeleteTopicId(null); setConfirmDeleteSubject(false);
   }, [subject.id]);
 
   useEffect(() => {
-    setNotesDraft(selectedTopic?.notes ?? ''); setEditingNotes(false); setNotesSaved(false);
+    setEditingNotes(false); setNotesSaved(false);
   }, [selectedTopic?.id, selectedTopic?.notes]);
 
   const confidentCount = topics.filter((t) => t.status === 'confident').length;
@@ -164,8 +548,14 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
       return a.title.localeCompare(b.title);
     });
     if (!q) return sorted;
-    return sorted.filter((r) => r.title.toLowerCase().includes(q) || r.urlOrPath.toLowerCase().includes(q) || (r.fileName ?? '').toLowerCase().includes(q) || r.tags.some((t) => t.toLowerCase().includes(q)));
+    return sorted.filter((r) => r.title.toLowerCase().includes(q) || (r.urlOrPath ?? '').toLowerCase().includes(q) || (r.fileName ?? '').toLowerCase().includes(q) || r.tags.some((t) => t.toLowerCase().includes(q)));
   }, [resources, selectedTopic, filter, topics.length]);
+
+  /** The resources with no group, shown after the grouped sections. */
+  const ungroupedResources = useMemo(
+    () => topicResources.filter((r) => !r.groupId),
+    [topicResources],
+  );
 
   const sortedAssessments = useMemo(() => [...assessments].sort((a, b) => a.date.localeCompare(b.date)), [assessments]);
 
@@ -182,15 +572,9 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
     return { weekMin, monthMin, sessions: focus.length };
   }, [sessions]);
 
-  const saveNotes = async () => {
-    if (!selectedTopic) return;
-    await updateTopicNotes(selectedTopic.id, notesDraft);
-    setEditingNotes(false);
-    setNotesSaved(true);
-    window.setTimeout(() => setNotesSaved(false), 1500);
-  };
-
   const copyPath = async (resource: Resource) => {
+    // A file row has no path; there is nothing to copy.
+    if (!resource.urlOrPath) return;
     try {
       await navigator.clipboard.writeText(resource.urlOrPath);
       setCopiedId(resource.id);
@@ -198,26 +582,35 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
     } catch { /* clipboard unavailable */ }
   };
 
-  const openFile = (resource: Resource) => {
-    const url = resourceObjectUrl(resource);
-    if (!url) return;
-    window.open(url, '_blank', 'noopener');
-    if (resource.blob) window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  const downloadFile = async (resource: Resource) => {
+    if (resource.blob instanceof Blob) {
+      const url = URL.createObjectURL(resource.blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = resource.fileName || resource.title;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      return;
+    }
+    if (resource.r2Key) {
+      try {
+        const { downloadFromR2 } = await import('../../ai/cloudClient');
+        const blob = await downloadFromR2(resource.r2Key);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = resource.fileName || resource.title;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      } catch {
+        // Fall through: the row simply has no download available right now.
+      }
+    }
   };
-
-  const downloadFile = (resource: Resource) => {
-    if (!resource.blob) return;
-    const url = URL.createObjectURL(resource.blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = resource.fileName || resource.title;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  };
-
-  const notesDirty = notesDraft !== (selectedTopic?.notes ?? '');
 
   return (
     <div className="space-y-4">
@@ -321,23 +714,78 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
         >
           {!selectedTopic ? (
             <p className="text-xs text-content-tertiary">No topic selected.</p>
-          ) : editingNotes ? (
-            <div>
-              <textarea autoFocus value={notesDraft} onChange={(e) => setNotesDraft(e.target.value)} rows={14} placeholder={'# Heading\n**bold** *italic* `code`\n- list item'} className="w-full bg-bg-elevated border border-border rounded-xl px-3 py-2.5 text-sm text-content-primary outline-none focus:border-accent resize-y min-h-[280px] font-mono" />
-              <div className="flex items-center justify-end gap-2 mt-2">
-                <button onClick={() => { setNotesDraft(selectedTopic.notes); setEditingNotes(false); }} className="px-4 min-h-[40px] rounded-xl text-xs text-content-secondary hover:text-content-primary transition-colors">Cancel</button>
-                <button onClick={saveNotes} disabled={!notesDirty} className="px-4 min-h-[40px] rounded-xl bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-xs font-semibold transition-colors">Save notes</button>
-              </div>
-            </div>
           ) : (
-            <div>
-              <MarkdownNotes text={selectedTopic.notes} />
-              <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-border/50">
-                {notesSaved && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
-                <button onClick={() => setEditingNotes(true)} className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-border-strong transition-colors">
-                  <Pencil className="w-3.5 h-3.5" /> Edit notes
+            <div className="mt-2">
+              <div className="flex items-center justify-between mb-2">
+                <button
+                  onClick={() => setNotesMinimized((p) => !p)}
+                  aria-label={notesMinimized ? 'Expand notes' : 'Collapse notes'}
+                  className="flex items-center gap-1 text-xs font-semibold text-content-secondary hover:text-content-primary transition-colors"
+                >
+                  {notesMinimized ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+                  {notesMinimized ? 'Show notes' : 'Hide notes'}
                 </button>
+                {selectedTopic.notes && !editingNotes && (
+                  <>
+                    <button
+                      onClick={() => exportTopicNotes('pdf')}
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-accent transition-colors"
+                      title="Export notes as PDF"
+                    >
+                      <Download className="w-3 h-3" /> PDF
+                    </button>
+                    <button
+                      onClick={() => exportTopicNotes('word')}
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-accent transition-colors"
+                      title="Export notes as Word"
+                    >
+                      <Download className="w-3 h-3" /> Word
+                    </button>
+                  </>
+                )}
               </div>
+              {notesMinimized ? null : (
+                <div className="mt-3">
+                  {editingNotes ? (
+                    <div>
+                      <NoteTitleInput
+                        topic={selectedTopic}
+                        className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 mb-1"
+                      />
+                      <NotesEditorBody
+                        topic={selectedTopic}
+                        minHeight="min-h-[280px]"
+                        onSaved={() => {
+                          setNotesSaved(true);
+                          window.setTimeout(() => setNotesSaved(false), 1500);
+                        }}
+                      />
+                      <div className="flex items-center justify-end gap-2 mt-2">
+                        <button onClick={() => setEditingNotes(false)} className="px-4 min-h-[40px] rounded-xl text-xs text-content-secondary hover:text-content-primary transition-colors">Done</button>
+                        {notesSaved && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <NoteTitleInput
+                        topic={selectedTopic}
+                        className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 mb-1"
+                      />
+                      <MarkdownNotes
+                        text={selectedTopic.notes}
+                        html={selectedTopic.contentHtml}
+                        hasHtml={topicUsesHtml(selectedTopic)}
+                      />
+                      <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-border/50">
+                        {notesSaved && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
+                        <button onClick={() => setEditingNotes(true)} className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-border-strong transition-colors">
+                          <Pencil className="w-3 h-3" /> Edit notes
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </Card>
@@ -355,25 +803,121 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
             <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-content-tertiary" />
             <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter resources…" className="w-full bg-bg-elevated border border-border rounded-xl pl-9 pr-3 py-2.5 text-xs text-content-primary outline-none focus:border-accent placeholder:text-content-tertiary" />
           </div>
+          {/* The group controls sit OUTSIDE the "no resources" branch on purpose.
+              Previously they only existed when the topic already had resources,
+              so a new empty topic could not host a group at all. */}
+          <div className="mb-3">
+            <NewGroupButton onCreate={createGroup} />
+          </div>
           {topicResources.length === 0 ? (
             <p className="text-xs text-content-tertiary py-6 text-center">{filter ? 'No resources match.' : 'No resources for this topic yet.'}</p>
           ) : (
-            <div className="space-y-2.5">
-              {topicResources.map((resource) => (
-                <ResourceRow
-                  key={resource.id}
-                  resource={resource}
-                  copied={copiedId === resource.id}
-                  confirmDelete={deleteResourceId === resource.id}
-                  onToggle={() => toggleResourceCompleted(resource)}
-                  onEdit={() => setEditingResource(resource)}
-                  onDelete={() => (deleteResourceId === resource.id ? void deleteResource(resource.id).then(() => setDeleteResourceId(null)) : setDeleteResourceId(resource.id))}
-                  onCopy={() => copyPath(resource)}
-                  onOpen={() => openFile(resource)}
-                  onDownload={() => downloadFile(resource)}
-                />
-              ))}
-            </div>
+            <>
+              {/* The nested group tree owns the whole grouping surface: the
+                  indented levels, expand/collapse, the per-group counts, and
+                  the rename / delete / move / new-subgroup actions. It is given
+                  the resources to render rather than rendering them itself, so
+                  the row behaviour stays exactly as it was. */}
+              <GroupTree
+                subjectId={subject.id}
+                groups={sortedGroups}
+                resources={topicResources}
+                collapsedIds={collapsedGroups}
+                onToggleCollapsed={toggleGroupCollapsed}
+                renamingGroupId={renamingGroupId}
+                onStartRename={setRenamingGroupId}
+                onCommitRename={renameGroup}
+                onCreateGroup={createGroup}
+                onDeleteGroup={removeGroup}
+                onMoveGroup={moveGroupAction}
+renderResources={(groupId) => {
+                  const members = topicResources.filter((r) => r.groupId === groupId);
+                  return members.map((resource) => (
+                    <ResourceRow
+                      key={resource.id}
+                      resource={resource}
+                      copied={copiedId === resource.id}
+                      confirmDelete={deleteResourceId === resource.id}
+                      onToggle={() => toggleResourceCompleted(resource)}
+                      onEdit={() => setEditingResource(resource)}
+                      onDelete={() => {
+                      const r = resources.find((x) => x.id === resource.id);
+                      setPendingDelete(r ? { id: r.id, r2Key: r.r2Key ?? null } : { id: resource.id, r2Key: null });
+                    }}
+                      onCopy={() => copyPath(resource)}
+                      onPreview={() => setPreviewingResource(resource)}
+                      onDownload={() => downloadFile(resource)}
+                      onSplitWithNotes={onSplitWithNotes}
+                      fallbackTopicId={selectedTopic?.id ?? null}
+                      groups={sortedGroups}
+                      note={noteByFileId.get(resource.id) ?? null}
+                      onViewMarkdown={(fileId, fileTitle) => setMarkdownViewerFile({ fileId, fileTitle })}
+                      onStartExtraction={async (fileId, modelId) => {
+                      console.log('[extract] onStartExtraction called', { fileId, modelId });
+                      const note = noteByFileId.get(fileId);
+                      if (!note || note.status === 'none') {
+                        // Create note and initialize extraction
+                        const { saveNote, initNoteForExtraction } = await import('../libraryRepo');
+                        await saveNote({
+                          fileId,
+                          status: 'queued',
+                          modelId: modelId ?? note?.modelId,
+                        });
+                        await initNoteForExtraction(fileId, modelId ?? note?.modelId ?? '');
+                      } else if (note.status === 'failed') {
+                        // For failed, update modelId if provided and reset status to processing
+                        if (modelId && modelId !== note.modelId) {
+                          const { db } = await import('../../../db/db');
+                          await db.notes.put({ ...note, modelId, status: 'processing', updatedAt: new Date().toISOString() });
+                        } else {
+                          const { db } = await import('../../../db/db');
+                          await db.notes.put({ ...note, status: 'processing', updatedAt: new Date().toISOString() });
+                        }
+                      }
+                      console.log('[extract] calling startExtraction for', fileId);
+                      startExtraction(fileId);
+                    }}
+                    />
+                  ));
+                }}
+                renderUngrouped={() => ungroupedResources.map((resource) => (
+                  <ResourceRow
+                    key={resource.id}
+                        resource={resource}
+                        copied={copiedId === resource.id}
+                    confirmDelete={pendingDelete?.id === resource.id}
+                        onToggle={() => toggleResourceCompleted(resource)}
+                        onEdit={() => setEditingResource(resource)}
+                    onDelete={() => {
+                      const r = resources.find((x) => x.id === resource.id);
+                      setPendingDelete(r ? { id: r.id, r2Key: r.r2Key ?? null } : { id: resource.id, r2Key: null });
+                    }}
+                        onCopy={() => copyPath(resource)}
+                        onPreview={() => setPreviewingResource(resource)}
+                        onDownload={() => downloadFile(resource)}
+                        onSplitWithNotes={onSplitWithNotes}
+                        fallbackTopicId={selectedTopic?.id ?? null}
+                        groups={sortedGroups}
+                        note={noteByFileId.get(resource.id) ?? null}
+                        onViewMarkdown={(fileId, fileTitle) => setMarkdownViewerFile({ fileId, fileTitle })}
+                      onStartExtraction={async (fileId, modelId) => {
+                      const note = noteByFileId.get(fileId);
+                      if (!note || note.status === 'none') {
+                        // Create note and initialize extraction
+                        const { saveNote, initNoteForExtraction } = await import('../libraryRepo');
+                        await saveNote({
+                          fileId,
+                          status: 'queued',
+                          modelId: modelId ?? note?.modelId,
+                        });
+                        await initNoteForExtraction(fileId, modelId ?? note?.modelId ?? '');
+                      }
+                      startExtraction(fileId);
+                    }}
+                      />
+                    ))}
+              />
+            </>
           )}
         </Card>
       </div>
@@ -404,7 +948,19 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
                         <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold bg-accent-subtle text-accent-text uppercase">{a.type}</span>
                         {a.weight != null && <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold bg-bg-elevated text-content-secondary">{a.weight}%</span>}
                       </div>
-                      <p className="text-[11px] text-content-secondary mt-1 flex items-center gap-1"><CalendarClock className="w-3 h-3" /> {a.date}</p>
+                      {/* The countdown, not just the raw date: "in 3 days" is what
+                          the user needs at a glance. An assessment with no date
+                          still shows here, so no row renders a bare "in NaN". */}
+                      <p className="text-[11px] text-content-secondary mt-1 flex items-center gap-1.5 flex-wrap">
+                        <span className="inline-flex items-center gap-1">
+                          <CalendarClock className="w-3 h-3" /> {a.date || 'No date'}
+                        </span>
+                        {daysLeftLabel(a.date, a.status) && (
+                          <span className="px-1.5 py-0.5 rounded bg-bg-elevated text-content-secondary font-semibold">
+                            {daysLeftLabel(a.date, a.status)}
+                          </span>
+                        )}
+                      </p>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <button onClick={() => setEditingAssessment(a)} aria-label="Edit assessment" className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
@@ -432,12 +988,127 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
         <TopicModal subjectId={subject.id} topic={editingTopic} onClose={() => { setEditingTopic(null); setAddingTopic(false); }} />
       )}
       {(addingResource || editingResource) && (
-        <ResourceModal subjectId={subject.id} topicId={selectedTopic?.id ?? null} resource={editingResource} onClose={() => { setEditingResource(null); setAddingResource(false); }} />
+        <ResourceModal
+          subjectId={subject.id}
+          subjectName={subject.name}
+          topicId={selectedTopic?.id ?? null}
+          resource={editingResource}
+          onClose={() => {
+            setEditingResource(null);
+            setAddingResource(false);
+          }}
+        />
       )}
       {(addingAssessment || editingAssessment) && (
         <AssessmentModal subjectId={subject.id} assessment={editingAssessment} onClose={() => { setEditingAssessment(null); setAddingAssessment(false); }} />
       )}
+      {previewingResource && (
+        <ResourceViewer
+          resource={previewingResource}
+          onClose={() => setPreviewingResource(null)}
+        />
+      )}
+      {pendingDelete && (
+        <DeleteResourceModal
+          resource={resources.find((r) => r.id === pendingDelete.id) ?? null}
+          cloudKey={pendingDelete.r2Key}
+          onClose={() => setPendingDelete(null)}
+          onConfirm={async (deleteCloud) => {
+            await deleteResource(pendingDelete.id, { deleteCloud });
+            setPendingDelete(null);
+          }}
+        />
+      )}
+      {/* The same shared full-screen preview the split view uses. */}
+      <ResourceFullScreen resource={fullScreenResource} onClose={closeFullScreen} />
+
+      {/* Markdown viewer modal */}
+      {markdownViewerFile && (
+        <MarkdownViewer
+          fileId={markdownViewerFile.fileId}
+          fileTitle={markdownViewerFile.fileTitle}
+          note={noteByFileId.get(markdownViewerFile.fileId) ?? null}
+          onClose={() => setMarkdownViewerFile(null)}
+          onReExtract={() => {
+            const fileId = markdownViewerFile.fileId;
+            const note = noteByFileId.get(fileId);
+            if (note?.modelId) {
+              startExtraction(fileId);
+            }
+          }}
+          onSave={() => {
+            setMarkdownViewerFile({ ...markdownViewerFile });
+          }}
+        />
+      )}
     </div>
+  );
+};
+
+/**
+ * Delete confirmation with the optional cloud half.
+ *
+ * Deleting the local row is always the first step and always happens. The
+ * cloud copy is a second, explicit choice — most users want the file gone
+ * everywhere, but a file that was re-added on another device is a legitimate
+ * reason to keep the cloud object around.
+ */
+const DeleteResourceModal: React.FC<{
+  resource: Resource | null;
+  cloudKey: string | null;
+  onClose: () => void;
+  onConfirm: (deleteCloud: boolean) => Promise<void>;
+}> = ({ resource, cloudKey, onClose, onConfirm }) => {
+  if (!resource) return null;
+  const [deleting, setDeleting] = useState(false);
+  const [deleteCloud, setDeleteCloud] = useState(true);
+
+  const confirm = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      await onConfirm(deleteCloud);
+    } catch (e) {
+      toast('error', 'Delete failed', e instanceof Error ? e.message : 'Could not delete the resource.');
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <Modal open onClose={onClose} title="Delete resource" subtitle={resource.title} size="md">
+      <div className="space-y-4">
+        <p className="text-sm text-content-secondary">
+          This removes the resource from this subject. It cannot be undone.
+        </p>
+        {cloudKey ? (
+          <label className="flex items-start gap-3 rounded-xl border border-border bg-bg-elevated/40 p-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={deleteCloud}
+              onChange={(e) => setDeleteCloud(e.target.checked)}
+              className="mt-0.5 accent-accent"
+            />
+            <div>
+              <p className="text-xs font-semibold text-content-primary">Also delete the cloud copy</p>
+              <p className="mt-0.5 text-[11px] text-content-tertiary">
+                The file lives in Cloudflare R2 as <span className="font-mono break-all">{cloudKey}</span>.
+                Leave this unchecked to keep the cloud copy — useful if you want to re-add it later.
+              </p>
+            </div>
+          </label>
+        ) : (
+          <p className="text-xs text-content-tertiary">
+            This file has no cloud copy, so there is nothing else to delete.
+          </p>
+        )}
+        <div className="flex items-center justify-end gap-2 border-t border-border/50 pt-4">
+          <button onClick={onClose} disabled={deleting} className="px-4 min-h-[44px] rounded-xl text-sm text-content-secondary hover:text-content-primary transition-colors">Cancel</button>
+          <button onClick={confirm} disabled={deleting} className="px-5 min-h-[44px] rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-sm font-semibold transition-colors">
+            {deleting ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 };
 

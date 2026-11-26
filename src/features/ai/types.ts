@@ -11,6 +11,15 @@ export interface ToolCall {
 export interface ChatMessage {
   role: ChatRole;
   content: string;
+  /** A small inline thumbnail (<~20 KB) for an attached photo on user turns. Full image bytes are never stored. */
+  image?: string | null;
+  /**
+   * Provider-native reasoning, when the model returned one (`reasoning_content`
+   * on DeepSeek-style payloads, `reasoning` on others). Kept SEPARATE from
+   * `content` so the answer replays verbatim on the wire while the UI can still
+   * show the reasoning in a collapsible block.
+   */
+  reasoning?: string;
   /** Present on assistant turns that request one or more functions. */
   toolCalls?: ToolCall[];
   /**

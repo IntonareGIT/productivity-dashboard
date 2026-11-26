@@ -1,6 +1,16 @@
 import { db } from '../../db/db';
-import type { Assessment, AssessmentStatus, AssessmentType, Resource, ResourceKind, Subject, Topic, TopicStatus } from '../../types';
+import {
+  generatedNoteTitleNumber,
+  getDefaultNoteTitle,
+  noteTitleForNumber,
+  uniqueDefaultNoteTitle,
+} from '../../db/noteTitle';
+import type { Assessment, AssessmentStatus, AssessmentType, Note, NoteChunk, Resource, ResourceGroup, ResourceKind, Subject, Topic, TopicStatus } from '../../types';
 import { newId } from '../../utils/id';
+import { markdownToEditorHtml } from './noteEditor/markdownToHtml';
+import { htmlToPlainText, sanitizeEditorHtml } from './noteEditor/sanitizeHtml';
+import { parentOf, validateGroupPlacement } from './groupTree';
+import { EXTRACTION_CONFIG, chunkPagesFor } from '../../../lib/config/extraction';
 
 /* ---------------- Subjects ---------------- */
 
@@ -19,13 +29,22 @@ export async function saveSubject(input: SubjectInput): Promise<string> {
   if (input.id) {
     const existing = await db.subjects.get(input.id);
     if (existing) {
-      await db.subjects.put({
-        ...existing,
-        name,
-        description: input.description?.trim() || undefined,
-        color: input.color,
-        notes: input.notes ?? existing.notes,
-        updatedAt: new Date().toISOString(),
+      // A rename and the note-title follow-through happen in ONE transaction, so
+      // there is no window where the subject reads "Physics" while its note is
+      // still "Thermodynamics's Notes". Both tables are listed so the write is
+      // atomic; neither is deleted.
+      await db.transaction('rw', [db.subjects, db.topics], async () => {
+        await db.subjects.put({
+          ...existing,
+          name,
+          description: input.description?.trim() || undefined,
+          color: input.color,
+          notes: input.notes ?? existing.notes,
+          updatedAt: new Date().toISOString(),
+        });
+        if (existing.name !== name) {
+          await renameGeneratedNoteTitles(existing.id, existing.name, name);
+        }
       });
       await ensureDefaultTopic(existing.id);
       return existing.id;
@@ -48,20 +67,64 @@ export async function saveSubject(input: SubjectInput): Promise<string> {
   return id;
 }
 
+/**
+ * Carry GENERATED note titles across a subject rename, without a new field.
+ *
+ * A note whose title was never typed by the user still equals the old default
+ * for the old subject name ("Thermodynamics's Notes", or that plus a number).
+ * Such a title is rewritten to the same number under the new name. A note whose
+ * title the user typed, or that the v9 migration derived from its content, does
+ * NOT match and is left exactly as it is.
+ *
+ * The number is preserved rather than recomputed, so "X's Notes 2" becomes
+ * "Y's Notes 2" and does not collide with a sibling that was already numbered.
+ * The check is purely textual, which is what keeps this additive: nothing is
+ * written to the database that was not already there.
+ */
+export async function renameGeneratedNoteTitles(
+  subjectId: string,
+  oldName: string,
+  newName: string,
+): Promise<number> {
+  if (oldName === newName) return 0;
+  const notes = await db.topics.where('subjectId').equals(subjectId).toArray();
+  const now = new Date().toISOString();
+  let changed = 0;
+  for (const n of notes) {
+    const num = generatedNoteTitleNumber(n.title, oldName);
+    // null means the user owns this title. Never touch it.
+    if (num === null) continue;
+    const next = noteTitleForNumber(newName, num);
+    if (next === n.title) continue;
+    await db.topics.put({ ...n, title: next, updatedAt: now });
+    changed += 1;
+  }
+  return changed;
+}
+
 export async function updateSubjectNotes(id: string, notes: string): Promise<void> {
   const existing = await db.subjects.get(id);
   if (!existing) return;
   await db.subjects.put({ ...existing, notes, updatedAt: new Date().toISOString() });
 }
 
-/** Delete subject + topics/resources/assessments/events; unlink pomodoro sessions. */
+/** Delete subject + topics/groups/resources/assessments/events; unlink pomodoro sessions. */
 export async function deleteSubjectCascade(id: string): Promise<void> {
   await db.transaction(
     'rw',
-    [db.subjects, db.topics, db.resources, db.assessments, db.calendarEvents, db.pomodoroSessions],
+    [db.subjects, db.topics, db.resources, db.resourceGroups, db.assessments, db.calendarEvents, db.pomodoroSessions],
     async () => {
       const res = await db.resources.where('subjectId').equals(id).toArray();
       if (res.length > 0) await db.resources.bulkDelete(res.map((r) => r.id));
+      // Groups belong to a subject and go with it. The resources above are
+      // deleted too, so nothing is left pointing at a removed group.
+      //
+      // This deletes EVERY group of the subject regardless of nesting depth,
+      // because the query is by `subjectId` rather than by parent. No depth
+      // walk is needed, and a nested group can never be orphaned by a subject
+      // delete.
+      const groups = await db.resourceGroups.where('subjectId').equals(id).toArray();
+      if (groups.length > 0) await db.resourceGroups.bulkDelete(groups.map((g) => g.id));
       const asm = await db.assessments.where('subjectId').equals(id).toArray();
       if (asm.length > 0) await db.assessments.bulkDelete(asm.map((a) => a.id));
       const top = await db.topics.where('subjectId').equals(id).toArray();
@@ -130,10 +193,99 @@ export async function updateTopicNotes(id: string, notes: string): Promise<void>
   await db.topics.put({ ...existing, notes, updatedAt: new Date().toISOString() });
 }
 
+/**
+ * Persist an edit made in the rich-text editor.
+ *
+ * Writes ONLY `contentHtml` and `contentFormat`. `notes` is never touched here,
+ * which is the safety property the whole storage design rests on: the original
+ * markdown survives every edit forever, so a bad conversion or a bad future
+ * editor can always be undone by clearing `contentHtml` and falling back to it.
+ */
+export async function updateTopicContentHtml(id: string, contentHtml: string): Promise<void> {
+  const existing = await db.topics.get(id);
+  if (!existing) return;
+  await db.topics.put({
+    ...existing,
+    contentHtml,
+    contentFormat: 'html',
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * The body the editor should open with.
+ *
+ * A note that already has editor HTML uses it. A note that is still markdown is
+ * converted ON THE FLY and returned, but nothing is written: the conversion is
+ * persisted only when `updateTopicContentHtml` is called, which happens on a real
+ * user edit. So merely OPENING a note never modifies it.
+ */
+export function editorHtmlForTopic(topic: Topic): string {
+  if (topic.contentFormat === 'html' && typeof topic.contentHtml === 'string') {
+    return sanitizeEditorHtml(topic.contentHtml);
+  }
+  return sanitizeEditorHtml(markdownToEditorHtml(topic.notes ?? ''));
+}
+
+/** True when the note's authoritative body is the rich-text field. */
+export function topicUsesHtml(topic: Topic): boolean {
+  return topic.contentFormat === 'html' && typeof topic.contentHtml === 'string';
+}
+
+/**
+ * Plain text for a note, from WHICHEVER format it is in.
+ *
+ * Used by `searchLibrary` and the AI note tools so neither has to know which
+ * format a given note happens to be stored in.
+ */
+export function topicPlainText(topic: Topic): string {
+  if (topicUsesHtml(topic)) return htmlToPlainText(topic.contentHtml ?? '');
+  return stripMarkdownForSearch(topic.notes ?? '');
+}
+
+/**
+ * Reduce markdown to comparable text for search.
+ *
+ * Only the decorative characters are removed, never the words, so a search for a
+ * formula or a code snippet still matches.
+ */
+function stripMarkdownForSearch(markdown: string): string {
+  return markdown
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_~#>]/g, '')
+    .trim();
+}
+
 export async function setTopicStatus(id: string, status: TopicStatus): Promise<void> {
   const existing = await db.topics.get(id);
   if (!existing) return;
   await db.topics.put({ ...existing, status, updatedAt: new Date().toISOString() });
+}
+
+/**
+ * Rename a note. An empty title falls back to the SUBJECT's default rather than
+ * being saved blank, so a note is never left with no label in a list.
+ *
+ * The fallback is numbered against the note's siblings, so clearing the title of
+ * a note in a subject that already has notes cannot create a duplicate label.
+ */
+export async function setTopicTitle(id: string, title: string): Promise<void> {
+  const existing = await db.topics.get(id);
+  if (!existing) return;
+  let next = title.trim();
+  if (!next) {
+    const subject = await db.subjects.get(existing.subjectId);
+    const siblings = await db.topics.where('subjectId').equals(existing.subjectId).toArray();
+    next = uniqueDefaultNoteTitle(
+      getDefaultNoteTitle(subject),
+      // The note itself is excluded, or it would always collide with itself.
+      siblings.filter((t) => t.id !== existing.id).map((t) => t.title),
+    );
+  }
+  if (next === existing.title) return;
+  await db.topics.put({ ...existing, title: next, updatedAt: new Date().toISOString() });
 }
 
 export async function deleteTopicCascade(id: string): Promise<void> {
@@ -154,7 +306,13 @@ export async function ensureDefaultTopic(subjectId: string): Promise<string> {
   const record: Topic = {
     id: newId(),
     subjectId,
-    title: 'General',
+    // A real, editable default rather than the generic 'General' placeholder
+    // that made every note look identical in lists and headers. Numbered when
+    // this subject already has notes, so two generated titles never collide.
+    title: uniqueDefaultNoteTitle(
+      getDefaultNoteTitle(subject),
+      existing.map((t) => t.title),
+    ),
     notes: subject?.notes ?? '',
     status: 'not_started',
     order: 0,
@@ -179,19 +337,40 @@ export interface ResourceInput {
   topicId?: string | null;
   kind?: ResourceKind;
   title: string;
+  /** Mandatory for kind 'link', omitted for kind 'file'. See Resource.urlOrPath. */
   urlOrPath?: string;
   fileName?: string | null;
   mimeType?: string | null;
   fileSize?: number | null;
   blob?: Blob | null;
+  /**
+   * When set, the file lives in Cloudflare R2 under this key and the row
+   * carries no blob. `blob` and `r2Key` are mutually exclusive: a row either
+   * holds the bytes locally or a pointer to the cloud object.
+   */
+  r2Key?: string | null;
   tags?: string[];
   dueDate?: string | null;
   completed?: boolean;
+  /** Target group; null/undefined leaves the resource ungrouped. */
+  groupId?: string | null;
 }
 
 function cleanTags(tags: unknown): string[] {
   if (!Array.isArray(tags)) return [];
   return (tags as unknown[]).map((t) => String(t).trim()).filter(Boolean);
+}
+
+/**
+ * Resolve a requested group to one that actually exists AND belongs to
+ * `subjectId`. Anything else yields null, so a bad id can never leave a resource
+ * pointing at a foreign or missing group.
+ */
+async function validGroupFor(subjectId: string, groupId: string | null | undefined): Promise<string | null> {
+  if (!groupId) return null;
+  const group = await db.resourceGroups.get(groupId);
+  if (!group || group.subjectId !== subjectId) return null;
+  return group.id;
 }
 
 export async function saveResource(input: ResourceInput): Promise<string> {
@@ -213,21 +392,38 @@ export async function saveResource(input: ResourceInput): Promise<string> {
     const existing = await db.resources.get(input.id);
     if (existing) {
       if (kind === 'file' && !urlOrPath) urlOrPath = existing.urlOrPath ?? '';
+      // A group belongs to exactly one subject, so a resource that changes
+      // subject can no longer stay in its old group: clear `groupId`. Same for
+      // a change of topic, since grouping is per-subject and the resource is
+      // re-homed within the Library.
+      const subjectChanged = existing.subjectId !== input.subjectId;
+      const groupId = subjectChanged ? null : (input.groupId !== undefined ? input.groupId : existing.groupId ?? null);
+      const r2Key = input.r2Key !== undefined ? input.r2Key : existing.r2Key;
       await db.resources.put({
         ...existing,
         subjectId: input.subjectId,
         topicId,
+        groupId,
         kind,
         title,
         urlOrPath,
         fileName: input.fileName !== undefined ? input.fileName : existing.fileName,
         mimeType: input.mimeType !== undefined ? input.mimeType : existing.mimeType,
         fileSize: input.fileSize !== undefined ? input.fileSize : existing.fileSize,
-        blob: input.blob !== undefined ? input.blob : existing.blob,
+        blob: r2Key ? null : (input.blob !== undefined ? input.blob : existing.blob),
+        r2Key,
         tags,
         dueDate,
         completed: input.completed ?? existing.completed ?? false,
       });
+      // The ledger is what makes orphan detection work: it records every
+      // r2Key this device has ever written, including ones whose row was
+      // later deleted. Without it, a file deleted on the site and never
+      // opened here is invisible to the "Cloud copies" section.
+      if (r2Key) {
+        const { recordCloudKey } = await import('../../features/ai/cloudBlobCache');
+        await recordCloudKey(r2Key);
+      }
       return existing.id;
     }
   }
@@ -235,27 +431,368 @@ export async function saveResource(input: ResourceInput): Promise<string> {
     id: newId(),
     subjectId: input.subjectId,
     topicId,
+    // Only honour an incoming group if it really belongs to this subject —
+    // otherwise the row would violate the one-group invariant from birth.
+    groupId: await validGroupFor(input.subjectId, input.groupId),
     kind,
     title,
     urlOrPath,
     fileName: input.fileName ?? null,
     mimeType: input.mimeType ?? null,
     fileSize: input.fileSize ?? null,
-    blob: input.blob ?? null,
+    blob: (input.r2Key ?? null) ? null : (input.blob ?? null),
+    r2Key: input.r2Key ?? null,
     tags,
     dueDate,
     completed: input.completed ?? false,
     createdAt: new Date().toISOString(),
   };
   await db.resources.put(record);
+  // Record every r2Key this device writes, so orphan detection does not depend
+  // on the blob cache — which only ever holds files previewed here.
+  if (record.r2Key) {
+    const { recordCloudKey } = await import('../../features/ai/cloudBlobCache');
+    await recordCloudKey(record.r2Key);
+  }
   return record.id;
 }
 
+/**
+ * Save an extraction note for a PDF resource.
+ * Creates a new note row linked to the resource by fileId.
+ */
+export interface NoteInput {
+  fileId: string;
+  status: 'none' | 'queued' | 'processing' | 'ready' | 'failed';
+  modelId?: string;
+}
+
+/**
+ * Save an extraction note for a PDF resource.
+ * Creates a new note row linked to the resource by fileId.
+ * Reads the PDF page count and stores it.
+ */
+export async function saveNote(input: NoteInput): Promise<string> {
+  const now = new Date().toISOString();
+
+  // Read the PDF page count
+  let pageCount = 0;
+  const resource = await db.resources.get(input.fileId);
+  if (resource?.r2Key) {
+    try {
+      const { downloadFromR2 } = await import('../../features/ai/cloudClient');
+      const { PDFDocument } = await import('pdf-lib');
+      const blob = await downloadFromR2(resource.r2Key);
+      const arrayBuffer = await blob.arrayBuffer();
+      const pdfBytes = new Uint8Array(arrayBuffer);
+      const doc = await PDFDocument.load(pdfBytes);
+      pageCount = doc.getPageCount();
+    } catch {
+      // If we can't read the PDF, we'll still create the note but with pageCount = 0
+      // The status will be set to 'failed' by the caller if needed
+    }
+  }
+
+  const record: Note = {
+    fileId: input.fileId,
+    status: input.status,
+    modelId: input.modelId,
+    pageCount,
+    chunks: [],
+    markdown: '',
+    checked: false,
+    editedByUser: false,
+    editedByAI: false,
+    aiMayEdit: false,
+    versions: [],
+    updatedAt: now,
+  };
+  await db.notes.put(record);
+  return record.fileId;
+}
+
+/**
+ * Generate chunk ranges for a PDF based on pageCount and chunkPages config.
+ * Returns array of { pageStart, pageEnd } (1-based, inclusive).
+ */
+export function getChunkRanges(pageCount: number, isScanned: boolean = false): { pageStart: number; pageEnd: number }[] {
+  const chunkPages = chunkPagesFor(isScanned);
+  const { maxChunks } = EXTRACTION_CONFIG;
+  const ranges: { pageStart: number; pageEnd: number }[] = [];
+  for (let start = 1; start <= pageCount; start += chunkPages) {
+    const end = Math.min(start + chunkPages - 1, pageCount);
+    ranges.push({ pageStart: start, pageEnd: end });
+    if (ranges.length >= EXTRACTION_CONFIG.maxChunks) break;
+  }
+  return ranges;
+}
+
+/**
+ * Initialize a note for extraction: set up chunks based on page count.
+ * Call this when status changes to 'queued'.
+ */
+export async function initNoteForExtraction(fileId: string, modelId: string, isScanned: boolean = false): Promise<void> {
+  const note = await db.notes.get(fileId);
+  if (!note) return;
+  const pageCount = note.pageCount;
+  if (pageCount === 0) {
+    // Can't read PDF, mark as failed
+    await db.notes.put({ ...note, status: 'failed', lastError: 'Could not read this PDF.', updatedAt: new Date().toISOString() });
+    return;
+  }
+  const ranges = getChunkRanges(note.pageCount, isScanned);
+  const chunks: NoteChunk[] = ranges.map((r, i) => ({
+    index: i,
+    pageStart: r.pageStart,
+    pageEnd: r.pageEnd,
+    status: 'pending' as const,
+    markdown: '',
+  }));
+  const now = new Date().toISOString();
+  await db.notes.put({
+    ...note,
+    status: 'queued',
+    chunks,
+    updatedAt: now,
+  });
+}
+
+/**
+ * Update a single chunk's status and markdown.
+ */
+export async function updateNoteChunk(
+  fileId: string,
+  chunkIndex: number,
+  update: Partial<NoteChunk>
+): Promise<void> {
+  const note = await db.notes.get(fileId);
+  if (!note) return;
+  const chunks = [...note.chunks];
+  if (chunks[update.index ?? 0] === undefined) return;
+  const idx = update.index ?? 0;
+  chunks[idx] = { ...chunks[idx], ...update };
+  await db.notes.put({ ...note, chunks, updatedAt: new Date().toISOString() });
+}
+
+/**
+ * Join all completed chunks in order with headings and save as final markdown.
+ * Validates that all chunks are ready with non-empty markdown before marking ready.
+ * Clears chunk markdowns after joining to avoid duplicate storage.
+ */
+export async function finalizeNote(fileId: string): Promise<void> {
+  const note = await db.notes.get(fileId);
+  if (!note) return;
+
+  console.log('[finalize] note chunks', { fileId, chunks: note.chunks.map((c) => ({ index: c.index, range: `${c.pageStart}–${c.pageEnd}`, status: c.status, length: c.markdown?.length ?? 0 })) });
+
+  // Check that all chunks are ready
+  const notReady = note.chunks.filter((c) => c.status !== 'ready');
+  if (notReady.length > 0) {
+    const pages = notReady.map((c) => `${c.pageStart}–${c.pageEnd}`).join(', ');
+    await failNote(fileId, `Extraction incomplete for pages ${pages}. Retry extraction.`);
+    return;
+  }
+
+  // Check that every ready chunk has non-empty markdown
+  const emptyChunks = note.chunks.filter((c) => !c.markdown || c.markdown.trim() === '');
+  if (emptyChunks.length > 0) {
+    const pages = emptyChunks.map((c) => `${c.pageStart}–${c.pageEnd}`).join(', ');
+    await failNote(fileId, `Extraction produced no text for pages ${pages}. Retry extraction.`);
+    return;
+  }
+
+  // All checks passed - join markdown and save atomically
+  const parts = note.chunks
+    .sort((a, b) => a.index - b.index)
+    .map((c) => `## Pages ${c.pageStart}–${c.pageEnd}\n\n${c.markdown}`);
+  const markdown = parts.join('\n\n');
+
+  if (!markdown.trim()) {
+    await failNote(fileId, 'Extraction produced no text. Retry extraction.');
+    return;
+  }
+
+  // Clear chunk markdowns to avoid duplicate storage (keep status and page ranges)
+  const clearedChunks = note.chunks.map((c) => ({
+    ...c,
+    markdown: '',
+  }));
+
+  await db.notes.put({
+    ...note,
+    chunks: clearedChunks,
+    status: 'ready',
+    markdown,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * Mark a note as failed with a reason.
+ */
+export async function failNote(fileId: string, reason: string): Promise<void> {
+  const note = await db.notes.get(fileId);
+  if (!note) return;
+  await db.notes.put({
+    ...note,
+    status: 'failed',
+    lastError: reason,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * Repair notes that are "ready" but have empty markdown.
+ * Sets them to "failed" so the user can retry.
+ * Returns the number of notes repaired.
+ */
+export async function repairEmptyReadyNotes(): Promise<number> {
+  const badNotes = await db.notes
+    .where('status')
+    .equals('ready')
+    .and((note) => !note.markdown || note.markdown.trim() === '')
+    .toArray();
+  
+  for (const note of badNotes) {
+    await failNote(note.fileId, 'No text was saved. Retry extraction.');
+  }
+  
+  return badNotes.length;
+}
+
+/**
+ * Get the extraction status for a file.
+ * Returns the full status object for the assistant tool.
+ */
+export async function getExtractionStatus(fileId: string): Promise<{
+  status: 'none' | 'queued' | 'processing' | 'ready' | 'failed';
+  pageCount: number;
+  chunks: { index: number; pageStart: number; pageEnd: number; status: string; error?: string }[];
+  lastError?: string;
+  modelId?: string;
+  updatedAt: string;
+} | null> {
+  const note = await db.notes.get(fileId);
+  if (!note) return null;
+  return {
+    status: note.status,
+    pageCount: note.pageCount,
+    chunks: note.chunks.map((c) => ({
+      index: c.index,
+      pageStart: c.pageStart,
+      pageEnd: c.pageEnd,
+      status: c.status,
+      error: c.error,
+    })),
+    lastError: note.lastError,
+    modelId: note.modelId,
+    updatedAt: note.updatedAt,
+  };
+}
+
+/**
+ * Read the extracted markdown for a file.
+ * Returns the full markdown or a specific section.
+ */
+export async function readNote(fileId: string, section?: string | null): Promise<{
+  markdown: string;
+  status: 'none' | 'queued' | 'processing' | 'ready' | 'failed';
+  pageCount: number;
+} | null> {
+  const note = await db.notes.get(fileId);
+  if (!note) return null;
+
+  if (note.status !== 'ready' || !note.markdown?.trim()) {
+    return {
+      markdown: 'This file has no saved text yet. Retry extraction.',
+      status: note.status,
+      pageCount: note.pageCount,
+    };
+  }
+
+  if (section) {
+    // Simple section extraction - just return the full markdown for now
+    // Could be enhanced to parse headings
+  }
+  return {
+    markdown: note.markdown,
+    status: note.status,
+    pageCount: note.pageCount,
+  };
+}
+
+/**
+ * Retry a failed chunk: set its status to 'pending' and re-run extraction.
+ * The actual extraction is done by the runner; this just resets the chunk.
+ */
+export async function retryNoteChunk(fileId: string, chunkIndex: number): Promise<void> {
+  await updateNoteChunk(fileId, chunkIndex, { status: 'pending', error: undefined });
+}
+
+/**
+ * Resume a note that was 'processing' — find the first non-ready chunk and set it to 'pending'.
+ * Returns the chunk index to process, or -1 if all done.
+ */
+export async function resumeNote(fileId: string): Promise<number> {
+  const note = await db.notes.get(fileId);
+  if (!note || note.status !== 'processing') return -1;
+  for (let i = 0; i < note.chunks.length; i++) {
+    if (note.chunks[i].status !== 'ready') {
+      await updateNoteChunk(fileId, i, { status: 'pending', error: undefined });
+      return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Where a file resource's bytes actually live.
+ *
+ * After the one-time migration, every uploaded file is in R2 and the row
+ * carries no blob. This helper says which one to use so callers do not have
+ * to branch on `kind === 'file'` everywhere.
+ */
+export function fileLocation(resource: Resource): { kind: 'blob' | 'r2' | 'none' } {
+  if (resource.blob && resource.blob instanceof Blob) return { kind: 'blob' };
+  if (resource.r2Key) return { kind: 'r2' };
+  return { kind: 'none' };
+}
+
+/** True when this file resource has no bytes available on this device. */
+export function fileUnavailable(resource: Resource): boolean {
+  return fileLocation(resource).kind === 'none';
+}
+
 export function resourceObjectUrl(resource: Resource): string | null {
+  // A cloud-staged file has no local blob; the caller must resolve the R2 key.
   if (resource.blob && typeof Blob !== 'undefined' && resource.blob instanceof Blob) {
     return URL.createObjectURL(resource.blob);
   }
   if (resource.urlOrPath && resource.urlOrPath.trim()) return resource.urlOrPath;
+  return null;
+}
+
+/**
+ * Resolve the bytes for a file resource, regardless of where they live.
+ *
+ * Local blobs are returned as-is. R2-staged files are fetched through the
+ * gateway, which verifies the Dexie Cloud token and returns a 5-minute
+ * presigned URL. The fetched blob is cached locally so re-opening the same
+ * file in this session (or after a reload) does not re-download it.
+ *
+ * Callers should treat a thrown promise as "not available".
+ */
+export async function loadFileBytes(resource: Resource): Promise<Blob | null> {
+  if (resource.blob && resource.blob instanceof Blob) return resource.blob;
+  if (resource.r2Key) {
+    const { downloadFromR2 } = await import('../../features/ai/cloudClient');
+    const { getCachedCloudBlob, cacheCloudBlob } = await import('../../features/ai/cloudBlobCache');
+    const cached = await getCachedCloudBlob(resource.r2Key);
+    if (cached) return cached;
+    const blob = await downloadFromR2(resource.r2Key);
+    await cacheCloudBlob(resource.r2Key, blob);
+    return blob;
+  }
   return null;
 }
 
@@ -264,8 +801,246 @@ export async function toggleResourceCompleted(resource: Resource): Promise<void>
   await db.resources.put({ ...cur, completed: !(cur.completed ?? false) });
 }
 
-export async function deleteResource(id: string): Promise<void> {
+export async function deleteResource(id: string, opts: { deleteCloud?: boolean } = {}): Promise<void> {
+  const resource = await db.resources.get(id);
   await db.resources.delete(id);
+  if (resource?.r2Key) {
+    // The local cache is keyed by r2Key; a stale entry would serve bytes for a
+    // row the user just deleted. Clear it regardless of whether the cloud
+    // object is deleted, so a re-add cannot resurrect a phantom.
+    const { forgetCloudBlob, forgetCloudKey } = await import('../../features/ai/cloudBlobCache');
+    forgetCloudBlob(resource.r2Key);
+    if (opts.deleteCloud) {
+      const { deleteCloudObject } = await import('../../features/ai/cloudClient');
+      const { forgetCloudKey } = await import('../../features/ai/cloudBlobCache');
+      try {
+        await deleteCloudObject(resource.r2Key);
+        // Only now the cloud copy is gone, so only now does the ledger entry
+        // make sense to drop. A failed delete leaves it, which is correct: the
+        // "Cloud copies" section should still show the file as an orphan.
+        await forgetCloudKey(resource.r2Key);
+      } catch {
+        // The delete failed; the ledger entry stays so the orphan is still
+        // listed and the user can retry from the Cloud copies section.
+      }
+    }
+  }
+}
+
+/* ---------------- Resource groups (v10) ---------------- */
+
+/**
+ * A group is a lane over resources inside ONE subject. A resource keeps its own
+ * `topicId` while grouped, so `groupId` and `topicId` are independent axes.
+ */
+
+export interface ResourceGroupInput {
+  id?: string; // present = update (rename / reorder / move)
+  subjectId: string;
+  name: string;
+  order?: number;
+  /** null or omitted = top-level in the subject. */
+  parentGroupId?: string | null;
+}
+
+/** The next `order` among a group's SIBLINGS — appended to the end. */
+export async function nextGroupOrder(
+  subjectId: string,
+  parentGroupId: string | null = null,
+): Promise<number> {
+  const existing = await db.resourceGroups.where('subjectId').equals(subjectId).toArray();
+  const siblings = existing.filter((g) => parentOf(g) === parentGroupId);
+  return siblings.reduce((max, g) => Math.max(max, g.order ?? 0), -1) + 1;
+}
+
+/**
+ * Create or update a group.
+ *
+ * Every placement rule is checked through the SHARED `validateGroupPlacement`,
+ * so the Library UI, the AI tools and this repository cannot disagree about
+ * what is legal. The check runs against the subject's current groups, read in
+ * the same transaction as the write so a concurrent change cannot slip between
+ * validation and commit.
+ */
+export async function saveResourceGroup(input: ResourceGroupInput): Promise<string> {
+  const name = (input.name ?? '').trim();
+  if (!name) throw new Error('Group name is required');
+  if (!input.subjectId) throw new Error('subjectId is required');
+  const subject = await db.subjects.get(input.subjectId);
+  if (!subject) throw new Error('Subject not found');
+  const parentGroupId = input.parentGroupId == null || input.parentGroupId === ''
+    ? null : String(input.parentGroupId);
+
+  return db.transaction('rw', [db.resourceGroups, db.subjects], async () => {
+    // The parent is resolved by id from the WHOLE table, not from this subject's
+    // list. Reading only the subject's own groups made a cross-subject parent look
+    // like a missing one, so the user was told "that parent no longer exists"
+    // when the real problem was that it belongs elsewhere.
+    const parentRow = parentGroupId == null ? null : await db.resourceGroups.get(parentGroupId);
+    if (parentGroupId != null && !parentRow) {
+      throw new Error('That parent group no longer exists. Pick another destination.');
+    }
+    if (parentRow && parentRow.subjectId !== input.subjectId) {
+      throw new Error('A group cannot be moved to another subject. It belongs to the subject it was created in.');
+    }
+
+    const siblings = await db.resourceGroups.where('subjectId').equals(input.subjectId).toArray();
+    const violation = validateGroupPlacement({
+      groups: siblings,
+      subjectId: input.subjectId,
+      name,
+      parentGroupId,
+      selfId: input.id ?? null,
+    });
+    if (violation) throw new Error(violation.message);
+
+    if (input.id) {
+      const existing = await db.resourceGroups.get(input.id);
+      if (existing) {
+        // A group can never be re-homed to another subject: its members are,
+        // by definition, resources of that subject.
+        await db.resourceGroups.put({
+          ...existing,
+          name,
+          parentGroupId,
+          order: input.order ?? existing.order,
+        });
+        return existing.id;
+      }
+    }
+
+    const record: ResourceGroup = {
+      id: newId(),
+      subjectId: input.subjectId,
+      name,
+      parentGroupId,
+      order: input.order ?? (await nextGroupOrder(input.subjectId, parentGroupId)),
+      createdAt: new Date().toISOString(),
+    };
+    await db.resourceGroups.put(record);
+    return record.id;
+  });
+}
+
+/** Rename a group in place. Sibling-name uniqueness is still enforced. */
+export async function renameResourceGroup(id: string, name: string): Promise<void> {
+  const next = (name ?? '').trim();
+  if (!next) return;
+  const existing = await db.resourceGroups.get(id);
+  if (!existing || existing.name === next) return;
+  await saveResourceGroup({
+    id,
+    subjectId: existing.subjectId,
+    name: next,
+    parentGroupId: parentOf(existing),
+  });
+}
+
+/**
+ * Move a group under a new parent (or to the subject root with null).
+ *
+ * The cycle, depth, subject and sibling-name rules all come from the shared
+ * module, so an illegal move is refused with a message the user (and the model)
+ * can act on rather than silently corrupting the tree.
+ */
+export async function moveGroup(groupId: string, newParentGroupId: string | null): Promise<void> {
+  const group = await db.resourceGroups.get(groupId);
+  if (!group) throw new Error('That group no longer exists.');
+  await saveResourceGroup({
+    id: groupId,
+    subjectId: group.subjectId,
+    name: group.name,
+    parentGroupId: newParentGroupId,
+  });
+}
+
+/**
+ * Persist a manual reorder. Takes the full ordered id list of ONE SIBLING SET.
+ *
+ * Only groups sharing the first id's parent are rewritten, so a stale list from
+ * one level can never reorder a different level's groups.
+ */
+export async function reorderResourceGroups(subjectId: string, orderedIds: string[]): Promise<void> {
+  if (orderedIds.length === 0) return;
+  await db.transaction('rw', db.resourceGroups, async () => {
+    const first = await db.resourceGroups.get(orderedIds[0]);
+    if (!first) return;
+    const parentId = parentOf(first);
+    for (let i = 0; i < orderedIds.length; i += 1) {
+      const g = await db.resourceGroups.get(orderedIds[i]);
+      if (g && g.subjectId === subjectId && parentOf(g) === parentId) {
+        await db.resourceGroups.put({ ...g, order: i });
+      }
+    }
+  });
+}
+
+/**
+ * Delete a group, moving its contents UP one level.
+ *
+ * Nothing is ever deleted except the group itself. Its child groups are
+ * re-parented to its own parent (becoming top-level when it was top-level), and
+ * a resource directly inside it follows to that same destination. This replaces
+ * the old behaviour of stripping every member to "no group", which would have
+ * scattered a nested tree the moment a middle group was removed.
+ */
+export async function deleteResourceGroup(id: string): Promise<void> {
+  await db.transaction('rw', [db.resourceGroups, db.resources], async () => {
+    const group = await db.resourceGroups.get(id);
+    if (!group) return;
+    const newParentId = parentOf(group);
+
+    // Children first, so the tree is never briefly pointing at a deleted parent.
+    const children = await db.resourceGroups.where('subjectId').equals(group.subjectId).toArray();
+    for (const child of children) {
+      if (parentOf(child) !== id) continue;
+      await db.resourceGroups.put({ ...child, parentGroupId: newParentId });
+    }
+
+    // Resources that sat directly in this group move up with the children.
+    const members = await db.resources.where('groupId').equals(id).toArray();
+    for (const r of members) await db.resources.put({ ...r, groupId: newParentId });
+
+    await db.resourceGroups.delete(id);
+  });
+}
+
+/** Move one resource into a group (or out of it, with `null`). */
+export async function moveResourceToGroup(resourceId: string, groupId: string | null): Promise<void> {
+  const resource = await db.resources.get(resourceId);
+  if (!resource) return;
+  if (groupId === null) {
+    if (!resource.groupId) return;
+    await db.resources.put({ ...resource, groupId: null });
+    return;
+  }
+  const group = await db.resourceGroups.get(groupId);
+  if (!group) return;
+  // The one invariant that matters: only same-subject resources may be grouped.
+  if (group.subjectId !== resource.subjectId) return;
+  if (resource.groupId === groupId) return;
+  await db.resources.put({ ...resource, groupId });
+}
+
+/** Move several resources at once, skipping any that would cross a subject. */
+export async function moveResourcesToGroup(resourceIds: string[], groupId: string | null): Promise<void> {
+  if (resourceIds.length === 0) return;
+  await db.transaction('rw', [db.resourceGroups, db.resources], async () => {
+    const group = groupId ? await db.resourceGroups.get(groupId) : null;
+    for (const id of resourceIds) {
+      const r = await db.resources.get(id);
+      if (!r) continue;
+      if (groupId === null) { await db.resources.put({ ...r, groupId: null }); continue; }
+      if (!group || group.subjectId !== r.subjectId) continue;
+      await db.resources.put({ ...r, groupId });
+    }
+  });
+}
+
+/** Groups of a subject, in display order. */
+export async function listResourceGroups(subjectId: string): Promise<ResourceGroup[]> {
+  const rows = await db.resourceGroups.where('subjectId').equals(subjectId).toArray();
+  return rows.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.createdAt.localeCompare(b.createdAt));
 }
 
 /* ---------------- Assessments ---------------- */
@@ -275,6 +1050,8 @@ export interface AssessmentInput {
   subjectId: string;
   name: string;
   type: AssessmentType;
+  /** Optional since Phase 5: '' means "no date chosen", and the assessment is
+   *  then omitted from the calendar. Existing rows keep their date. */
   date: string;
   weight?: number | null;
   status?: AssessmentStatus;
@@ -284,8 +1061,11 @@ export async function saveAssessment(input: AssessmentInput): Promise<string> {
   const name = (input.name ?? '').trim();
   if (!name) throw new Error('Assessment name is required');
   if (!input.subjectId) throw new Error('subjectId is required');
+  // The date is OPTIONAL. It used to be required, which made it impossible to
+  // record "I know there is an exam but not when". An assessment with no date
+  // simply does not appear on the calendar; it is still listed in its subject
+  // with "No date". Nothing is deleted or rewritten to allow this.
   const date = (input.date ?? '').trim();
-  if (!date) throw new Error('Assessment date is required');
   const type: AssessmentType = input.type ?? 'exam';
   const status: AssessmentStatus = input.status ?? 'upcoming';
   const weight = input.weight ?? null;
@@ -319,3 +1099,82 @@ export async function toggleAssessmentStatus(assessment: Assessment): Promise<vo
 export async function deleteAssessment(id: string): Promise<void> {
   await db.assessments.delete(id);
 }
+
+/**
+ * Measure the approximate size of each Dexie table in bytes.
+ * Uses JSON.stringify to approximate the serialized size.
+ * Returns an object with per-table sizes and total.
+ */
+export async function measureStorage(): Promise<{
+  tables: Record<string, number>;
+  totalBytes: number;
+  notesBreakdown?: { totalMarkdown: number; totalChunks: number; count: number };
+}> {
+  const tables = [
+    'subjects',
+    'topics',
+    'resources',
+    'resourceGroups',
+    'assessments',
+    'calendarEvents',
+    'weeklySchedules',
+    'shiftOverrides',
+    'pomodoroSessions',
+    'themeStatusMap',
+    'appSettings',
+    'aiProviders',
+    'chatSessions',
+    'chatMessages',
+    'uiState',
+    'notes',
+  ] as const;
+
+  const result: Record<string, number> = {};
+  let totalBytes = 0;
+  let notesMarkdownTotal = 0;
+  let notesChunksTotal = 0;
+  let notesCount = 0;
+
+  for (const tableName of tables) {
+    try {
+      const table = (db as any)[tableName];
+      if (!table) {
+        result[tableName] = 0;
+        continue;
+      }
+      const rows = await table.toArray();
+      const json = JSON.stringify(rows);
+      const size = new Blob([json]).size;
+      result[tableName] = size;
+      totalBytes += size;
+
+      // Detailed breakdown for notes
+      if (tableName === 'notes') {
+        notesCount = rows.length;
+        for (const note of rows) {
+          if (note.markdown) notesMarkdownTotal += note.markdown.length;
+          if (note.chunks) {
+            for (const chunk of note.chunks) {
+              if (chunk.markdown) notesChunksTotal += chunk.markdown.length;
+            }
+          }
+        }
+      }
+    } catch {
+      result[tableName] = 0;
+    }
+  }
+
+  return {
+    tables: result,
+    totalBytes,
+    notesBreakdown: notesCount > 0 ? {
+      totalMarkdown: notesMarkdownTotal,
+      totalChunks: notesChunksTotal,
+      count: notesCount,
+    } : undefined,
+  };
+}
+
+
+

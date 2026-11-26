@@ -1,18 +1,35 @@
 import React from 'react';
 import { Card } from '../../components/ui/Card';
-import { Settings2, Palette } from 'lucide-react';
-import { useStatusThemeStore } from '../../stores/useStatusThemeStore';
+import { Settings2, Palette, Check, RotateCcw, Compass } from 'lucide-react';
+import { useStatusThemeStore, defaultMappingFor } from '../../stores/useStatusThemeStore';
+import { useThemeStatusMap } from '../../hooks/useThemeStatusMap';
 import { WeeklySchedulesSettings } from './components/WeeklySchedulesSettings';
 import { PomodoroSettingsSection } from './components/PomodoroSettingsSection';
-import { AiProvidersSettings } from './components/AiProvidersSettings';
+import { AiModelsSettings } from './components/AiModelsSettings';
 import { ChatHistorySettings } from './components/ChatHistorySettings';
+import { FloatingAiSettings } from './components/FloatingAiSettings';
+import { AssistantRedesignSettings } from './components/AssistantRedesignSettings';
+import { SyncSettings } from './components/SyncSettings';
 import { DataBackupSection } from './components/DataBackupSection';
+import { FileMigrationSection } from './components/FileMigrationSection';
+import { CloudCopiesSection } from './components/CloudCopiesSection';
 import type { UserStatus, ThemeMode, ColorScheme } from '../../types';
 
-export const SettingsPage: React.FC = () => {
-  const { mappings, updateMapping } = useStatusThemeStore();
+/** Navigation into the About page, so it is reachable where the bottom bar
+ *  has no room for it. */
+export const SettingsPage: React.FC<{ onOpenAbout?: () => void }> = ({ onOpenAbout }) => {
+  const { mappings, currentStatus, setStatus } = useStatusThemeStore();
+  const { rows, saveMapping, resetMapping } = useThemeStatusMap();
 
   const statuses: UserStatus[] = ['Studying', 'Working', 'Researching', 'Playing'];
+  /** Swatch per status, matching the profile menu. */
+  const STATUS_SWATCH: Record<UserStatus, string> = {
+    Studying: 'bg-indigo-500',
+    Working: 'bg-zinc-500',
+    Researching: 'bg-teal-500',
+    Playing: 'bg-amber-500',
+  };
+
   const themeOptions: { value: ThemeMode; label: string; desc: string }[] = [
     { value: 'studying', label: 'Cool Blue / Indigo', desc: 'Default for Studying' },
     { value: 'working', label: 'Neutral Slate / Graphite', desc: 'Default for Working' },
@@ -35,24 +52,62 @@ export const SettingsPage: React.FC = () => {
       {/* Pomodoro durations and alerts */}
       <PomodoroSettingsSection />
 
-      {/* AI Providers (configurable OpenAI-compatible models) */}
-      <AiProvidersSettings />
+      {/* User AI Models (display name, provider, base URL, model ID, capabilities, encrypted API key) */}
+      <AiModelsSettings />
 
       {/* Assistant conversation history */}
       <ChatHistorySettings />
 
+      {/* Floating AI button visibility, one switch for both modes */}
+      <FloatingAiSettings />
+
+      {/* Assistant redesign preview toggle */}
+      <AssistantRedesignSettings />
+
+      {/* Cross-device sync (Dexie Cloud) */}
+      <SyncSettings />
+
       {/* Theme to Status Mapping Section */}
       <Card
         title="Status to Theme Mapping"
-        subtitle="Map which color theme automatically activates when you switch your status in the top bar"
+        subtitle="Choose your current status, and map each status to the theme it activates"
       >
+        {/* Current status selector — the same store action the profile menu uses,
+            so changing status here and there stay in sync. */}
+        <div className="mb-4 pb-4 border-b border-border/40">
+          <p className="text-xs font-semibold text-content-primary mb-1.5">Current status</p>
+          <p className="text-[11px] text-content-tertiary mb-2">
+            Selecting a status applies its mapped theme immediately.
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {statuses.map((s) => {
+              const active = currentStatus === s;
+              return (
+                <button
+                  key={s}
+                  onClick={() => void setStatus(s)}
+                  aria-pressed={active}
+                  className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-xs font-medium transition-colors ${
+                    active
+                      ? 'border-accent bg-accent-subtle text-accent-text'
+                      : 'border-border text-content-secondary hover:bg-bg-elevated hover:text-content-primary'
+                  }`}
+                >
+                  <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${STATUS_SWATCH[s]}`} />
+                  <span className="flex-1 text-left">{s}</span>
+                  {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="space-y-4 divide-y divide-border/40">
           {statuses.map((status) => {
-            const current = mappings[status] || {
-              status,
-              theme: status.toLowerCase() as ThemeMode,
-              colorScheme: 'dark' as ColorScheme,
-            };
+            // Effective value: the synced DB row if one exists, else the code
+            // default. `isDefault` drives the "Reset to default" affordance.
+            const current = mappings[status] ?? defaultMappingFor(status);
+            const isDefault = !rows?.some((r) => r.status === status);
 
             return (
               <div
@@ -72,13 +127,7 @@ export const SettingsPage: React.FC = () => {
                 <div className="flex items-center space-x-3">
                   <select
                     value={current.theme}
-                    onChange={(e) =>
-                      updateMapping(
-                        status,
-                        e.target.value as ThemeMode,
-                        current.colorScheme
-                      )
-                    }
+                    onChange={(e) => void saveMapping(status, e.target.value as ThemeMode)}
                     className="bg-bg-elevated border border-border text-content-primary text-xs rounded-xl px-3 py-2 outline-none focus:border-accent cursor-pointer"
                   >
                     {themeOptions.map((opt) => (
@@ -88,20 +137,17 @@ export const SettingsPage: React.FC = () => {
                     ))}
                   </select>
 
-                  <select
-                    value={current.colorScheme}
-                    onChange={(e) =>
-                      updateMapping(
-                        status,
-                        current.theme,
-                        e.target.value as ColorScheme
-                      )
-                    }
-                    className="bg-bg-elevated border border-border text-content-primary text-xs rounded-xl px-3 py-2 outline-none focus:border-accent cursor-pointer"
-                  >
-                    <option value="dark">Dark Mode</option>
-                    <option value="light">Light Mode</option>
-                  </select>
+                  {isDefault ? (
+                    <span className="text-[11px] text-content-tertiary px-1">Default</span>
+                  ) : (
+                    <button
+                      onClick={() => void resetMapping(status)}
+                      className="inline-flex items-center gap-1.5 px-3 min-h-[44px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      Reset to default
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -111,6 +157,25 @@ export const SettingsPage: React.FC = () => {
 
       {/* Export / import all app data */}
       <DataBackupSection />
+
+      {/* Move stored files into Cloudflare R2, once */}
+      <FileMigrationSection />
+
+      {/* Orphaned cloud copies: files in R2 with no row here */}
+      <CloudCopiesSection />
+
+      {/* About & Help is not in the phone bottom bar (six items is already the
+          limit there), so on a phone this is how you reach it. It is a real
+          destination rather than a link out, so the same button works on
+          desktop too. */}
+      <Card title="About & Help" subtitle="What this app can do, and how to get the most out of it">
+        <button
+          onClick={onOpenAbout}
+          className="inline-flex items-center gap-1.5 px-3 min-h-[44px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:bg-bg-elevated transition-colors"
+        >
+          <Compass className="w-3.5 h-3.5" /> Open About &amp; Help
+        </button>
+      </Card>
     </div>
   );
 };

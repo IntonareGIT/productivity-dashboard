@@ -1,11 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { format, parse } from 'date-fns';
-import { Repeat, Trash2 } from 'lucide-react';
+import { Repeat, Trash2, TriangleAlert } from 'lucide-react';
 import { Modal } from '../../../components/ui/Modal';
-import { CATEGORIES } from '../categories';
-import { deleteEvent, saveEvent, updateEventWithScope, deleteEventWithScope, type EventInput, type SeriesScope } from '../eventsRepo';
+import { deleteEvent, saveEvent, updateEventWithScope, deleteEventWithScope, periodConflictsOn, type EventInput, type SeriesScope } from '../eventsRepo';
 import { isRecurring, parseDateKey } from '../recurrence';
-import type { CalendarEvent, EventCategory, RecurrenceType } from '../../../types';
+import {
+  CATEGORIES, EVENT_KINDS, EVENT_KIND_LABEL, PERIODS, periodByNumber, usesPeriod,
+} from '../categories';
+import { db } from '../../../db/db';
+import { useLiveQuery } from 'dexie-react-hooks';
+import type { CalendarEvent, EventCategory, EventKind, RecurrenceType } from '../../../types';
 
 interface EventModalProps {
   /** null = closed. Either an existing event or a new one for `newDate`. */
@@ -72,6 +76,22 @@ export const EventModal: React.FC<EventModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  // --- subject / kind / period (schema v12) ---
+  // `subjectId` here is the EXISTING link the assistant already uses; the kind and
+  // period are new optional fields stored beside it, never a second way to link.
+  const [kindSubjectId, setKindSubjectId] = useState<string>('');
+  const [eventKind, setEventKind] = useState<EventKind | ''>('');
+  const [period, setPeriod] = useState<number | ''>('');
+  /**
+   * When a period sets the times, the time fields are read-only. The user can
+   * override with a small "Custom time" switch, because a real timetable clash
+   * sometimes happens and silently forcing the period times would be worse.
+   */
+  const [customTime, setCustomTime] = useState(false);
+  /** Non-blocking warning: another lecture already occupies this period. */
+  const [clash, setClash] = useState<CalendarEvent[]>([]);
+  const subjects = useLiveQuery(() => db.subjects.toArray()) ?? [];
+
   useEffect(() => {
     if (!open) return;
     const anchorDate = event?.date ?? newDate ?? format(new Date(), 'yyyy-MM-dd');
@@ -99,26 +119,79 @@ export const EventModal: React.FC<EventModalProps> = ({
     setScope('this');
     setError('');
     setConfirmDelete(false);
-  }, [open, event, newDate, prefillTitle, defaultRecurrenceType]);
+    // Existing events have no kind/period, so both read as "not set" and the
+    // time fields behave exactly as they did before this feature.
+    const existingSubject = event?.subjectId ?? subjectId ?? '';
+    setKindSubjectId(existingSubject);
+    setEventKind(event?.eventKind ?? '');
+    setPeriod(event?.period ?? '');
+    // A stored event with a period keeps the period times unless its saved times
+    // disagree with them, which means the user had already customised them.
+    const p = event?.period ?? null;
+    const fromPeriod = periodByNumber(p);
+    setCustomTime(Boolean(fromPeriod && event?.startTime && event.startTime !== fromPeriod.start));
+    setClash([]);
+  }, [open, event, newDate, prefillTitle, defaultRecurrenceType, subjectId]);
+
+  // A period owns the times. Times are derived from the SHARED PERIODS list
+  // rather than restated here, so the form and the assistant cannot disagree.
+  const effectivePeriod = period === '' ? null : Number(period);
+  const periodTimes = periodByNumber(effectivePeriod);
+  const timesFromPeriod = Boolean(periodTimes && !customTime);
+  const shownStart = timesFromPeriod ? (periodTimes as { start: string }).start : startTime;
+  const shownEnd = timesFromPeriod ? (periodTimes as { end: string }).end : endTime;
+
+  // Clear a period when the kind stops being a timetabled one, so "Studying"
+  // can never keep a leftover period.
+  const changeKind = (next: EventKind) => {
+    setEventKind(next);
+    if (!usesPeriod(next)) { setPeriod(''); setCustomTime(false); }
+  };
+
+  /**
+   * Warn, never block: a second lecture in the same period is usually a
+   * timetable mistake, but sometimes it is deliberate (a make-up class), so the
+   * save button stays enabled and only a note appears.
+   *
+   * Declared ABOVE the `if (!open) return null` on purpose. A hook after an
+   * early return is skipped when the modal is closed and run when it opens,
+   * which changes the hook order between renders and React treats that as a
+   * different component. `useLiveQuery` above is subject to the same rule.
+   */
+  useEffect(() => {
+    if (!open || !usesPeriod(eventKind || null) || effectivePeriod == null) {
+      setClash([]);
+      return;
+    }
+    let live = true;
+    void periodConflictsOn(date, effectivePeriod, event?.id)
+      .then((rows) => { if (live) setClash(rows); })
+      .catch(() => { if (live) setClash([]); });
+    return () => { live = false; };
+  }, [open, date, eventKind, effectivePeriod, event?.id]);
 
   if (!open) return null;
 
   const editingRecurring = Boolean(event && isRecurring(event));
-  const linkedSubject = subjectId ?? event?.subjectId ?? null;
+  // The prop `subjectId` is a fixed link supplied by the caller (e.g. the
+  // subject's own "add event" flow); the dropdown is the editable default.
+  const linkedSubject = kindSubjectId || subjectId || event?.subjectId || '';
 
   const buildInput = (): EventInput => ({
     id: event?.id,
     title,
     date,
-    startTime,
-    endTime,
+    startTime: shownStart,
+    endTime: shownEnd,
     category,
     recurrenceType,
     recurrenceInterval: recurrenceType === 'custom' ? interval : null,
     recurrenceDaysOfWeek: recurrenceType === 'weekly' ? daysOfWeek : null,
     recurrenceEndDate: recurrenceType === 'none' || endMode !== 'date' ? null : endDate,
     recurrenceCount: recurrenceType === 'none' || endMode !== 'count' ? null : endCount,
-    subjectId: linkedSubject,
+    subjectId: linkedSubject || null,
+    eventKind: eventKind || null,
+    period: effectivePeriod,
   });
 
   const submit = async () => {
@@ -208,6 +281,80 @@ export const EventModal: React.FC<EventModalProps> = ({
           />
         </label>
 
+        {/* Subject / Type / Period. "Type" only appears once a subject is chosen,
+            and "Period" only for the timetabled types. */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="block">
+            <span className="block text-xs text-content-secondary mb-1">Subject</span>
+            <select
+              value={kindSubjectId}
+              onChange={(e) => {
+                setKindSubjectId(e.target.value);
+                // Dropping the subject clears the type: a type with no subject
+                // would be a claim about nothing.
+                if (!e.target.value) { setEventKind(''); setPeriod(''); setCustomTime(false); }
+              }}
+              aria-label="Subject"
+              className={inputCls}
+            >
+              <option value="">None</option>
+              {subjects.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </label>
+
+          {linkedSubject && (
+            <label className="block">
+              <span className="block text-xs text-content-secondary mb-1">Type</span>
+              <select
+                value={eventKind}
+                onChange={(e) => changeKind(e.target.value as EventKind)}
+                aria-label="Type"
+                className={inputCls}
+              >
+                <option value="">None</option>
+                {EVENT_KINDS.map((k) => (
+                  <option key={k} value={k}>{EVENT_KIND_LABEL[k]}</option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+
+        {linkedSubject && usesPeriod(eventKind || null) && (
+          <label className="block">
+            <span className="block text-xs text-content-secondary mb-1">Period</span>
+            <select
+              value={period}
+              onChange={(e) => {
+                setPeriod(e.target.value === '' ? '' : Number(e.target.value));
+                setCustomTime(false);
+              }}
+              aria-label="Period"
+              className={inputCls}
+            >
+              <option value="">Choose a period</option>
+              {PERIODS.map((p) => (
+                <option key={p.n} value={p.n}>
+                  Period {p.n} ({p.start} to {p.end})
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {/* Non-blocking warning. The save button stays enabled on purpose. */}
+        {clash.length > 0 && (
+          <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
+            <TriangleAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>
+              Period {effectivePeriod} already has {clash.map((c) => c.title).join(', ')} on this day.
+              You can still save.
+            </span>
+          </p>
+        )}
+
         <div className="grid grid-cols-2 gap-3">
           <label className="block">
             <span className="block text-xs text-content-secondary mb-1">
@@ -215,9 +362,11 @@ export const EventModal: React.FC<EventModalProps> = ({
             </span>
             <input
               type="time"
-              value={startTime}
+              value={shownStart}
               onChange={(e) => setStartTime(e.target.value)}
-              className={inputCls}
+              readOnly={timesFromPeriod}
+              aria-label="Start time"
+              className={`${inputCls} ${timesFromPeriod ? 'opacity-70' : ''}`}
             />
           </label>
           <label className="block">
@@ -226,12 +375,40 @@ export const EventModal: React.FC<EventModalProps> = ({
             </span>
             <input
               type="time"
-              value={endTime}
+              value={shownEnd}
               onChange={(e) => setEndTime(e.target.value)}
-              className={inputCls}
+              readOnly={timesFromPeriod}
+              aria-label="End time"
+              className={`${inputCls} ${timesFromPeriod ? 'opacity-70' : ''}`}
             />
           </label>
         </div>
+
+        {/* Only meaningful while a period owns the times. */}
+        {timesFromPeriod && (
+          <button
+            type="button"
+            onClick={() => {
+              setCustomTime(true);
+              // Seed the editable fields with the period's times so switching
+              // to custom does not blank them.
+              setStartTime(shownStart);
+              setEndTime(shownEnd);
+            }}
+            className="self-start text-xs text-content-secondary hover:text-content-primary underline underline-offset-2 transition-colors"
+          >
+            Custom time
+          </button>
+        )}
+        {customTime && effectivePeriod != null && (
+          <button
+            type="button"
+            onClick={() => setCustomTime(false)}
+            className="self-start text-xs text-content-secondary hover:text-content-primary underline underline-offset-2 transition-colors"
+          >
+            Use period {effectivePeriod} times
+          </button>
+        )}
 
         <div>
           <span className="block text-xs text-content-secondary mb-1.5">Category</span>

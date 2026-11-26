@@ -1,0 +1,452 @@
+/**
+ * Content for the About / Help page.
+ *
+ * ALL user-facing copy for that page lives here, deliberately as data rather
+ * than JSX. The page component owns layout and interaction; this file owns the
+ * words. That split is what makes the page cheap to keep correct.
+ *
+ * MAINTENANCE RULE (see PROJECT.md): whenever a feature is added, removed or
+ * changed, update this file in the same change. The page is a user-facing
+ * description of the app, so a feature that ships without a line here is a
+ * feature the user cannot discover.
+ *
+ * Every statement below is backed by the code. Nothing is aspirational.
+ */
+
+export interface HelpBullet {
+  /** Optional short lead-in, e.g. "Groups". Rendered bold. */
+  lead?: string;
+  text: string;
+}
+
+export interface HelpSection {
+  id: string;
+  title: string;
+  summary: string;
+  bullets?: HelpBullet[];
+  /** Rendered as a sub-heading, for sections with distinct groups of detail. */
+  groups?: { heading: string; bullets: HelpBullet[] }[];
+}
+
+export const APP_VERSION = '0.1.0';
+
+/** Shown under the title. Explains in one line who this is for. */
+export const APP_TAGLINE =
+  'A study and work planner in one place: your subjects, notes, files, timetable, '
+  + 'shifts and focus sessions, with an optional AI assistant and optional '
+  + 'cross-device sync. Everything works offline and nothing leaves your device '
+  + 'unless you turn sync on.';
+
+/** The few things worth doing first. Sits above everything else. */
+export const QUICK_START: HelpBullet[] = [
+  {
+    text: 'Add a subject in the Library, then add topics to it. A subject is a '
+      + 'course or project; a topic is a unit of work inside it, and each topic '
+      + 'carries its own notes.',
+  },
+  {
+    text: 'Attach links and uploaded files to a topic, and optionally file them '
+      + 'into named groups so a topic stays readable.',
+  },
+  {
+    text: 'Set your current status in the sidebar. That drives both the app theme '
+      + 'and the focus timer, so the app changes to match what you are doing.',
+  },
+  {
+    text: 'Optional: sign in to Dexie Cloud in Settings, then open the assistant to '
+      + 'search your library and create things by asking. The app is fully usable '
+      + 'without it.',
+  },
+];
+
+export const HELP_SECTIONS: HelpSection[] = [
+  {
+    id: 'library',
+    title: 'Library',
+    summary: 'Subjects, topics, resources and groups — the core of the app.',
+    groups: [
+      {
+        heading: 'Subjects and topics',
+        bullets: [
+          { lead: 'Subjects', text: 'A course, module or project. Each has a name, an optional description, a colour you choose, and its own progress.' },
+          { lead: 'Topics', text: 'The units inside a subject (a week, a chapter, a topic). Each has a title, a status — not started, studying or confident — and its own notes.' },
+          { lead: 'Progress', text: "A subject's progress is the share of its topics marked confident." },
+        ],
+      },
+      {
+        heading: 'Resources and groups',
+        bullets: [
+          { lead: 'Links', text: 'A title with a URL or file path. Open it in place, or copy the path.' },
+          { lead: 'Uploads', text: 'A file stored in the app, with its original name, type and size. You can preview, download, and open it full-screen.' },
+          { lead: 'Due dates and completion', text: 'Mark a resource done, and give it a due date. Both are tracked per resource and surfaced on the dashboard.' },
+          { lead: 'Tags', text: 'Free-form labels, filterable with the search box above the list.' },
+{ lead: 'Groups can nest', text: 'A group can sit inside another group, up to five levels deep. Each level is indented, shows its own count of resources and subgroups, and has buttons to expand it, add a subgroup, move it, rename it or delete it. An empty group stays visible, and which groups are expanded is remembered per subject.' },
+          { lead: 'Moving a group', text: 'The "Move group" button lists only valid destinations: the top level of the subject, and any group that is not the group itself or one of its own subgroups. An illegal move therefore cannot be reached in the first place.' },
+          { lead: 'Deleting a group', text: 'Only the group is deleted. Its subgroups and its resources move up one level to where it was, and the confirmation tells you how many of each will move before you press the button. Nothing inside is ever deleted.' },
+          { lead: 'Groups', text: 'Named folders inside a subject. A resource sits in at most one group, or none. Moving it to another subject clears its group; deleting a group ungroups its resources but never deletes them.' },
+        ],
+      },
+      {
+        heading: 'Assessments',
+        bullets: [
+          { lead: 'What they are', text: 'An exam, quiz, assignment or project belonging to a subject, with an optional weight as a percentage and a status of upcoming or done.' },
+          { lead: 'The date is optional', text: 'Leave it blank if you do not know when it is. The assessment is still listed in its subject with "No date", and simply does not appear on the calendar.' },
+          { lead: 'Days left', text: 'Each upcoming assessment with a date shows a countdown next to it, in whole calendar days.' },
+          { lead: 'On the calendar', text: 'One with a date appears on that date in the month grid and in the day panel, and tapping it takes you to the subject it belongs to. The calendar reads it live from the assessment, so changing the date moves it immediately and nothing is ever duplicated.' },
+        ],
+      },
+      {
+        heading: 'Choosing a file',
+        bullets: [
+          { lead: 'It follows the tree, not a flat list', text: 'The file button in a viewer or split pane opens a picker that starts at your subjects, then your folders, then your files, to any depth. Two files can share a name like "1-introduction" and still be told apart, because every row shows its full path underneath the name.' },
+          { lead: 'Notes are in there too', text: "In split view the same button also lists that subject's notes, under the subject and above its files, each with a note icon so a note is never confused with a document of the same name. The PDF and image viewers list only files. Folders hold files only, so a note always sits directly under its subject." },
+          { lead: 'Getting back', text: 'A breadcrumb along the top shows where you are, and every part of it is tappable, so you can jump straight back to a subject from four folders down. Back, the left arrow and the Backspace key all step up one level.' },
+          { lead: 'Finding things fast', text: 'The search box looks through every subject and folder at once and lists each hit with its full path, so two files of the same name are distinguishable. It searches note titles but never note content, so a hit is always something you named. Clearing the box returns you exactly where you were.' },
+          { lead: 'It opens where you are', text: 'The picker opens at the folder of the file or note you already have open and highlights it. With nothing open, it returns to the last place you browsed. A Recent section at the top of the first screen lists the last five things you opened, files and notes alike, with their paths.' },
+          { lead: 'Only openable files', text: 'The PDF viewer offers PDFs and the image viewer offers images, so you are never handed something the viewer cannot show. A file whose contents are stored on another device is listed but greyed out, saying "File not available on this device".' },
+          { lead: 'On a keyboard', text: 'Arrow keys move, Enter opens, Backspace goes back and Escape closes. On a phone it opens as a sheet from the bottom of the screen.' },
+          { lead: 'Two panes are separate', text: 'In split view each pane keeps its own file or note and its own place in the tree, so browsing in one never moves the other.' },
+        ],
+      },
+      {
+        heading: 'Viewing files',
+        bullets: [
+          { lead: 'PDF viewer', text: 'Page navigation, zoom, and a full-screen mode. Supports pinch zoom and trackpad zoom.' },
+          { lead: 'Image viewer', text: 'Zoom and pan, tuned for very large images so a stray pinch cannot drag the view far away.' },
+          { lead: 'On phones', text: "The viewer suppresses the browser's own pinch-zoom over the document so two-finger zoom controls the document, and caps canvas memory so long documents do not blank the tab." },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'notes',
+    title: 'Notes',
+    summary: 'Rich-text notes attached to a topic, editable in two places.',
+    groups: [
+      {
+        heading: 'Naming a note',
+        bullets: [
+          { lead: 'The title comes from the subject', text: "A new note is called \"Thermodynamics's Notes\" for a subject called Thermodynamics. You do not have to type a title, and the app will not leave one blank." },
+          { lead: 'A second note gets a number', text: "The next one is \"Thermodynamics's Notes 2\", then 3, and so on. Two notes with identical names in one list are as hard to tell apart as two files with the same name, so the app numbers them for you." },
+          { lead: 'Rename it any time', text: "Type your own title above the text and it is saved as you type. Once you have typed a title the app never changes it again, including when you rename the subject." },
+          { lead: 'Renaming a subject', text: "A note still carrying the generated title follows the subject, so renaming Thermodynamics to Physics makes it \"Physics's Notes\". The number is carried across too, and a note you titled yourself is left exactly as you typed it." },
+          { lead: 'What already existed', text: "Notes that were still carrying an old placeholder name, or none at all, are renamed once to the new form the first time you open the app. Notes you had already titled are untouched, and the text of every note is never changed." },
+        ],
+      },
+      {
+        heading: 'Finding a note',
+        bullets: [
+          { lead: 'In the split view picker', text: "The file button lists your subject's notes as well as its files, so a note is reachable the same way a PDF is. Each note is listed under its subject with its title and the subject name underneath." },
+          { lead: 'By the assistant', text: "Ask for a note by name. The assistant can create one with no title at all, rename one, and open one in a split pane, using the same rules you get in the app." },
+        ],
+      },
+      {
+        heading: 'Writing',
+        bullets: [
+          { lead: 'One note per topic', text: "A note is the notes field of a topic, so it is always in the context of what it belongs to." },
+          { lead: 'Rich text, not markup', text: 'Select some words and press a button — bold, italic, underline, a heading, a list, a colour, a size or an alignment — and see the result straight away. You never type or see HTML tags.' },
+          { lead: 'Editing', text: 'The same editor appears in the Library and in the split view, and edits save as you type, with a "Saved" indicator. The note title is a normal field above the text and saves on its own.' },
+        ],
+      },
+      {
+        heading: 'Formatting',
+        bullets: [
+          { lead: 'Font size', text: 'Four presets — Small, Normal, Large, Huge — applied to the selected text.' },
+          { lead: 'Alignment', text: 'Left, centre or right, applied to the selected lines.' },
+          { lead: 'Colour', text: 'Eight colours plus a default, chosen to stay readable in both the light and dark themes. Tap the colour button to open the palette; tap anywhere outside it to close.' },
+          { lead: 'Select first', text: 'Highlight the words you want to change before pressing a button. If nothing is selected the change applies to the words the caret sits in, or to the current line for alignment.' },
+          { lead: 'Clear formatting', text: 'Removes the formatting and keeps the words.' },
+          { lead: 'On phones', text: 'The toolbar is one row you can swipe sideways, so buttons never wrap into a tall stack or disappear off the edge.' },
+        ],
+      },
+      {
+        heading: 'Typing shortcuts',
+        bullets: [
+          { lead: 'Headings', text: 'Type # followed by a space at the start of a line.' },
+          { lead: 'Bold', text: 'Type ** around the words: **bold**.' },
+          { lead: 'Bullet list', text: 'Type - followed by a space at the start of a line.' },
+          { lead: 'Code', text: 'Type ` around the words: `code`. It appears as inline code with a shaded background — the backticks themselves are not shown.' },
+          { lead: 'Math', text: 'Type $x$ for inline or $$…$$ on its own line for a block. It appears as highlighted text, not fully typeset — treat it as a readable notation, not a typesetting engine.' },
+        ],
+      },
+      {
+        heading: 'How notes are stored',
+        bullets: [
+          { lead: 'Your original text is kept', text: 'The first time you edit a note, the app converts it and saves the new format. Your original text is never overwritten or deleted, so nothing you have written can be lost.' },
+          { lead: 'Opening a note changes nothing', text: 'A note you only read is left exactly as it was. The conversion is saved the first time you actually edit it.' },
+          { lead: 'Pasted content is cleaned', text: 'Only a fixed set of formatting is allowed through when a note is loaded or displayed, so pasted web content cannot carry scripts or tracking into your notes.' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'calendar',
+    title: 'Calendar and lectures',
+    summary: 'Month and week views for classes, deadlines, work and personal events.',
+    bullets: [
+      { lead: 'Views', text: "Month and week. The dashboard shows a strip of everything happening today." },
+      { lead: 'A whole day at once', text: 'Tap any day in the month grid to open its full list: every event in time order with its subject, type and period, plus any assessments due that day. From there you can edit, delete or add an event without leaving the calendar. On a computer it opens as a panel on the right; on a phone it opens as a sheet from the bottom. The "+x more" label opens the same thing.' },
+      { lead: 'The month grid', text: 'Each day shows up to two compact event chips and a "+x" chip for the rest, coloured by subject when the event is linked to one.' },
+      { lead: 'Categories', text: 'Class, deadline, personal or work — each is colour-coded.' },
+      { lead: 'Repeating events', text: 'Daily, weekly, monthly or yearly, with a custom interval. A repeating event is stored once; its occurrences are worked out as needed.' },
+      { lead: 'Links to your subjects', text: 'An event can point at a subject or topic, which is how the assistant can talk about what is due when.' },
+      { lead: 'Event types', text: 'When you link an event to a subject you also pick what it is: Studying, Lecture, Section or Lab.' },
+      { lead: 'Periods', text: 'For a Lecture, Section or Lab you can pick period 1 to 6. The start and end times fill themselves in from the fixed timetable (period 1 runs 08:30 to 10:10, period 6 runs 17:40 to 19:20, each 1 hour 40 minutes with a 10 minute break around it). The times lock while a period is set; turn on "Custom time" to set them yourself. Studying and events with no subject use the normal time fields.' },
+      { lead: 'Clash warning', text: 'If a new lecture, section or lab falls in a period already taken that day, you get a warning. Nothing is blocked, because you may be right.' },
+      { lead: 'Assessments on the calendar', text: 'An assessment with a date shows on the calendar as a dashed chip labelled with its type and name, in the colour of its subject. Assessments with no date stay in their subject and do not appear on the calendar.' },
+      { lead: 'Assessments are not copied', text: 'A calendar assessment is worked out live from the assessment itself. Change or clear the date and the calendar follows immediately. Nothing is duplicated and nothing is synced twice.' },
+    ],
+  },
+  {
+    id: 'shifts',
+    title: 'Work shifts',
+    summary: 'A repeating weekly roster, with one-off changes and paid time off.',
+    bullets: [
+      { lead: 'Weekly roster', text: 'Set one week at a time: which two days are off, when the shift starts and how long it runs. Every week is an independent record, so nothing has to be copied forward by hand.' },
+      { lead: 'One-off changes', text: 'Override a single date with custom hours, or mark it off for that day only.' },
+      { lead: 'Paid time off', text: 'Log PTO for a date. PTO always wins over everything else and is never counted as scheduled hours.' },
+      { lead: 'Hours', text: "The dashboard shows this week's scheduled hours, resolved from the roster and any overrides." },
+    ],
+  },
+  {
+    id: 'focus',
+    title: 'Pomodoro and focus',
+    summary: 'A focus timer that logs what you actually worked on.',
+    bullets: [
+      { lead: 'Timer', text: 'Focus, short break and long break phases. The long break comes after a set number of focus cycles.' },
+      { lead: 'Your durations', text: 'All three phase lengths and the cycles-per-long-break are configurable in Settings.' },
+      { lead: 'Focus target', text: 'Optionally pick a subject and a topic before you start. The choice is stored on the session, so you can see afterwards where the time went.' },
+      { lead: 'History', text: 'Completed sessions are logged and can be totalled per subject over any date range — on the dashboard and in the Focus page.' },
+      { lead: 'Theme follows status', text: 'Your selected status chooses the theme, so the whole app changes as you switch between studying, working, researching and playing.' },
+    ],
+  },
+  {
+    id: 'themes',
+    title: 'Themes',
+    summary: 'Four themes, each in a light and a dark variant.',
+    bullets: [
+      { lead: 'The four themes', text: 'Studying, Working, Researching and Playing.' },
+      { lead: 'Status drives the theme', text: 'You pick your current status, and each status is mapped to a theme. Changing the status changes the whole app, including the assistant panel.' },
+      { lead: 'Light and dark', text: "Each theme has both. The choice is yours, not the system's, so it stays put across devices." },
+      { lead: 'Everything is token-driven', text: 'Surfaces, borders, text and accents all come from theme tokens, so a new theme is a set of values rather than a rewrite.' },
+    ],
+  },
+  {
+    id: 'split',
+    title: 'Split view',
+    summary: 'Two panes side by side, for working with a document and something else at once.',
+    bullets: [
+      { lead: 'What each pane can show', text: "Nothing, the dashboard, a PDF, an image, a topic's notes, or the assistant." },
+      { lead: 'Opening it', text: "From a resource's \"Split with notes\" action, from the assistant, or from the dashboard." },
+      { lead: 'Adjusting it', text: 'Drag the divider, or nudge it with the arrow keys when it is focused. Panes can be maximised, swapped, or closed.' },
+      { lead: 'On a phone', text: 'The two panes stack instead of sitting side by side, and the divider is dragged with a thumb-sized handle.' },
+      { lead: 'Deliberately temporary', text: 'The split is never saved. Refreshing the page returns you to the normal single-pane dashboard — this is on purpose, so the app always starts where you expect.' },
+    ],
+  },
+  {
+    id: 'ai',
+    title: 'AI assistant',
+    summary: 'Optional. Talks to a hosted model through the app gateway, and can act on your data.',
+    bullets: [
+      { lead: 'It is optional', text: 'Every feature works without it. Nothing is sent anywhere unless you are signed in and start a conversation.' },
+      { lead: 'Models, not keys', text: "Settings → AI Providers picks the model the assistant uses (a label, a base URL and a model name). API keys are never entered in the app: requests go through the app's /api/ai gateway, which verifies your Dexie Cloud sign-in and attaches the server's key — Gemini by default, Groq as an alternative. One provider is marked as the default; the rest are kept so you can switch." },
+      { lead: 'Your data, on request', text: 'The assistant reads your library and calendar when a question needs it, and writes only when you ask it to. Anything destructive — deleting an event, logging time off, changing a shift — asks you to confirm first.' },
+      { lead: 'Thinking shown', text: "When a model returns its reasoning, it appears in a collapsible block above the answer rather than being hidden or mixed into the reply." },
+      { lead: 'Writing a message', text: 'The box grows as you type, up to about six lines, then it scrolls so it never swallows the conversation. Enter sends. Shift+Enter starts a new line. On a phone, Enter starts a new line and you tap Send, because a soft keyboard has no reliable way to tell a deliberate send apart from a newline. If an input method is mid-composition, such as while picking a Chinese or Japanese character, Enter will not send.' },
+      { lead: 'Stopping it', text: 'While it is working, the Send button becomes a Stop button (a square). Press it, or press Escape with the chat box focused, and the turn ends at once: the request is cancelled, no further tool runs, and any half-finished answer is kept and marked Stopped. A confirmation card that is open at that moment is cancelled, exactly as if you had pressed Cancel. You can keep typing while it works; the message sends when it finishes or when you stop it.' },
+      { lead: 'When the model is busy', text: 'If the provider is overloaded the app waits and tries again on its own, up to four times, showing a small "Model is busy, retrying (2/4)..." line while it does. Nothing is repeated and no action runs twice, because only the failed request is retried. If every try fails you get a plain message with a Retry button and a Details toggle for the raw error, instead of a wall of text. If the daily quota is used up it says so rather than retrying pointlessly.' },
+      { lead: 'A fallback model', text: 'Each provider can have an optional fallback model. If the main one is overloaded even after all its retries, the fallback answers once and the chat tells you which model replied. Off unless you fill it in.' },
+      { lead: 'Finding things', text: 'Every tool takes an id, and a name works as a fallback. Search and list results always include the id, the kind of thing and its parent subject, so the assistant can chain one result straight into the next action. If a name is ambiguous you get the list of options rather than a wrong guess, and if an id no longer exists it says so and suggests the closest matches.' },
+      { lead: 'History', text: 'Conversations are saved so you can go back to them, and can be deleted from Settings → Assistant Chat History.' },
+    ],
+    groups: [
+      {
+        heading: 'What it can do (the tools it has)',
+        bullets: [
+          { lead: 'Look things up', text: "List your subjects and their topics; see today's work shift, calendar events and focus minutes so far; resolve a work roster for any week; total your focus time for a date range; get a subject's progress; list upcoming deadlines; and search the library by keyword across subjects, topics, notes, resources and assessments." },
+          { lead: 'Library', text: "Create a subject, add a topic, append to a topic's notes, attach a link, add an assessment (exam, quiz, assignment or project), mark a topic as not started, studying or confident, or search everything at once. createNote with no title names the note after its subject, exactly as one you create in the app would be named." },
+          { lead: 'Nested groups', text: 'Groups can sit inside other groups, up to five levels deep, so a file can be found by subject, then folder, then subfolder, then file. createGroup takes an optional parentGroupId, listGroups returns the whole tree with each group depth, parent and full path, and moveGroup moves a group with everything inside it. A group name only has to be unique among its siblings, so the same name can exist in two branches; when that happens the assistant shows you the candidates with their paths and asks which one rather than guessing. A group can never be moved inside itself or one of its own subgroups.' },
+          { lead: 'Editing your library', text: 'Rename a subject, a topic or a resource; move a resource to another topic; and work with resource groups: list them, create one, rename it, move one into another, or move a resource into a group or back out to no group.' },
+          { lead: 'Deleting', text: 'Delete a subject, a topic, a resource or a group. Every one of these shows you a confirmation card first and only runs when you press Confirm; the assistant cannot carry it out on its own. Deleting a subject removes its topics, resources, uploaded files, notes and every group at every depth. Deleting a group removes only that group: its subgroups and resources are kept and move up one level, and the card says how many of each will move.' },
+          { lead: 'If a name is ambiguous', text: 'You can refer to something by its id or by its name. If a name matches more than one thing, the assistant asks you to pick from a list instead of guessing, and changes nothing until you do.' },
+          { lead: 'Asking for an event', text: 'You can say which subject it is, what it is (Studying, Lecture, Section or Lab) and which period, and the times are filled in from the same fixed timetable the app uses. If you leave the period out, you can just give a time instead. The older addCalendarEvent and deleteCalendarEvent tools still work too, and deleteCalendarEvent asks you to confirm first.' },
+          { lead: 'Reading your calendar', text: 'getDayAgenda for one day (everything in time order, with the assessments due and which periods are free); listEvents for a date range, optionally for one subject or one kind; getWeekTimetable for a week laid out by day and period; findFreeSlots for free time windows; listPeriods for the fixed period times, so it never guesses; listAssessments for assessments with their dates and days left; and getUpcoming for the next few days.' },
+          { lead: 'Changing your calendar', text: 'createEvent to add one; updateEvent, moveEvent and setEventSubject to change, reschedule or re-link an existing one; and deleteEvent to remove one behind a confirmation card. If a lecture lands in a period that is already taken you get a warning and the event is still created, because you may be right.' },
+          { lead: 'Assessments', text: 'createAssessment, updateAssessment and deleteAssessment. The date is optional: change it, or clear it, and the calendar follows at once because the calendar reads the assessment rather than copying it.' },
+          { lead: 'Repeating events', text: 'createRecurringEvents builds a whole repeating lecture, section or lab, but only ever shows you a preview of the dates and the total first, up to 60 at a time. Nothing is created until you press Confirm. deleteEventSeries then removes a whole series, again behind a confirmation card that says how many.' },
+          { lead: 'Shifts', text: 'Set the work roster for a week, log paid time off, and apply a one-off shift exception. Add a calendar event is still available too, alongside createEvent, and deleteCalendarEvent is the older delete one, which asks you to confirm.' },
+          { lead: 'Focus and status', text: 'Start or stop a focus timer, and switch your current status — which also changes the theme.' },
+          { lead: 'Split view', text: 'Open, close or swap the split view, and put a specific document into a pane.' },
+          { lead: 'Files and extraction', text: 'List and search your uploaded files; start an extraction to turn a PDF into editable markdown; queue extractions to run later; retry a failed extraction; check the status of a running extraction; and mark an extracted file as checked so you can filter it later.' },
+          { lead: 'Notes and search', text: 'Search your notes by keyword; read a note or specific pages of a PDF; edit a note and revert the edit if needed.' },
+          { lead: 'Assistant settings', text: 'List available models; set the default chat model; set the default extraction model.' },
+          { lead: 'Conversations', text: 'List your past conversations; open one to continue it; delete one you no longer need; and start a fresh conversation from anywhere.' },
+          { lead: 'Library editing', text: 'Create, rename, or delete subjects, topics, and resources; set a note title; create a note, rename a note, delete a note; create a group, rename a group, delete a group, move a group; create, rename, move, or delete groups; list groups; rename a topic, delete a topic; rename a resource, delete a resource; move resources into or out of groups.' },
+          { lead: 'Calendar editing', text: 'Create, rename, move, or delete events; add or delete assessments; create recurring event series with a preview.' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'sync',
+    title: 'Sync and multiple devices',
+    summary: 'Optional. Sign in to keep two devices in step.',
+    bullets: [
+      { lead: 'It is optional', text: 'Signed out, the app is entirely local: everything lives in this browser and nothing leaves the device.' },
+      { lead: 'What syncs', text: 'When signed in, all of it: subjects, topics, notes, resources, groups, assessments, calendar events, shift rosters and overrides, focus sessions, themes, settings, your assistant conversations, and your AI provider details.' },
+      { lead: 'Uploaded files', text: 'Uploaded file bytes are offloaded to cloud storage the first time a file syncs, so an upload is available on your other device too. That first upload is what takes time with a large file, which is why the app warns above 20 MB.' },
+      { lead: 'Worth knowing', text: "A file you upload is stored in your own cloud account, not only on the device that added it. If you would rather keep uploads on one device, stay signed out — the app keeps working locally." },
+      { lead: 'AI requests', text: "The assistant is authenticated with your Dexie Cloud sign-in: every chat goes through the app's /api/ai gateway, which verifies your token with Dexie Cloud before adding a model key server-side. No API key is stored in the app." },
+      { lead: 'Export and import', text: 'Settings has a backup section that exports your data to a JSON file and imports it back.' },
+    ],
+  },
+  {
+    id: 'extraction',
+    title: 'PDF extraction to markdown',
+    summary: 'Optional. Turn PDFs into searchable, editable notes using a hosted model.',
+    bullets: [
+      { lead: 'It is optional', text: 'Every feature works without it. Nothing is sent anywhere unless you are signed in, have an AI key saved, and start an extraction.' },
+      { lead: 'AI keys', text: 'You need a free Gemini or Groq key. Get one at Google AI Studio (aistudio.google.com) or Groq Console (console.groq.com). Paste it in Settings → AI Keys. Keys are encrypted on the server and never stored in the browser or synced data. If a key is removed or the encryption secret changes, saved keys must be entered again.' },
+      { lead: 'Extract vs Extract later', text: '"Extract" runs the model immediately and uses your quota. "Extract later" marks the file without running it; you can queue many files and run them when convenient.' },
+      { lead: 'The check mark', text: 'After extraction, a check mark appears next to the file. It means "Mark as checked" — a personal flag, not a correctness guarantee. Toggle it off if you want to re-extract.' },
+      { lead: 'Model picker', text: 'Pick a model in Settings → AI Keys or in the extraction modal. Only models with a saved key appear. The default extraction model is the one you last chose.' },
+      { lead: 'Large PDFs', text: 'Large files are split into chunks and each chunk is extracted separately. You see progress per chunk. A failed chunk can be retried individually.' },
+      { lead: 'Editing and re-extracting', text: 'The extracted markdown is editable. Re-extracting replaces the markdown and asks first if you have edited it. A version history is kept so you can revert.' },
+    ],
+  },
+  {
+    id: 'ai_may_edit',
+    title: '"AI may edit" toggle',
+    summary: 'Controls whether the assistant can edit your notes.',
+    bullets: [
+      { lead: 'What it does', text: 'When on, the assistant can propose edits to a note. The change is shown in chat and you must confirm before it saves. A version entry is created so it can be reverted.' },
+      { lead: 'Off by default', text: 'The toggle is off for every note by default. Turn it on per note in the note editor.' },
+      { lead: 'AI cannot change the toggle', text: 'If asked, the assistant explains where to change it in the UI.' },
+    ],
+  },
+  {
+    id: 'snipping',
+    title: 'Snipping (crop a page region)',
+    summary: 'Copy a rectangle from a PDF page to the clipboard.',
+    bullets: [
+      { lead: 'Turn it on', text: 'Click the scissors button in the viewer toolbar. The button shows an active state and the cursor becomes a crosshair.' },
+      { lead: 'Single use', text: 'Drag one rectangle on any page. As soon as the capture is taken, snipping turns off automatically. The button returns to normal and touch scrolling/zoom work again.' },
+      { lead: 'Cancel', text: 'Press Escape or click the button again while snipping is on to cancel without capturing.' },
+      { lead: 'Switching files', text: 'If you switch to another file while snipping is on, it turns off automatically.' },
+      { lead: 'Mobile', text: 'Works the same on mobile. While snipping is on, the page does not scroll or zoom. As soon as it ends, scrolling and pinch zoom return.' },
+    ],
+  },
+  {
+    id: 'pwa',
+    title: 'Installing on your phone',
+    summary: 'The app is an installable web app and opens offline.',
+    bullets: [
+      { lead: 'iPhone or iPad (Safari)', text: 'Open the app, then Share → Add to Home Screen. It appears as its own icon and opens without browser chrome.' },
+      { lead: 'Android (Chrome)', text: 'Open the app, then the browser menu → Install app, or Add to Home screen.' },
+      { lead: 'Desktop', text: 'The install icon in the address bar, or the app menu → Install.' },
+      { lead: 'Offline', text: 'The interface is cached so the app opens and looks right without a connection. Your data is already on the device. Cloud sync and the assistant need a connection; sync requests are deliberately never served from the cache, so nothing stale is ever shown.' },
+      { lead: 'Updates', text: 'Updates install themselves the next time you open the app.' },
+    ],
+  },
+  {
+    id: 'gestures',
+    title: 'Gestures and shortcuts',
+    summary: 'Touch gestures in the document viewers, and the keyboard shortcuts.',
+    groups: [
+      {
+        heading: 'In the PDF and image viewers',
+        bullets: [
+          { lead: 'Pinch to zoom', text: 'Two fingers zoom the document around the point between them. Releasing commits the zoom where you left it.' },
+          { lead: 'Scroll and pan', text: 'One finger drags the document; on a computer the trackpad or wheel does the same, and a wheel gesture is treated as a zoom rather than a scroll.' },
+          { lead: 'Full screen', text: 'The full-screen button in the viewer removes the surrounding app for as long as you need it. Where the browser has no full-screen API, the viewer fills the window instead.' },
+        ],
+      },
+      {
+        heading: 'Keyboard',
+        bullets: [
+          { lead: 'Ctrl / Cmd + K', text: 'Open the command palette for quick actions.' },
+          { lead: 'Arrow keys', text: 'Nudge the split-view divider when it is focused; hold Shift for larger steps.' },
+          { lead: 'Enter in a note title', text: 'Commits the title and moves on.' },
+          { lead: 'Escape', text: 'Closes an open menu or popover.' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'assistant',
+    title: 'Assistant',
+    summary: 'Optional. Talks to a hosted model through the app gateway and can act on your data.',
+    bullets: [
+      { lead: 'It is optional', text: 'Every feature works without it. Nothing is sent anywhere unless you are signed in and start a conversation.' },
+      { lead: 'Models, not keys', text: 'Settings → AI Providers picks the model the assistant uses (a label, a base URL and a model name). API keys are never entered in the app: requests go through the app\'s /api/ai gateway, which verifies your Dexie Cloud sign-in and attaches the server\'s key. One provider is marked as the default; the rest are kept so you can switch.' },
+      { lead: 'Your data, on request', text: 'The assistant reads your library and calendar when a question needs it, and writes only when you ask it to. Anything destructive — deleting an event, logging time off, changing a shift — asks you to confirm first.' },
+      { lead: 'Thinking shown', text: 'When a model returns its reasoning, it appears in a collapsible block above the answer rather than being hidden or mixed into the reply.' },
+      { lead: 'Writing a message', text: 'The box grows as you type, up to about six lines, then it scrolls so it never swallows the conversation. Enter sends. Shift+Enter starts a new line. On a phone, Enter starts a new line and you tap Send, because a soft keyboard has no reliable way to tell a deliberate send apart from a newline. If an input method is mid-composition, such as while picking a Chinese or Japanese character, Enter will not send.' },
+      { lead: 'Stopping it', text: 'While it is working, the Send button becomes a Stop button (a square). Press it, or press Escape with the chat box focused, and the turn ends at once: the request is cancelled, no further tool runs, and any half-finished answer is kept and marked Stopped. A confirmation card that is open at that moment is cancelled, exactly as if you had pressed Cancel. You can keep typing while it works; the message sends when it finishes or when you stop it.' },
+      { lead: 'When the model is busy', text: 'If the provider is overloaded the app waits and tries again on its own, up to four times, showing a small "Model is busy, retrying (2/4)..." line while it does. Nothing is repeated and no action runs twice, because only the failed request is retried. If every try fails you get a plain message with a Retry button and a Details toggle for the raw error, instead of a wall of text. If the daily quota is used up it says so rather than retrying pointlessly.' },
+      { lead: 'A fallback model', text: 'Each provider can have an optional fallback model. If the main one is overloaded even after all its retries, the fallback answers once and the chat tells you which model replied. Off unless you fill it in.' },
+      { lead: 'Finding things', text: 'Every tool takes an id, and a name works as a fallback. Search and list results always include the id, the kind of thing and its parent subject, so the assistant can chain one result straight into the next action. If a name is ambiguous you get the list of options rather than a wrong guess, and if an id no longer exists it says so and suggests the closest matches.' },
+      { lead: 'History', text: 'Conversations are saved so you can go back to them, and can be deleted from Settings → Assistant Chat History.' },
+      { lead: 'New chat', text: 'Click "New chat" in the session list (or the assistant header on mobile) to start a fresh conversation. The current one is saved if it has messages.' },
+      { lead: 'Open past chat', text: 'Click any past conversation in the session list to open it. You can continue from where you left off.' },
+      { lead: 'Delete conversation', text: 'Hover a conversation in the list and click the trash icon. You must confirm before it is deleted.' },
+      { lead: 'What it can do (tools)', text: 'The assistant has tools for: files and extraction (list, start, queue, retry, status, mark checked); notes and search (search, read, read pages, edit, revert); assistant settings (list models, set chat/extraction model); conversations (list, open, delete, new). It cannot add, view, or copy API keys — if asked, it points to Settings → AI Keys.' },
+    ],
+  },
+  {
+    id: 'privacy',
+    title: 'Privacy',
+    summary: 'What data goes where.',
+    bullets: [
+      { lead: 'Dexie Cloud', text: 'When signed in: subjects, topics, notes, resources, groups, assessments, calendar events, shift rosters and overrides, focus sessions, themes, settings, assistant conversations, and AI provider details are synced to your Dexie Cloud account.' },
+      { lead: 'Cloudflare R2', text: 'Uploaded file bytes are stored in your Cloudflare R2 bucket. The app only stores the object key (r2Key) in Dexie. Files are uploaded from your device to R2, then downloaded from R2 to your other device.' },
+      { lead: 'AI providers', text: 'When you use the assistant or extraction, the request (your message, relevant context, file content if you use readFilePages) is sent to the provider you chose (Gemini or Groq). Your API key is never sent from the browser — the gateway adds it server-side.' },
+      { lead: 'Keys never in browser', text: 'Your AI keys are encrypted with AES-256-GCM and stored in Upstash Redis on the server. They are never written to localStorage, IndexedDB, or Dexie Cloud.' },
+      { lead: 'Local-only mode', text: 'Signed out, nothing leaves your device. The app is fully functional offline.' },
+    ],
+  },
+  {
+    id: 'troubleshooting',
+    title: 'Troubleshooting',
+    summary: 'Common issues and what to check.',
+    bullets: [
+      { lead: '"Add a key in Settings" message', text: 'You are signed in but have not saved an API key for the model you are trying to use. Open Settings → AI Keys, get a free key from Google AI Studio or Groq Console, and paste it there.' },
+      { lead: 'Uploads failing', text: 'Check your R2 settings in Settings → Storage. The bucket must exist, the CORS rule must allow your origin, and the access key must have PutObject permission.' },
+      { lead: 'Extraction failing or returning empty', text: 'Check you have a key saved and the file is a readable PDF (not password-protected). Large PDFs are chunked — a single failed chunk can be retried. Scanned pages without extractable text may return empty; use readFilePages to send specific pages to the model.' },
+      { lead: 'Floating button not responding', text: 'Make sure you are signed in and have a provider configured in Settings → AI Providers. If the button is missing, check Settings → Floating AI to ensure it is enabled.' },
+      { lead: 'Sync not working', text: 'Check you are signed in to Dexie Cloud in Settings. A red banner on the dashboard means the token was rejected — sign out and back in. Sync requests are never cached, so a flaky connection shows as a failure rather than stale data.' },
+      { lead: 'Assistant replies with raw errors', text: 'The assistant shows a friendly message with a Retry button and a Details toggle. Open Details to see the raw error. If it mentions quota, wait or switch models. If it mentions a missing key, add one in Settings.' },
+    ],
+  },
+  {
+    id: 'limitations',
+    title: 'Known limitations',
+    summary: 'Things that are deliberately simple, or not done yet.',
+    bullets: [
+      { lead: 'Math is not typeset', text: 'Equations are shown as styled, readable text rather than fully formatted mathematics. It is a notation aid, not a maths renderer.' },
+      { lead: 'Formatting is a small set', text: 'Size, alignment and colour only. There is no bold/italic button, because bold and italic are already written in markdown.' },
+      { lead: 'Groups do not nest', text: 'A group belongs to a subject and cannot contain other groups. A resource is in one group or none.' },
+      { lead: 'The split view is not remembered', text: 'It closes on refresh by design.' },
+      { lead: 'One recurring rule per event', text: 'A repeating calendar event uses a single recurrence rule; it cannot yet hold several exception dates inside one series.' },
+      { lead: 'Offline is interface-only', text: 'The app opens offline, but sync and the assistant need a connection.' },
+      { lead: 'Assistant replies are plain text', text: 'The assistant answers as formatted plain text. It does not yet share the note renderer, so its output is not styled as richly as a note.' },
+      { lead: 'Single browser profile', text: 'Data lives in this browser. Clearing site data, or using a private window, means starting fresh — use the backup export if that data matters to you.' },
+    ],
+  },
+];
+
+/** Shown in the footer. One obvious place to update. */
+export const HELP_FOOTER =
+  'This page describes the app as it is right now. If a feature you expected is '
+  + 'not listed above, it is not built yet.';
+
+/** Injected at build time by Vite (see `vite.config.ts`). */
+declare const __BUILD_DATE__: string;
+
+/**
+ * The build date, injected at build time by Vite.
+ * Falls back to a placeholder in dev/tests where the define is absent, so this
+ * module never throws just because the bundle was not produced by Vite.
+ */
+export const BUILD_DATE: string =
+  typeof __BUILD_DATE__ === 'string' ? __BUILD_DATE__ : 'development build';

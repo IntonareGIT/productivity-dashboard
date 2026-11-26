@@ -6,11 +6,18 @@ import { buildShiftContext, dayEndTime, resolveDay, toDateKey } from '../shifts/
 import { saveWeeklySchedule } from '../shifts/shiftsRepo';
 import { usePomodoroStore } from '../../stores/usePomodoroStore';
 import {
+  SPLIT_VIEW_LABELS,
+  describeSplitCommand,
+  requestSplitCommand,
+  type SplitCommand,
+} from '../../stores/useSplitCommandStore';
+import {
   DAY_NAMES,
   ToolError,
   normalizeHours,
   normalizeOffDays,
   normalizeTime,
+  requireOneOf,
   type ToolExecution,
 } from './toolRuntime';
 import {
@@ -18,6 +25,23 @@ import {
   describeExtendedToolCall,
   executeExtendedTool,
 } from './toolsExtended';
+import {
+  LIBRARY_CONFIRM_TOOL_NAMES,
+  LIBRARY_TOOL_NAMES,
+  LIBRARY_TOOL_SPECS,
+  describeLibraryToolCall,
+  executeLibraryTool,
+} from './toolsLibrary';
+import { topicPlainText, fileLocation } from '../library/libraryRepo';
+import {
+  CALENDAR_CONFIRM_TOOL_NAMES,
+  CALENDAR_TOOL_NAMES,
+  CALENDAR_TOOL_SPECS,
+  describeCalendarToolCall,
+  executeCalendarTool,
+} from './toolsCalendar';
+import { isAmbiguous, resolveItem } from './toolResolve';
+import { parentOf } from '../library/groupTree';
 import type { ToolSpec } from './types';
 
 /**
@@ -49,6 +73,24 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   'addPTO',
   'addOneOffShiftException',
   'deleteCalendarEvent',
+  // Files and extraction
+  'queueExtraction',
+  'retryExtraction',
+  'markNoteChecked',
+  'readFilePages',
+  'editNote',
+  'revertNote',
+  'setChatModel',
+  'setExtractionModel',
+  'deleteConversation',
+  'newConversation',
+  // Phase 2 library tools. Spread from one source of truth so a new tool
+  // cannot be added without also being classified.
+  ...LIBRARY_TOOL_NAMES,
+  // Phase 4 calendar writes. createEvent, updateEvent, moveEvent,
+  // setEventSubject, createAssessment, updateAssessment and
+  // createRecurringEvents all change stored rows.
+  ...CALENDAR_TOOL_NAMES.filter((n) => !/^(get|list|find)/.test(n)),
 ]);
 
 /** Destructive / schedule-affecting tools requiring explicit user confirmation. */
@@ -57,6 +99,19 @@ export const CONFIRMATION_TOOL_NAMES: ReadonlySet<string> = new Set([
   'addPTO',
   'addOneOffShiftException',
   'deleteCalendarEvent',
+  // Files and extraction - confirm because they use quota
+  'startExtraction',
+  'readFilePages',
+  'editNote',
+  'revertNote',
+  'deleteConversation',
+  // Every library delete joins the gate. `deleteGroup` is here even though it
+  // only ungroups, because it still removes a row the user made, so it asks
+  // first. A second model call CANNOT perform it; only Confirm can.
+  ...LIBRARY_CONFIRM_TOOL_NAMES,
+  // Phase 4: the three calendar deletes, plus createRecurringEvents because it
+  // can create up to 60 events and the user must see the list first.
+  ...CALENDAR_CONFIRM_TOOL_NAMES,
 ]);
 
 export const TOOL_SPECS: ToolSpec[] = [
@@ -89,7 +144,10 @@ export const TOOL_SPECS: ToolSpec[] = [
     function: {
       name: 'searchLibrary',
       description:
-        'Search the Study Library by keyword across subject names, topic titles, topic notes, resource titles and assessment names. Use this before answering questions about the user\'s study material.',
+        'Search the Study Library by keyword across subject names, topic titles, topic notes, resource titles and assessment names. Use this before answering questions about the user\'s study material. ' +
+        'The result includes a "resources" array of { id, title, type, subject, topic, group } and a "topics" array of { id, title, subject }. ' +
+        '"group" is the name of the resource\'s folder within its subject, or null when it is ungrouped — a resource matches a search on its group name too. ' +
+        'Any other tool that asks for a resource_id needs the "id" field from these results — never the file name or the title.',
       parameters: {
         type: 'object',
         properties: { query: { type: 'string', description: 'Keyword or phrase to search for.' } },
@@ -140,12 +198,51 @@ export const TOOL_SPECS: ToolSpec[] = [
   {
     type: 'function',
     function: {
+      name: 'manage_split_screen',
+      description:
+        'Control the two-pane split view for side-by-side work: show a PDF, a note, the dashboard or the assistant in a pane, close the split, or swap the panes. Use searchLibrary first and pass the "id" field from its "resources" results for a PDF, or from its "topics" results for a note — never the file name or the title.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['open', 'close', 'swap'],
+            description: 'open shows a view in a pane, close returns to a single pane, swap exchanges the two panes.',
+          },
+          pane: {
+            type: 'string',
+            enum: ['left', 'right'],
+            description: 'Which pane to act on. Optional for close and swap.',
+          },
+          viewType: {
+            type: 'string',
+            enum: ['pdf', 'notes', 'dashboard', 'assistant'],
+            description: 'What to show in the pane. Required for action "open".',
+          },
+          resourceId: {
+            type: 'string',
+            description: 'The study resource (PDF) to preview, or the note to open. Required when viewType is "pdf" or "notes". A note is identified by the "id" from searchLibrary\'s "topics" results.',
+          },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'stopPomodoroSession',
       description: 'Stop the running focus timer and return it to idle.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
   ...EXTENDED_TOOL_SPECS,
+  ...LIBRARY_TOOL_SPECS,
+  // Phase 4: the calendar tools for the current calendar (subjects, kinds,
+  // periods, day panel, assessments). Spread from one list so a new calendar
+  // tool cannot be added without being registered for the model too.
+  ...CALENDAR_TOOL_SPECS,
 ];
 
 /* ---------------- Read-only functions ---------------- */
@@ -261,26 +358,79 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
   if (!query) throw new ToolError('searchLibrary needs a non-empty "query".');
   const q = query.toLowerCase();
 
-  const [subjects, topics, resources, assessments] = await Promise.all([
+  const [subjects, topics, resources, assessments, groups] = await Promise.all([
     db.subjects.toArray(),
     db.topics.toArray(),
     db.resources.toArray(),
     db.assessments.toArray(),
+    db.resourceGroups.toArray(),
   ]);
+  const groupName = new Map(groups.map((g) => [g.id, g.name]));
+
+  // Every row carries `id`, `kind`, its display name and its PARENT (subject
+  // name and id), so one search result is enough to call any other tool. The
+  // subject bucket previously exposed only a NAME, so the model could not get a
+  // subjectId from a search at all, and assessments carried no id whatsoever.
+  // Groups are nested now, so a NAME alone no longer identifies one. Every
+  // resource result carries its group's full path, both as an id/name array
+  // (for further tool calls) and as a readable string (for the reply).
+  const groupById = new Map(groups.map((g) => [g.id, g]));
+  const groupPathIds = (groupId: string | null | undefined): { id: string; name: string }[] => {
+    if (!groupId) return [];
+    const chain: { id: string; name: string }[] = [];
+    const seen = new Set<string>();
+    let cur = groupId;
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const g = groupById.get(cur);
+      if (!g) break;
+      chain.unshift({ id: g.id, name: g.name });
+      cur = parentOf(g);
+    }
+    return chain;
+  };
+  const groupPathString = (groupId: string | null | undefined): string | null => {
+    const chain = groupPathIds(groupId);
+    return chain.length ? chain.map((c) => c.name).join(' / ') : null;
+  };
 
   interface Bucket {
+    subjectId: string;
     subject: string;
     matchedSubject: boolean;
-    topics: { title: string; status: Topic['status']; excerpt: string }[];
-    resources: { title: string; kind: Resource['kind']; dueDate: string | null }[];
-    assessments: { name: string; type: Assessment['type']; date: string }[];
+    topics: {
+      id: string; kind: 'topic'; title: string; status: Topic['status'];
+      excerpt: string; subjectId: string; subject: string;
+      /**
+       * The note's path, in the same "Subject" form a resource carries as
+       * `groupPathString`. A note has no group, so this is simply its subject,
+       * and it is what makes two notes with the SAME title tellable apart: the
+       * default title is derived from the subject, but a user-typed title can
+       * repeat across subjects.
+       */
+      path: string;
+    }[];
+    resources: {
+      id: string; kind: 'resource'; title: string; resourceKind: Resource['kind'];
+      dueDate: string | null; group: string | null; groupId: string | null;
+      groupPath: { id: string; name: string }[];
+      groupPathString: string | null;
+      subjectId: string; subject: string; topicId: string | null; topic: string | null;
+    }[];
+    assessments: {
+      id: string; kind: 'assessment'; name: string; type: Assessment['type'];
+      date: string; subjectId: string; subject: string;
+    }[];
   }
 
   const buckets = new Map<string, Bucket>();
   const bucketFor = (subject: Subject): Bucket => {
     const existing = buckets.get(subject.id);
     if (existing) return existing;
-    const created: Bucket = { subject: subject.name, matchedSubject: false, topics: [], resources: [], assessments: [] };
+    const created: Bucket = {
+      subjectId: subject.id, subject: subject.name, matchedSubject: false,
+      topics: [], resources: [], assessments: [],
+    };
     buckets.set(subject.id, created);
     return created;
   };
@@ -298,22 +448,80 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
     }
   }
   for (const t of topics) {
-    if (t.title.toLowerCase().includes(q) || t.notes.toLowerCase().includes(q)) {
+    // Search the plain text of WHICHEVER format the note is stored in. Reading
+    // `notes` directly would miss everything typed in the rich-text editor,
+    // because a converted note keeps its markdown backup but the user's real
+    // text now lives in `contentHtml`.
+    const body = topicPlainText(t);
+    if (t.title.toLowerCase().includes(q) || body.toLowerCase().includes(q)) {
       const subject = subjects.find((s) => s.id === t.subjectId);
-      if (subject) bucketFor(subject).topics.push({ title: t.title, status: t.status, excerpt: excerpt(t.notes, q) });
+      // The id travels with the topic, and so does its parent subject, so one
+      // search result is enough to call any later tool with either id.
+      if (subject) {
+        bucketFor(subject).topics.push({
+          id: t.id, kind: 'topic', title: t.title, status: t.status,
+          excerpt: excerpt(body, q), subjectId: subject.id, subject: subject.name,
+          // A note belongs to its subject and no folder, so its path IS the
+          // subject name. Sent explicitly so the model does not have to infer it.
+          path: subject.name,
+        });
+      }
     }
   }
+  // Defensive: a row restored from an older backup can be missing `tags` or
+  // `fileName`. Throwing here would take down the whole search — and a tool
+  // that throws without a response is exactly how a chat stops talking.
+  const matchesResource = (r: Resource) => {
+    const tags = Array.isArray(r.tags) ? r.tags : [];
+    // A resource matches on its group name too, so "show me the past papers"
+    // finds the folder as well as its contents.
+    const group = r.groupId ? groupName.get(r.groupId) : undefined;
+    return (
+      r.title.toLowerCase().includes(q) ||
+      (r.fileName ?? '').toLowerCase().includes(q) ||
+      tags.some((tag) => String(tag).toLowerCase().includes(q)) ||
+      (group ?? '').toLowerCase().includes(q)
+    );
+  };
+
   for (const r of resources) {
-    const hit = r.title.toLowerCase().includes(q) || (r.fileName ?? '').toLowerCase().includes(q) || r.tags.some((tag) => tag.toLowerCase().includes(q));
-    if (hit) {
+    if (matchesResource(r)) {
       const subject = subjects.find((s) => s.id === r.subjectId);
-      if (subject) bucketFor(subject).resources.push({ title: r.title, kind: r.kind, dueDate: r.dueDate ?? null });
+      if (subject) {
+        const topic = r.topicId ? topics.find((t) => t.id === r.topicId) : undefined;
+        bucketFor(subject).resources.push({
+          id: r.id,
+          // `kind` is now the ITEM kind, so it is uniform across topics,
+          // resources and assessments. The resource's own link/file type moved
+          // to `resourceKind` rather than overloading the word.
+          kind: 'resource',
+          title: r.title,
+          resourceKind: r.kind,
+          dueDate: r.dueDate ?? null,
+          group: (r.groupId ? groupName.get(r.groupId) : undefined) ?? null,
+          // The full group path, so a model (and a reader) can tell two
+          // same-named groups apart once nesting is allowed.
+          groupId: r.groupId ?? null,
+          groupPath: groupPathIds(r.groupId),
+          groupPathString: groupPathString(r.groupId),
+          subjectId: subject.id, subject: subject.name,
+          topicId: topic?.id ?? null, topic: topic?.title ?? null,
+        });
+      }
     }
   }
   for (const a of assessments) {
     if (a.name.toLowerCase().includes(q)) {
       const subject = subjects.find((s) => s.id === a.subjectId);
-      if (subject) bucketFor(subject).assessments.push({ name: a.name, type: a.type, date: a.date });
+      if (subject) {
+        bucketFor(subject).assessments.push({
+          // Assessments previously carried no id at all, so there was no way to
+          // act on one afterwards. The id is what makes updateAssessment and
+          // deleteAssessment possible.
+          id: a.id, kind: 'assessment', name: a.name, type: a.type,
+          date: a.date, subjectId: subject.id, subject: subject.name,
+        });
+      }
     }
   }
 
@@ -326,13 +534,51 @@ async function searchLibrary(args: Record<string, unknown>): Promise<ToolExecuti
     }))
     .slice(0, 6);
 
+  // A FLAT, id-carrying list of every matching resource. The bucketed view above
+  // is grouped by subject and is fine for a human, but the model must be able to
+  // take an `id` straight from it and hand it to another tool. This is what
+  // stops it inventing one: without a real id to copy it has nothing but the
+  // file name, and passes that as an id, which then fails to resolve.
+  const resourceList = resources
+    .filter(matchesResource)
+    .slice(0, 25)
+    .map((r) => {
+      const subject = subjects.find((s) => s.id === r.subjectId);
+      const topic = topics.find((t) => t.id === r.topicId);
+      return {
+        id: r.id,
+        title: r.title,
+        type: r.kind,
+        subject: subject?.name ?? null,
+        topic: topic?.title ?? null,
+      };
+    });
+
+  const topicList = topics
+    .filter((t) => t.title.toLowerCase().includes(q) || topicPlainText(t).toLowerCase().includes(q))
+    .slice(0, 25)
+    .map((t) => {
+      // `path` is the SUBJECT name, matching what the picker shows and what the
+      // bucketed view carries. Without it two notes with the same title look
+      // identical to the model, and it cannot choose between them.
+      const subjectName = subjects.find((s) => s.id === t.subjectId)?.name ?? null;
+      return {
+        id: t.id,
+        title: t.title,
+        subject: subjectName,
+        path: subjectName,
+      };
+    });
+
   return {
     ok: true,
     summary:
       results.length === 0
         ? `No library matches for “${query}”.`
-        : `Found matches in ${results.length} subject(s) for “${query}”.`,
-    data: { query, results },
+        : `Found ${resourceList.length} resource(s) and ${topicList.length} topic(s) for “${query}”. Pass an id from "resources" (or "topics") to any tool that asks for one.`,
+    // `resources` / `topics` are the actionable, id-carrying lists the model
+    // should read first; `results` keeps the grouped, excerpt-rich view.
+    data: { query, resources: resourceList, topics: topicList, results },
   };
 }
 
@@ -404,7 +650,146 @@ async function stopPomodoroSession(): Promise<ToolExecution> {
 
 
 
-/* ---------------- Dispatcher ---------------- */
+/* ---------------- Split-screen multitasking ---------------- */
+
+/**
+ * Drive the two-pane split view — open a pane on a chosen view, close it, or
+ * swap the panes.
+ *
+ * The actual layout lives in `App` as React state, so this QUEUES a command and
+ * `App` applies it with the very same `splitModel` functions the UI uses
+ * (`addSecondPane` / `setPane` / `swapPanes`). The tool never mutates layout
+ * itself, which is what keeps AI-driven and user-driven splits identical.
+ */
+async function manageSplitScreen(args: Record<string, unknown>): Promise<ToolExecution> {
+  const action = requireOneOf(args.action, ['open', 'close', 'swap'] as const, 'action');
+  const paneRaw = String(args.pane ?? '').trim();
+  // `pane` is optional for close/swap: a closed split has no sides, and a swap
+  // is symmetric. Validate it when it IS supplied so a typo cannot silently
+  // mean "left".
+  const pane = paneRaw === '' ? undefined : requireOneOf(paneRaw, ['left', 'right'] as const, 'pane');
+  const viewRaw = String(args.viewType ?? '').trim();
+  const viewType = viewRaw === ''
+    ? undefined
+    : requireOneOf(viewRaw, ['pdf', 'notes', 'dashboard', 'assistant'] as const, 'viewType');
+  const resourceId = String(args.resourceId ?? '').trim() || undefined;
+
+  if (action === 'open' && !viewType && !resourceId) {
+    throw new ToolError('Opening a pane needs a "viewType" (and a "resourceId" for a PDF).');
+  }
+
+  // Resolve a real resource through the ONE shared resolver. This had its own
+  // hand-rolled copy (id, then exact title, then contains) which was a third
+  // variation on the same idea; it now behaves identically to every other tool,
+  // including returning candidates on ambiguity rather than a dead end.
+  let resource: Resource | undefined;
+  let ambiguousIds: { id: string; name: string }[] = [];
+  if (resourceId) {
+    const r = resolveItem<Resource>({
+      kind: 'resource',
+      ref: resourceId,
+      rows: await db.resources.toArray(),
+      nameOf: (row) => row.title,
+      label: 'resource',
+    });
+    if ('row' in r) resource = r.row;
+    else if (isAmbiguous(r)) ambiguousIds = r.candidates;
+  }
+
+  // Several plausible matches is not an error to throw away: return the
+  // candidates WITH their ids so the model can pick one and call again.
+  if (ambiguousIds.length > 0) {
+    return {
+      ok: false,
+      summary: `“${resourceId}” matches ${ambiguousIds.length} resources. Call again with one of these ids.`,
+      data: {
+        error: 'ambiguous_resource',
+        query: resourceId,
+        candidates: ambiguousIds.map((c) => ({ id: c.id, title: c.name, type: 'resource' })),
+      },
+    };
+  }
+
+  // A notes pane may have been given a NOTE id, which is not a resource at all,
+  // so an unresolved resource is only a hard error when a file is what the pane
+  // needs. Otherwise it falls through to the note lookup below.
+  if (resourceId && !resource && viewType !== 'notes') {
+    throw new ToolError(
+      `No resource matches “${resourceId}”, and nothing is titled like it. `
+      + `Call searchLibrary and pass the "id" field from its "resources" results — never the file name. `
+      + `Nothing was changed.`
+    );
+  }
+
+  // A PDF pane is meaningless without a document, and notes need a topic.
+  let topicId: string | undefined;
+  if (viewType === 'pdf') {
+    if (!resource) throw new ToolError('A PDF pane needs a "resourceId" — search the library first.');
+    const location = fileLocation(resource);
+    if (location.kind === 'none') {
+      throw new ToolError(`“${resource.title}” has no local copy or cloud copy, so it cannot be previewed.`);
+    }
+  }
+  if (viewType === 'notes') {
+    // The ORIGINAL path still works: open a resource, and its topic's note is
+    // what the pane shows. Kept so nothing that used to work now fails.
+    topicId = resource?.topicId ?? undefined;
+  }
+  // A notes pane can also be opened by naming a NOTE directly. Before this it
+  // could only be reached by opening a RESOURCE and borrowing that resource's
+  // topic, so "show me Thermodynamics's Notes in the left pane" was impossible:
+  // the note itself was not addressable. It now resolves through the SAME shared
+  // resolver as every other tool, so an id, an exact title and a unique partial
+  // all work, and an ambiguous name returns candidates rather than a guess.
+  if (viewType === 'notes' && !topicId && resourceId) {
+    const t = resolveItem<Topic>({
+      kind: 'note',
+      ref: resourceId,
+      rows: await db.topics.toArray(),
+      nameOf: (row) => row.title,
+      label: 'note',
+    });
+    if ('row' in t) {
+      topicId = t.row.id;
+    } else if (isAmbiguous(t)) {
+      return {
+        ok: false,
+        summary: `“${resourceId}” matches ${t.candidates.length} notes. Call again with one of these ids.`,
+        data: {
+          error: 'ambiguous_note',
+          query: resourceId,
+          candidates: t.candidates.map((c) => ({ id: c.id, title: c.name, type: 'note' })),
+        },
+      };
+    }
+  }
+
+  if (viewType === 'notes' && !topicId) {
+    throw new ToolError('A notes pane needs a note. Search the library and pass the "id" field from its "topics" results.');
+  }
+
+  const cmd: Omit<SplitCommand, 'id'> = { action, pane, viewType, resourceId: resource?.id, topicId };
+  const id = requestSplitCommand(cmd);
+  const label = describeSplitCommand(cmd);
+  const side = pane === 'right' ? 'right' : 'left';
+
+  const summary =
+    action === 'close'
+      ? 'Closing the split view and returning to a single pane.'
+      : action === 'swap'
+        ? 'Swapping the two panes.'
+        : viewType === 'pdf'
+          ? `Opening “${resource?.title}” in the ${side} pane.`
+          : `Opening ${SPLIT_VIEW_LABELS[viewType ?? 'dashboard']} in the ${side} pane.`;
+
+  return {
+    ok: true,
+    summary,
+    data: { requested: cmd, commandId: id, pane: side, action },
+    toast: { kind: 'info', title: label.replace(/…$/, ''), description: summary },
+  };
+}
+
 
 /** Human-readable one-liner for the confirmation step / transcript. */
 export function describeToolCall(name: string, argsJson: string): string {
@@ -432,7 +817,15 @@ export function describeToolCall(name: string, argsJson: string): string {
       return `Start a ${String(args.durationMinutes ?? '?')}-minute focus timer.`;
     case 'stopPomodoroSession':
       return 'Stop the running focus timer.';
+    case 'manage_split_screen':
+      return describeSplitCommand({
+        action: (String(args.action ?? 'open') as SplitCommand['action']),
+        pane: args.pane as SplitCommand['pane'],
+        viewType: args.viewType as SplitCommand['viewType'],
+      });
     default:
+      if (LIBRARY_TOOL_NAMES.has(name)) return describeLibraryToolCall(name, args);
+      if (CALENDAR_TOOL_NAMES.includes(name)) return describeCalendarToolCall(name, argsJson);
       return describeExtendedToolCall(name, args);
   }
 }
@@ -465,7 +858,15 @@ export async function executeTool(name: string, argsJson: string): Promise<ToolE
       return startPomodoroSession(args);
     case 'stopPomodoroSession':
       return stopPomodoroSession();
+    case 'manage_split_screen':
+      return manageSplitScreen(args);
     default: {
+      // The calendar tools for the CURRENT calendar (Phase 4) are checked
+      // before the older modules, so the new names always win.
+      if (CALENDAR_TOOL_NAMES.includes(name)) return executeCalendarTool(name, args);
+      // Library write / delete functions live in toolsLibrary.ts.
+      const library = await executeLibraryTool(name, args);
+      if (library) return library;
       // Library / calendar / status functions live in toolsExtended.ts.
       const extended = await executeExtendedTool(name, args);
       if (extended) return extended;

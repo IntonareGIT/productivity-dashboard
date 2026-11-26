@@ -1,19 +1,32 @@
 import React, { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { Z } from './zIndex';
 
 interface ModalProps {
   open: boolean;
   onClose: () => void;
   title: string;
   subtitle?: string;
+  /**
+   * `md` is the default compact dialog. `lg` is a wide surface for content
+   * that needs room to be readable — a PDF preview, for example, which is
+   * rendered fit-to-width and would otherwise be squeezed into ~28rem.
+   */
+  size?: 'md' | 'lg';
   children: React.ReactNode;
 }
+
+const SIZES = {
+  md: 'sm:max-w-md',
+  lg: 'sm:max-w-6xl',
+} as const;
 
 /**
  * Centered modal on desktop (sm+), bottom sheet on mobile.
  * Closes on Escape and on backdrop click.
  */
-export const Modal: React.FC<ModalProps> = ({ open, onClose, title, subtitle, children }) => {
+export const Modal: React.FC<ModalProps> = ({ open, onClose, title, subtitle, size = 'md', children }) => {
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -29,14 +42,24 @@ export const Modal: React.FC<ModalProps> = ({ open, onClose, title, subtitle, ch
 
   if (!open) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+  // Rendered through a PORTAL onto <body>. In place, a `fixed inset-0` dialog is
+  // still positioned relative to the nearest ancestor that creates a containing
+  // block (anything with `transform`, `filter`, `backdrop-filter`,
+  // `will-change` or `contain`), and it is clipped by any ancestor
+  // `overflow: hidden`. Those are everywhere in this app: subject cards use
+  // `hover:-translate-y-0.5`, the header uses `backdrop-blur`, and panes set
+  // `contain`. The dialog then renders underneath, or inside, its own opener,
+  // which is the reported "the edit window is not visible until I go back".
+  //
+  // A portal escapes all of that, so a dialog is always on top of everything.
+  const content = (
+    <div className={`fixed inset-0 ${Z.modal} flex items-end sm:items-center justify-center`}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px]" onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="relative w-full sm:max-w-md max-h-[90vh] overflow-y-auto bg-bg-surface border border-border rounded-t-2xl sm:rounded-2xl shadow-2xl animate-in fade-in duration-150"
+        className={`relative w-full ${SIZES[size]} max-h-[90vh] overflow-y-auto bg-bg-surface border border-border rounded-t-2xl sm:rounded-2xl shadow-2xl animate-in fade-in duration-150`}
       >
         <div className="flex items-start justify-between px-5 pt-5 pb-3 border-b border-border/60 sticky top-0 bg-bg-surface z-10">
           <div>
@@ -55,4 +78,7 @@ export const Modal: React.FC<ModalProps> = ({ open, onClose, title, subtitle, ch
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') return content;
+  return createPortal(content, document.body);
 };

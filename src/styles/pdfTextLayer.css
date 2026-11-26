@@ -1,0 +1,96 @@
+/* ============================================================================
+   PDF text layer.
+
+   pdf.js only draws a bitmap to the canvas, which means the text in a page is
+   pixels: unselectable, unsearchable, unreadable to a screen reader, and
+   impossible to copy. The text layer puts REAL text in a transparent overlay on
+   top of the canvas, positioned to match the glyphs exactly.
+
+   These rules are a flattened, self-contained subset of `pdf_viewer.css` from
+   the pdf.js distribution. Importing the whole viewer stylesheet instead would
+   drag in the viewer's own layout and fight this app's, so the text-layer block
+   is reproduced here.
+
+   Two properties are load-bearing:
+   - the glyphs are `color: transparent`, so the layer shows the canvas beneath
+     it and never a second, slightly misaligned copy of the same text;
+   - `user-select: text` plus a real `::selection` colour, which is what makes
+     the text actually selectable and visibly selected.
+
+   `--total-scale-factor` is written by pdf.js itself onto the layer element as
+   it lays out; the default here only covers the first paint.
+   ========================================================================== */
+
+.pdf-text-layer {
+  color-scheme: only light;
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-align: initial;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 1;
+  --total-scale-factor: 1;
+  --min-font-size: 1;
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+}
+
+.pdf-text-layer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.pdf-text-layer > :not(.markedContent),
+.pdf-text-layer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.pdf-text-layer .markedContent {
+  display: contents;
+}
+
+/* An image-only region of a scanned page: nothing to select, and a text cursor
+   there would be a lie. */
+.pdf-text-layer span[role='img'] {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+/* Without an explicit selection colour the browser paints its default, which on
+   a transparent glyph layer is invisible: the user selects a paragraph and sees
+   nothing happen. This is the rule that makes selection legible. */
+.pdf-text-layer ::selection {
+  background: color-mix(in srgb, #3b82f6 40%, transparent);
+}
+
+.pdf-text-layer::-moz-selection {
+  background: color-mix(in srgb, #3b82f6 40%, transparent);
+}
+
+/* Snippet mode draws a selection rectangle ON TOP of the text layer and stops the
+   browser selecting text while a drag is in progress. */
+.pdf-text-layer[data-snippet-on='true'] {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: crosshair;
+}

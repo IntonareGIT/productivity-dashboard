@@ -18,7 +18,31 @@ export interface Topic {
   id: string;              // UUID
   subjectId: string;       // FK -> Subject.id
   title: string;           // Topic title
-  notes: string;           // Markdown / LaTeX / code-supported notes
+  /**
+   * The ORIGINAL markdown / LaTeX note body.
+   *
+   * NEVER overwritten, never deleted. This is the permanent backup: once a note
+   * has been edited in the rich-text editor the authoritative content moves to
+   * `contentHtml`, but this field is left exactly as it was so there is always a
+   * readable original to fall back on.
+   */
+  notes: string;
+  /**
+   * Rich-text body produced by the WYSIWYG editor (v11+).
+   *
+   * Absent on notes that have not been edited in the editor yet. The editor
+   * converts the markdown lazily on first open and only writes this once the
+   * user actually changes something.
+   */
+  contentHtml?: string;
+  /**
+   * Which format is authoritative for display.
+   *
+   * `'html'` once `contentHtml` exists; `undefined` while `notes` (markdown) is
+   * the only body. Renderers must read this and must not guess from the mere
+   * presence of a string.
+   */
+  contentFormat?: 'html';
   status: TopicStatus;
   order: number;           // manual ordering within a subject
   createdAt: string;       // ISO 8601
@@ -27,21 +51,98 @@ export interface Topic {
 
 export type ResourceKind = 'link' | 'file';
 
+/**
+ * A named, folder-like lane for resources WITHIN a subject.
+ *
+ * Deliberately not a child of Topic: a resource keeps its own `topicId` while
+ * grouped, so grouping across topics ("every past paper") stays possible and
+ * notes / split-with-notes / topic deletes keep working unchanged.
+ */
+export interface ResourceGroup {
+  id: string;              // UUID
+  subjectId: string;       // FK -> Subject.id
+  name: string;            // User-given group name
+  order: number;           // manual ordering among SIBLINGS
+  /**
+   * FK -> ResourceGroup.id of the parent, or null/absent for a top-level group
+   * in the subject (schema v14, additive). Metadata only, so it syncs like the
+   * rest of the group row; every pre-v14 group is simply top-level.
+   */
+  parentGroupId?: string | null;
+  createdAt: string;       // ISO 8601
+}
+
 export interface Resource {
   id: string;              // UUID
   subjectId: string;       // FK -> Subject.id (denormalized for fast queries)
   topicId: string | null;  // FK -> Topic.id (null = legacy subject-level, shown under default topic)
+  /**
+   * FK -> ResourceGroup.id (null = ungrouped). OPTIONAL and independent of
+   * topicId: a grouped resource still belongs to its topic, so a group is a
+   * lane over resources rather than a new parent. At most one group per
+   * resource, and only ever a group of the same subject.
+   */
+  groupId?: string | null;
   kind: ResourceKind;      // 'link' = urlOrPath is a URL/path; 'file' = blob holds the upload
   title: string;           // Resource title
-  urlOrPath: string;       // Web URL or local file path (links)
+  /**
+   * Web URL or local file path. Mandatory for 'link', absent for 'file' —
+   * an upload carries no URL. Always read it defensively (it is undefined for
+   * file rows), never as a bare string.
+   */
+  urlOrPath?: string;
   fileName?: string | null;// Original upload name (files)
   mimeType?: string | null;// Upload MIME (files)
   fileSize?: number | null;// Upload bytes (files)
   blob?: Blob | null;      // File bytes stored in Dexie (files; excluded from JSON backup)
+  /**
+   * Cloudflare R2 object key, when the file has been moved to the cloud.
+   * `blob` and `r2Key` are mutually exclusive: a row either holds the bytes
+   * locally or a pointer to the cloud object, never both.
+   */
+  r2Key?: string | null;
+  /**
+   * Where the raw file lives in a ZIP export, so re-import can find it.
+   * Set by exportAllDataZip; absent when the row was never exported that way.
+   */
+  blobFileName?: string | null;
   tags: string[];          // Tag strings
   dueDate?: string | null; // ISO 8601 YYYY-MM-DD
   completed?: boolean;
   createdAt: string;       // ISO 8601
+  /** Last page the user was reading in the PDF viewer (per file). */
+  lastPage?: number;
+  /** ISO-8601 timestamp when `lastPage` was last saved. */
+  lastPageAt?: string | null;
+}
+
+/**
+ * Extraction note for a PDF resource (schema v17).
+ * One note per resource, keyed by fileId = resource.id.
+ */
+export interface Note {
+  fileId: string;          // = Resource.id, also primary key
+  status: 'none' | 'queued' | 'processing' | 'ready' | 'failed';
+  modelId?: string;        // Model used/selected for extraction
+  pageCount: number;       // Total pages in the PDF
+  chunks: NoteChunk[];     // Per-chunk progress and markdown (markdown cleared after finalize)
+  markdown: string;        // Full extracted markdown (built from chunks, not stored in chunks)
+  lastError?: string;      // Short error text, never a key
+  checked: boolean;        // User has reviewed
+  editedByUser: boolean;   // User edited the markdown
+  editedByAI: boolean;     // AI edited the markdown
+  aiMayEdit: boolean;      // AI is allowed to edit
+  versions: string[];      // Last 5 markdown versions (newest first)
+  updatedAt: string;       // ISO 8601
+}
+
+export interface NoteChunk {
+  index: number;           // 0-based chunk index
+  pageStart: number;       // 1-based page start
+  pageEnd: number;         // 1-based page end
+  status: 'pending' | 'processing' | 'ready' | 'failed';
+  markdown: string;        // Markdown for this chunk
+  error?: string;          // Chunk-specific error
 }
 
 export type AssessmentType = 'exam' | 'quiz' | 'assignment' | 'project';
@@ -59,6 +160,16 @@ export interface Assessment {
 }
 
 export type EventCategory = 'class' | 'deadline' | 'personal' | 'work';
+
+/**
+ * What kind of thing an event is, and which teaching period it occupies.
+ *
+ * Both are ADDITIVE and both are optional, so every existing event keeps working
+ * and reads as `undefined`, which means "no kind" and "no period". They sit
+ * next to the existing `subjectId` link rather than replacing it: an event is
+ * still linked to a subject in exactly one way.
+ */
+export type EventKind = 'studying' | 'lecture' | 'section' | 'lab';
 
 /** Recurrence rule stored ONCE on the parent event (occurrences are computed,
  *  never generated). Missing/undefined is treated as 'none'. */
@@ -79,6 +190,15 @@ export interface CalendarEvent {
   recurrenceEndDate?: string | null;       // optional inclusive end (YYYY-MM-DD)
   recurrenceCount?: number | null;         // optional: stop after N occurrences
   subjectId?: string | null;               // FK -> subjects.id (null = personal)
+  // --- kind and period (schema v12), additive and optional ---
+  eventKind?: EventKind;                  // undefined = no kind (every pre-v12 event)
+  period?: number;                        // 1..6, only meaningful for lecture/section/lab
+  /**
+   * Shared id grouping the events created together by one bulk series
+   * (schema v13, additive and optional). Undefined means "not part of a
+   * series", which is true of every pre-v13 event.
+   */
+  seriesId?: string | null;
   createdAt: string;       // ISO 8601
 }
 
@@ -146,11 +266,57 @@ export interface AiProvider {
   id: string;          // UUID primary key
   label: string;       // Display name, e.g. "Gemini Flash", "OpenRouter Free"
   baseUrl: string;     // OpenAI-compatible base URL (no trailing /chat/completions)
-  apiKey: string;      // Secret key; empty = not configured yet
+  apiKey: string;      // LEGACY: always '' — keys live server-side (see api/ai.ts); kept so the schema is unchanged
   modelName: string;   // Model id sent in the request body
   isDefault: boolean;  // Exactly one provider is default at a time
+  /**
+   * Optional second model id, tried ONCE if the primary fails every retry
+   * (schema v13, additive). Empty or absent means the feature is OFF, which is
+   * the default, so nothing changes unless the user opts in.
+   */
+  fallbackModel?: string;
   createdAt: string;   // ISO 8601
   updatedAt: string;   // ISO 8601
+}
+
+/**
+ * A user-added AI model (replaces the old AiProvider + AiKeys split).
+ *
+ * Stored on the server in Upstash Redis under "models:{userId}:{id}".
+ * The browser never sends baseUrl or adapter to /api/ai — only the modelId.
+ * The server looks up the rest.
+ */
+export interface UserModel {
+  id: string;              // UUID, generated server-side
+  displayName: string;     // User-friendly name, e.g. "My Gemini Flash"
+  adapter: 'gemini' | 'openai-compatible';
+  baseUrl: string;         // Required for openai-compatible (e.g. "https://api.groq.com/openai/v1"), empty for gemini
+  modelId: string;         // Exact provider model name (e.g. "gemini-3.1-flash-lite", "llama-3.3-70b-versatile")
+  capabilities: {
+    chat: boolean;         // Can be used for chat
+    acceptsPdf: boolean;   // Can accept PDF files
+    acceptsImages: boolean; // Can accept images
+  };
+  hasKey: boolean;         // Whether an API key is saved (key itself never returned to client)
+  createdAt: string;       // ISO 8601
+  updatedAt: string;       // ISO 8601
+}
+
+/**
+ * Input for creating/updating a user model.
+ * apiKey is optional on update (omit to keep existing key).
+ */
+export interface UserModelInput {
+  displayName: string;
+  adapter: 'gemini' | 'openai-compatible';
+  baseUrl: string;
+  modelId: string;
+  capabilities: {
+    chat: boolean;
+    acceptsPdf: boolean;
+    acceptsImages: boolean;
+  };
+  apiKey?: string;         // Required on create, optional on update
 }
 
 /**
@@ -186,6 +352,8 @@ export interface ChatMessageRow {
   sessionId: string;   // FK -> ChatSession.id
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;     // Text for the UI; '' for pure tool-call turns
+  /** A small inline thumbnail (<~20 KB) for an attached photo, or null. Full image bytes are never stored. */
+  image?: string | null;
   /** Full message object as sent/received, including extra_content. */
   raw: Record<string, unknown>;
   /** Tool-call ids this message requests (assistant turns). */
@@ -196,7 +364,34 @@ export interface ChatMessageRow {
   toolName?: string | null;
   /** Short human summary of a tool result (UI only). */
   display?: string | null;
+  /**
+   * Provider-native reasoning for this turn (UI only; never replayed).
+   *
+   * Not indexed, so adding it needs no Dexie version bump — IndexedDB stores
+   * whole objects and only the listed keys become indexes.
+   */
+  reasoning?: string | null;
   error?: boolean;
   createdAt: string;   // ISO 8601
 }
+
+/**
+ * Synced UI state (schema v8) — a single row with the fixed key 'current'.
+ *
+ * Holds the two preferences that follow the user across devices: the current
+ * status and any theme override. Light/dark is deliberately NOT here; it is a
+ * per-device preference in localStorage, so one device's brightness choice
+ * never overrides another's.
+ *
+ * A fixed key is used so two devices writing concurrently converge on the same
+ * row rather than creating duplicates, and so a missing row is unambiguous.
+ */
+export interface UiState {
+  id: string;          // always 'current'
+  status: UserStatus;
+  /** Manual "Override colors" theme, or null when following the mapping. */
+  themeOverride: ThemeMode | null;
+  updatedAt: string;   // ISO 8601
+}
+
 

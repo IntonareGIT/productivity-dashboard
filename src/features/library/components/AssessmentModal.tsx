@@ -47,8 +47,10 @@ export const AssessmentModal: React.FC<AssessmentModalProps> = ({ subjectId, ass
       setError('Name is required.');
       return;
     }
-    if (!date.trim()) {
-      setError('Date is required.');
+    // The date is OPTIONAL (Phase 5). An assessment with no date still exists
+    // and still shows in its subject; it simply does not appear on the calendar.
+    if (date.trim() && !/^\d{4}-\d{2}-\d{2}$/.test(date.trim())) {
+      setError('Date must be a valid date.');
       return;
     }
     const parsedWeight = weight.trim() === '' ? null : Number(weight);
@@ -106,8 +108,11 @@ export const AssessmentModal: React.FC<AssessmentModalProps> = ({ subjectId, ass
 
         <div className="grid grid-cols-2 gap-3">
           <label className="block">
-            <span className="block text-xs text-content-secondary mb-1">Date</span>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={inputCls} />
+            <span className="block text-xs text-content-secondary mb-1">
+              Date <span className="text-content-tertiary">(optional)</span>
+            </span>
+            {/* A native date input IS the date picker, and it clears to empty. */}
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Date" className={inputCls} />
           </label>
           <label className="block">
             <span className="block text-xs text-content-secondary mb-1">

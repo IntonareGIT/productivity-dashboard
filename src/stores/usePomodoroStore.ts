@@ -21,6 +21,10 @@ interface PomodoroStoreState {
   focusDurationOverride: number | null;
   settings: PomodoroSettings;
   lastEvent: string | null;
+  /** True while a Pomodoro cycle (N focus blocks + breaks) is in progress. */
+  cycleActive: boolean;
+  /** True for 5 seconds after the long break ends, so the widget can show "Cycle complete". */
+  cycleComplete: boolean;
 
   startTimer: () => void;
   pauseTimer: () => void;
@@ -35,6 +39,8 @@ interface PomodoroStoreState {
   /** Stop the running timer and return it to idle. */
   stopTimer: () => void;
   loadSettings: (settings: PomodoroSettings) => void;
+  /** Clears the "cycle complete" banner after it has been shown for 5 seconds. */
+  clearCycleComplete: () => void;
 }
 
 function phaseSeconds(phase: PomodoroPhase, s: PomodoroSettings): number {
@@ -156,6 +162,8 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
       completedFocusCycles: cycles,
       focusDurationOverride: null,
       lastEvent: `${eventTitle} — ${eventBody}`,
+      cycleActive: finished !== 'long_break',
+      cycleComplete: finished === 'long_break',
     });
   };
 
@@ -185,6 +193,8 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
     focusDurationOverride: null,
     settings: defaultPomodoroSettings,
     lastEvent: null,
+    cycleActive: false,
+    cycleComplete: false,
 
     startTimer: () => {
       const s = get();
@@ -200,7 +210,12 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
       }
       stopEngine();
       engineId = setInterval(tick, 500);
-      set({ isRunning: true, endsAt: Date.now() + timeLeft * 1000, timeLeft });
+      set({
+        isRunning: true,
+        endsAt: Date.now() + timeLeft * 1000,
+        timeLeft,
+        cycleActive: true,
+      });
     },
 
     pauseTimer: () => {
@@ -214,7 +229,7 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
 
     resetTimer: () => {
       stopEngine();
-      set({ isRunning: false, endsAt: null, timeLeft: get().totalDuration });
+      set({ isRunning: false, endsAt: null, timeLeft: get().totalDuration, cycleActive: false, cycleComplete: false });
     },
 
     setPhase: (phase) => {
@@ -230,31 +245,7 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
       });
     },
 
-    skipPhase: () => {
-      const s = get();
-      stopEngine();
-      if (s.currentPhase === 'focus') {
-        const dur = phaseSeconds('short_break', s.settings);
-        set({
-          isRunning: false,
-          endsAt: null,
-          currentPhase: 'short_break',
-          totalDuration: dur,
-          timeLeft: dur,
-        });
-      } else {
-        const cycles = s.currentPhase === 'long_break' ? 0 : s.completedFocusCycles;
-        const dur = phaseSeconds('focus', s.settings);
-        set({
-          isRunning: false,
-          endsAt: null,
-          currentPhase: 'focus',
-          completedFocusCycles: cycles,
-          totalDuration: dur,
-          timeLeft: dur,
-        });
-      }
-    },
+    skipPhase: () => completePhase(),
 
     setSubject: (subject) => set({ currentSubject: subject }),
 
@@ -283,6 +274,8 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
         endsAt: null,
         timeLeft: s.totalDuration,
         focusDurationOverride: null,
+        cycleActive: false,
+        cycleComplete: false,
       });
     },
 
@@ -295,5 +288,7 @@ export const usePomodoroStore = create<PomodoroStoreState>((set, get) => {
       const dur = phaseSeconds(s.currentPhase, settings);
       set({ settings, totalDuration: dur, timeLeft: dur });
     },
+
+    clearCycleComplete: () => set({ cycleComplete: false }),
   };
 });

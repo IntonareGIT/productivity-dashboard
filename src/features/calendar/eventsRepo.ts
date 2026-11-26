@@ -1,13 +1,15 @@
 import { format } from 'date-fns';
 import { db } from '../../db/db';
-import type { CalendarEvent, EventCategory, RecurrenceType } from '../../types';
+import type { CalendarEvent, EventCategory, EventKind, RecurrenceType } from '../../types';
 import { newId } from '../../utils/id';
+import { normalizePeriod, usesPeriod } from './categories';
 import {
   dayBefore,
   isRecurring,
   nextOccurrenceAfter,
   occurrenceOrdinal,
   parseDateKey,
+  occursOn,
 } from './recurrence';
 
 export interface EventInput {
@@ -25,6 +27,12 @@ export interface EventInput {
   recurrenceEndDate?: string | null;
   recurrenceCount?: number | null;
   subjectId?: string | null;
+  // kind + period (v12, additive)
+  eventKind?: EventKind | null;
+  period?: number | null;
+  // Bulk series grouping (v13, additive). Set by createRecurringEvents so a
+  // whole series can be listed and deleted together.
+  seriesId?: string | null;
 }
 
 /** Editing/deleting a series asks which part is affected. */
@@ -60,30 +68,79 @@ function normalize(input: EventInput): NormalizedFields {
         ? null
         : Math.floor(input.recurrenceCount),
     subjectId: input.subjectId ?? null,
+    // A period only means anything for a timetabled kind. Storing `period: 3`
+    // on a Studying event would be a contradiction, so it is dropped rather
+    // than persisted: the field stays honest about what it represents.
+    eventKind: input.eventKind ?? null,
+    period: usesPeriod(input.eventKind) ? normalizePeriod(input.period) : null,
+    // normalize() builds an EXPLICIT field list, so anything not named here is
+    // silently dropped on write. seriesId had to be added or a bulk series was
+    // created with no grouping and could never be deleted as a unit.
+    seriesId: input.seriesId ?? null,
   };
 }
 
 /** Create or update a calendar event (rule stored once on the parent row). */
-export async function saveEvent(input: EventInput): Promise<void> {
+/**
+ * Insert or update one event. Returns the row's id.
+ *
+ * The id is returned because the assistant's tools have to report the
+ * `{ kind, id, name }` of what they created, and a freshly created event has no
+ * id the caller could otherwise know. Updates return the id they were given.
+ */
+export async function saveEvent(input: EventInput): Promise<string> {
   const fields = normalize(input);
 
   if (input.id) {
     const existing = await db.calendarEvents.get(input.id);
     if (existing) {
       await db.calendarEvents.put({ ...existing, ...fields });
-      return;
+      return existing.id;
     }
   }
 
+  const id = newId();
   await db.calendarEvents.put({
-    id: newId(),
+    id,
     ...fields,
     createdAt: new Date().toISOString(),
   });
+  return id;
 }
 
 export async function deleteEvent(id: string): Promise<void> {
   await db.calendarEvents.delete(id);
+}
+
+/**
+ * Events already occupying a period on a date.
+ *
+ * A WARNING aid, never a block: the form shows this and still saves, because the
+ * user may genuinely have two things in period 3 and that is their call.
+ *
+ * Only timetabled kinds (lecture / section / lab) are considered. Studying and
+ * events with no subject are excluded, since "another lecture in the same period"
+ * is the only conflict that means a timetable mistake.
+ *
+ * `excludeId` keeps an event from conflicting with itself while being edited.
+ * The `date` index narrows this to the events anchored on that day; recurring
+ * series are matched by checking whether the date is one of their occurrences.
+ */
+export async function periodConflictsOn(
+  date: string,
+  period: number | null,
+  excludeId?: string
+): Promise<CalendarEvent[]> {
+  if (period == null) return [];
+  const onDate = await db.calendarEvents.where('date').equals(date).toArray();
+  return onDate.filter((e) => {
+    if (e.id === excludeId) return false;
+    if (e.period !== period) return false;
+    if (!usesPeriod(e.eventKind)) return false;
+    // A recurring parent is anchored on its first date, so an occurrence on
+    // `date` may come from a different row. Include it if either way.
+    return e.date === date || occursOn(e, parseDateKey(date));
+  });
 }
 
 /* ---------------- Series-scoped operations (no occurrence rows) ----------------

@@ -1,10 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { BookMarked, FileText, FlaskConical, ListChecks, Plus, Search, X } from 'lucide-react';
 import { db } from '../../db/db';
 import type { Assessment, Resource, Subject, Topic } from '../../types';
 import { deleteSubjectCascade } from './libraryRepo';
 import { SubjectModal } from './components/SubjectModal';
+import { useOpenSubjectStore } from '../../stores/useOpenSubjectStore';
 import { SubjectDetail } from './components/SubjectDetail';
 
 const STATUS_LABEL: Record<Topic['status'], string> = {
@@ -13,10 +14,26 @@ const STATUS_LABEL: Record<Topic['status'], string> = {
 
 interface SubjectHits { subject: Subject; topics: Topic[]; resources: Resource[]; assessments: Assessment[]; }
 
-export const LibraryPage: React.FC = () => {
+interface LibraryPageProps {
+  /** Open the split view with a PDF in one pane and its topic notes in the other. */
+  onSplitWithNotes?: (resourceId: string, topicId: string | null) => void;
+}
+
+export const LibraryPage: React.FC<LibraryPageProps> = ({ onSplitWithNotes }) => {
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [subjectModal, setSubjectModal] = useState<{ open: boolean; subject: Subject | null }>({ open: false, subject: null });
+
+  // A "go to this subject" request from elsewhere (the calendar's day panel).
+  // Applied here rather than threaded down from App: see useOpenSubjectStore.
+  const openSubjectId = useOpenSubjectStore((s) => s.subjectId);
+  const openNonce = useOpenSubjectStore((s) => s.nonce);
+  const clearOpenSubject = useOpenSubjectStore((s) => s.clear);
+  useEffect(() => {
+    if (!openSubjectId) return;
+    setSelectedId(openSubjectId);
+    clearOpenSubject();
+  }, [openSubjectId, openNonce, clearOpenSubject]);
 
   const subjects = useLiveQuery(() => db.subjects.toArray()) ?? [];
   const topics = useLiveQuery(() => db.topics.toArray()) ?? [];
@@ -78,8 +95,27 @@ export const LibraryPage: React.FC = () => {
     return { confident: list.filter((t) => t.status === 'confident').length, total: list.length };
   };
 
+  // The subject dialog is rendered AFTER the view branch, not inside it.
+  //
+  // It used to sit at the bottom of the list view only, while the early
+  // `return <SubjectDetail .../>` above skipped it entirely. So "Edit subject"
+  // from inside a subject set `subjectModal.open`, re-rendered, and showed
+  // nothing: the dialog existed only in the view you had to navigate BACK to.
+  // Rendering it once, after the branch, makes it reachable from both.
+  const subjectDialog = subjectModal.open ? (
+    <SubjectModal
+      subject={subjectModal.subject}
+      onClose={() => setSubjectModal({ open: false, subject: null })}
+    />
+  ) : null;
+
   if (selectedSubject) {
-    return <SubjectDetail subject={selectedSubject} onBack={() => setSelectedId(null)} onEditSubject={() => setSubjectModal({ open: true, subject: selectedSubject })} onDeleteSubject={() => handleDeleteSubject(selectedSubject.id)} />;
+    return (
+      <>
+        <SubjectDetail subject={selectedSubject} onBack={() => setSelectedId(null)} onSplitWithNotes={onSplitWithNotes} onEditSubject={() => setSubjectModal({ open: true, subject: selectedSubject })} onDeleteSubject={() => handleDeleteSubject(selectedSubject.id)} />
+        {subjectDialog}
+      </>
+    );
   }
 
 
@@ -171,7 +207,7 @@ export const LibraryPage: React.FC = () => {
         </div>
       )}
 
-      {subjectModal.open && <SubjectModal subject={subjectModal.subject} onClose={() => setSubjectModal({ open: false, subject: null })} />}
+      {subjectDialog}
     </div>
   );
 };

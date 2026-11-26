@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   LayoutDashboard, 
   BookMarked, 
@@ -7,10 +7,15 @@ import {
   Timer, 
   Settings2,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Compass
 } from 'lucide-react';
+import { useAssistantStore } from '../../stores/useAssistantStore';
+import { usePomodoroStore } from '../../stores/usePomodoroStore';
+import { AssistantSidebarList } from './AssistantSidebarList';
+import { FocusTimerWidget } from './FocusTimerWidget';
 
-export type NavTab = 'dashboard' | 'library' | 'calendar' | 'shifts' | 'focus' | 'settings';
+export type NavTab = 'dashboard' | 'library' | 'calendar' | 'shifts' | 'focus' | 'settings' | 'about';
 
 interface SidebarProps {
   activeTab: NavTab;
@@ -19,13 +24,25 @@ interface SidebarProps {
   onToggleCollapse: () => void;
 }
 
-export const navItems: { id: NavTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+export const navItems: {
+  id: NavTab;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  /**
+   * Omitted from the PHONE bottom bar, where six items is already the practical
+   * limit before the labels start to crowd. About is reference material, not a
+   * daily destination, so on a phone it is reached from the sidebar collapse /
+   * Settings instead of costing a permanent slot.
+   */
+  hideOnMobile?: boolean;
+}[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'library', label: 'Library', icon: BookMarked },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'shifts', label: 'Shifts', icon: CalendarClock },
   { id: 'focus', label: 'Focus', icon: Timer },
   { id: 'settings', label: 'Settings', icon: Settings2 },
+  { id: 'about', label: 'About & Help', icon: Compass, hideOnMobile: true },
 ];
 
 
@@ -35,6 +52,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isCollapsed,
   onToggleCollapse,
 }) => {
+  const setOpen = useAssistantStore((s) => s.setOpen);
+  const [assistantChatsOpen, setAssistantChatsOpen] = useState(() => {
+    try {
+      return localStorage.getItem('sidebar.assistantChatsOpen') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+
+  const openAssistant = () => {
+    setOpen(true);
+  };
+
   return (
     <aside
       className={`hidden md:flex flex-col border-r border-border bg-bg-surface/50 backdrop-blur-sm h-screen sticky top-0 transition-all duration-300 ease-in-out z-20 ${
@@ -87,10 +117,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
         })}
       </div>
 
+      {/* AI Assistant: collapsible chat list */}
+      <AssistantSidebarList
+        isCollapsed={isCollapsed}
+        chatsOpen={assistantChatsOpen}
+        onToggleChats={() => setAssistantChatsOpen((v) => !v)}
+        onOpenAssistant={openAssistant}
+      />
+
+      {/* Focus timer widget (visible only while a session is active) */}
+      <FocusTimerWidget isCollapsed={isCollapsed} />
+
       {/* Collapse Toggle Footer */}
       <div className="p-2 border-t border-border">
         <button
           onClick={onToggleCollapse}
+          aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           className="w-full flex items-center justify-center p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors text-xs"
           title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >

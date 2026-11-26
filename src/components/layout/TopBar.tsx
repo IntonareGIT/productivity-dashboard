@@ -1,100 +1,67 @@
 import React, { useState, useEffect } from 'react';
 import { format } from 'date-fns';
-import { 
-  Sun, 
-  Moon, 
-  ChevronDown, 
-  BookOpen, 
-  Briefcase, 
-  Search, 
-  Gamepad2 
-} from 'lucide-react';
+import { Sun, Moon, Columns2 } from 'lucide-react';
 import { useStatusThemeStore } from '../../stores/useStatusThemeStore';
-import type { UserStatus } from '../../types';
+import { ProfileMenu } from './ProfileMenu';
+import type { NavTab } from './Sidebar';
 
-export const TopBar: React.FC = () => {
+interface TopBarProps {
+  onSelectTab: (tab: NavTab) => void;
+  /** Whether the split overlay is currently open. */
+  splitOpen?: boolean;
+  /** Toggle the split overlay. Visible on every tab and at every width. */
+  onToggleSplit?: () => void;
+}
+
+/**
+ * Top bar: clock on the left, light/dark toggle, the split-view icon and the
+ * profile avatar on the right. Current status is no longer shown or set here —
+ * it lives only in the profile menu ("Mood and theme") and in Settings.
+ */
+export const TopBar: React.FC<TopBarProps> = ({ onSelectTab, splitOpen, onToggleSplit }) => {
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [dropdownOpen, setDropdownOpen] = useState(false);
 
-  const { currentStatus, setStatus, colorScheme, toggleColorScheme } = useStatusThemeStore();
+  const { colorScheme, toggleColorScheme } = useStatusThemeStore();
 
   useEffect(() => {
+    // The clock is the only thing in this bar that ticks. While the split view
+    // owns the screen there is no reason to run a per-second timer, so the
+    // interval is torn down along with the date/time itself (see below).
+    if (splitOpen) return;
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
-  }, []);
-
-  const statuses: { label: UserStatus; icon: React.ReactNode; color: string }[] = [
-    { label: 'Studying', icon: <BookOpen className="w-3.5 h-3.5" />, color: 'bg-indigo-500' },
-    { label: 'Working', icon: <Briefcase className="w-3.5 h-3.5" />, color: 'bg-zinc-500' },
-    { label: 'Researching', icon: <Search className="w-3.5 h-3.5" />, color: 'bg-teal-500' },
-    { label: 'Playing', icon: <Gamepad2 className="w-3.5 h-3.5" />, color: 'bg-amber-500' },
-  ];
-
-  const currentStatusObj = statuses.find((s) => s.label === currentStatus) || statuses[0];
+  }, [splitOpen]);
 
   return (
-    <header className="h-14 border-b border-border bg-bg-surface/80 backdrop-blur-md sticky top-0 z-30 px-4 md:px-6 flex items-center justify-between transition-colors">
-      {/* Left side: Date & Time */}
-      <div className="flex items-center gap-2 sm:gap-3 text-xs sm:text-sm min-w-0">
-        <span className="font-semibold text-content-primary whitespace-nowrap">
-          {format(currentTime, 'EEE, MMM d')}
-        </span>
-        <span className="hidden sm:inline text-content-tertiary">•</span>
-        <span className="font-mono text-content-secondary font-medium whitespace-nowrap">
-          {format(currentTime, 'HH:mm:ss')}
-        </span>
-      </div>
-
-      {/* Right side: Status Selector Pill & Color Mode Toggle */}
-      <div className="flex items-center space-x-2 sm:space-x-3">
-        {/* Status Dropdown Pill */}
-        <div className="relative">
-          <button
-            onClick={() => setDropdownOpen(!dropdownOpen)}
-            className="flex items-center space-x-2 px-3 py-1.5 rounded-full text-xs font-medium bg-bg-elevated hover:bg-border transition-colors border border-border"
-          >
-            <span className={`w-2 h-2 rounded-full ${currentStatusObj.color}`} />
-            <span className="text-content-primary">{currentStatus}</span>
-            <ChevronDown className="w-3.5 h-3.5 text-content-secondary" />
-          </button>
-
-          {dropdownOpen && (
-            <>
-              <div 
-                className="fixed inset-0 z-40" 
-                onClick={() => setDropdownOpen(false)} 
-              />
-              <div className="absolute right-0 mt-1.5 w-40 bg-bg-surface border border-border rounded-xl shadow-xl py-1.5 z-50 animate-in fade-in zoom-in-95">
-                <div className="px-3 py-1 text-[10px] uppercase tracking-wider font-semibold text-content-tertiary">
-                  Current Status
-                </div>
-                {statuses.map((item) => (
-                  <button
-                    key={item.label}
-                    onClick={() => {
-                      setStatus(item.label);
-                      setDropdownOpen(false);
-                    }}
-                    className={`w-full text-left px-3 py-1.5 text-xs flex items-center space-x-2.5 transition-colors ${
-                      currentStatus === item.label
-                        ? 'bg-accent-subtle text-accent-text font-medium'
-                        : 'text-content-secondary hover:bg-bg-elevated hover:text-content-primary'
-                    }`}
-                  >
-                    <span className={`w-2 h-2 rounded-full ${item.color}`} />
-                    <span>{item.label}</span>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
+    <header className="h-14 shrink-0 border-b border-border bg-bg-surface/80 backdrop-blur-md sticky top-0 z-30 px-4 md:px-6 flex items-center justify-between transition-colors">
+      {/* Left side: Date & Time.
+          Focus Mode: hidden entirely while the split view is open, so the bar
+          carries nothing but the controls on the right. The bar keeps its
+          `h-14` height either way — the split overlay is positioned at
+          `top-14`, so shrinking it would misalign the two. */}
+      {!splitOpen && (
+        <div className="flex items-center gap-2 sm:gap-3 text-xs sm:text-sm min-w-0">
+          <span className="font-semibold text-content-primary whitespace-nowrap">
+            {format(currentTime, 'EEE, MMM d')}
+          </span>
+          <span className="hidden sm:inline text-content-tertiary">•</span>
+          <span className="font-mono text-content-secondary font-medium whitespace-nowrap">
+            {format(currentTime, 'HH:mm:ss')}
+          </span>
         </div>
+      )}
+      {splitOpen && (
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-content-tertiary">
+          Split view
+        </span>
+      )}
 
-        {/* Light/Dark Toggle */}
+      {/* Right side: light/dark toggle + profile avatar */}
+      <div className="flex items-center space-x-2 sm:space-x-3">
         <button
           onClick={toggleColorScheme}
           aria-label="Toggle Light/Dark Theme"
-          className="p-1.5 rounded-lg text-content-secondary hover:text-content-primary hover:bg-bg-elevated transition-colors border border-transparent hover:border-border"
+          className="hidden md:inline-flex p-1.5 rounded-lg text-content-secondary hover:text-content-primary hover:bg-bg-elevated transition-colors border border-transparent hover:border-border"
         >
           {colorScheme === 'dark' ? (
             <Sun className="w-4 h-4 text-amber-400" />
@@ -102,7 +69,29 @@ export const TopBar: React.FC = () => {
             <Moon className="w-4 h-4 text-slate-700" />
           )}
         </button>
+
+        {/* Split view — the ONLY generic entry point. Visible on every tab and at
+            every width, including mobile. */}
+        {onToggleSplit && (
+          <button
+            onClick={onToggleSplit}
+            aria-label={splitOpen ? 'Close split view' : 'Open split view'}
+            aria-pressed={splitOpen}
+            title={splitOpen ? 'Close split view' : 'Open split view'}
+            className={`inline-flex p-1.5 rounded-lg transition-colors border ${
+              splitOpen
+                ? 'text-accent bg-accent-subtle border-accent'
+                : 'text-content-secondary hover:text-content-primary hover:bg-bg-elevated border-transparent hover:border-border'
+            }`}
+          >
+            <Columns2 className="w-4 h-4" />
+          </button>
+        )}
+
+        {/* Profile avatar + menu — visible at every width. */}
+        <ProfileMenu onNavigate={onSelectTab} />
       </div>
     </header>
   );
 };
+

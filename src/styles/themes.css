@@ -133,3 +133,318 @@ html[data-theme="playing"].light {
   --text-secondary: #78350f;
   --text-tertiary: #b45309;
 }
+
+/* ---- Split-pane focus ring ---------------------------------------------
+   The active pane is marked quietly: a 1px inset ring in the theme accent at
+   35% alpha, plus a 12% / 8px shadow. Inactive panes get a neutral 1px ring at
+   the same 35% so neither state shouts.
+
+   Derived with color-mix against the theme's own tokens, so it follows every
+   theme and both modes with no per-theme values to fall out of sync. The 35%
+   pairing is deliberate: at 30% the accent ring landed within 2% of the idle
+   border in the `studying` dark theme (contrast ratio 1.02 — invisible), while
+   at 35% the worst separation across all eight theme/mode combinations is 1.33
+   with the active ring still only 1.47 against its own surface.
+
+   Overridable per theme by re-declaring `--pane-ring` if a future theme needs
+   a different strength. */
+:root {
+  --pane-ring: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  --pane-ring-idle: color-mix(in srgb, var(--border-subtle) 35%, transparent);
+  --pane-glow: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+}
+
+/* ---- Note text colors (v11) ----------------------------------------------
+   The eight-color palette the notes toolbar offers, stored in a note as
+   `var(--note-c-rose)` etc. and resolved here.
+
+   Deriving from the theme's OWN text token with `color-mix` is what makes a
+   color readable in BOTH modes without eight hard-coded values per theme: a
+   dark mode pulls the hue toward the light `--text-primary`, a light mode
+   pulls it toward the dark one, so each stays close to the body-text contrast
+   in that mode. This mirrors how `--pane-ring` above follows the theme, and
+   means a new theme is readable without touching this file.
+
+   The 78% hue / 22% text mix keeps the color identifiable as itself while
+   staying legible; the darker `.light` blend (60%) is needed because light
+   backgrounds lose contrast much faster than dark ones. */
+:root {
+  /* RED, and it is genuinely red.
+   * `rose` below is hue 225, which is blue; the name was misleading and the
+   * palette therefore had no red at all. This entry is the real one. */
+  --note-hue-red: 0 72% 52%;
+  --note-hue-rose: 225 25% 62%;
+  --note-hue-orange: 25 80% 60%;
+  --note-hue-amber: 40 85% 55%;
+  --note-hue-green: 145 45% 52%;
+  --note-hue-teal: 175 50% 48%;
+  --note-hue-blue: 210 70% 62%;
+  --note-hue-purple: 270 50% 66%;
+  --note-hue-gray: 220 8% 68%;
+
+  --note-c-red: hsl(var(--note-hue-red) / 82%);
+  --note-c-rose: hsl(var(--note-hue-rose) / 78%) ;
+  --note-c-orange: hsl(var(--note-hue-orange) / 78%);
+  --note-c-amber: hsl(var(--note-hue-amber) / 80%);
+  --note-c-green: hsl(var(--note-hue-green) / 78%);
+  --note-c-teal: hsl(var(--note-hue-teal) / 80%);
+  --note-c-blue: hsl(var(--note-hue-blue) / 80%);
+  --note-c-purple: hsl(var(--note-hue-purple) / 80%);
+  --note-c-gray: hsl(var(--note-hue-gray) / 75%);
+}
+
+/* On a light surface, darken every hue toward the theme's dark text color. */
+/* Soft highlight backgrounds.
+
+   These are deliberately NOT opaque. A highlight sits behind already-written
+   text, so a solid background fights the glyphs for contrast and, in dark mode,
+   a solid block is far too loud for a page of notes. The alpha is low enough that
+   the text colour still decides legibility, and the light variant darkens
+   toward the theme text colour for the same reason every other light-mode
+   override here does. */
+:root {
+  --note-hl-yellow: hsl(50 90% 60% / 0.30);
+  --note-hl-red: hsl(0 75% 58% / 0.24);
+  --note-hl-green: hsl(145 50% 50% / 0.26);
+  --note-hl-blue: hsl(210 80% 58% / 0.24);
+}
+
+/* On a light surface the same pastel at the same alpha reads as washed out, so
+   each is deepened rather than made opaque. Text stays crisp either way. */
+html.light {
+  --note-hl-yellow: hsl(48 88% 56% / 0.34);
+  --note-hl-red: hsl(0 70% 52% / 0.22);
+  --note-hl-green: hsl(145 45% 42% / 0.22);
+  --note-hl-blue: hsl(210 70% 50% / 0.20);
+}
+
+html.light {
+  --note-c-red: color-mix(in srgb, hsl(var(--note-hue-red)) 62%, var(--text-primary));
+  --note-c-rose: color-mix(in srgb, hsl(var(--note-hue-rose)) 60%, var(--text-primary));
+  --note-c-orange: color-mix(in srgb, hsl(var(--note-hue-orange)) 60%, var(--text-primary));
+  --note-c-amber: color-mix(in srgb, hsl(var(--note-hue-amber)) 62%, var(--text-primary));
+  --note-c-green: color-mix(in srgb, hsl(var(--note-hue-green)) 58%, var(--text-primary));
+  --note-c-teal: color-mix(in srgb, hsl(var(--note-hue-teal)) 62%, var(--text-primary));
+  --note-c-blue: color-mix(in srgb, hsl(var(--note-hue-blue)) 58%, var(--text-primary));
+  --note-c-purple: color-mix(in srgb, hsl(var(--note-hue-purple)) 60%, var(--text-primary));
+  --note-c-gray: color-mix(in srgb, hsl(var(--note-hue-gray)) 55%, var(--text-primary));
+}
+
+/* ---- Rich-text note editor (v11) -------------------------------------------
+   Styles for the ProseMirror surface and for the maths the editor shows inline.
+
+   Everything here uses the same theme tokens as the rest of the app, so the
+   editor follows the theme automatically instead of needing a per-theme copy.
+   ProseMirror needs `white-space: pre-wrap` on the editable surface or line
+   breaks are swallowed while typing, and the list needs `list-style` re-enabled
+   because the reset removes it. */
+
+.note-editor-surface .ProseMirror {
+  outline: none;
+  min-height: inherit;
+}
+
+/* Placeholder for an empty note. `data-placeholder` is set by NoteEditor. */
+.note-editor-surface .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--text-tertiary);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+.note-editor-surface .ProseMirror p {
+  margin: 0 0 0.5rem;
+}
+
+.note-editor-surface .ProseMirror h1,
+.note-editor-surface .ProseMirror h2,
+.note-editor-surface .ProseMirror h3 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0.75rem 0 0.35rem;
+}
+
+.note-editor-surface .ProseMirror h2 { font-size: 1.15rem; }
+.note-editor-surface .ProseMirror h3 { font-size: 1.05rem; }
+
+.note-editor-surface .ProseMirror ul,
+.note-editor-surface .ProseMirror ol {
+  padding-left: 1.35rem;
+  margin: 0 0 0.5rem;
+  list-style: revert;
+}
+
+.note-editor-surface .ProseMirror blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 0.75rem;
+  color: var(--text-secondary);
+  margin: 0 0 0.5rem;
+}
+
+.note-editor-surface .ProseMirror code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  padding: 0.05em 0.3em;
+}
+
+.note-editor-surface .ProseMirror pre {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  overflow-x: auto;
+}
+
+.note-editor-surface .ProseMirror pre code {
+  border: none;
+  background: none;
+  padding: 0;
+}
+
+.note-editor-surface .ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.75rem 0;
+}
+
+/* Maths, shared with the read view so an inline formula looks the same in the
+   editor and after saving. Without an engine the formula is styled as clearly
+   delimited source rather than pretending to be typeset. */
+.note-math {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  border-radius: 0.3rem;
+  padding: 0.05em 0.3em;
+  white-space: pre-wrap;
+}
+
+.note-math-block {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  margin: 0.35rem 0;
+}
+
+/* ---- Assistant panel tokens ---------------------------------------------
+   The assistant surface uses the SAME tokens the rest of the app uses, so it
+   follows every status theme and both light/dark modes with no per-theme
+   values to fall out of sync. These three extra tokens are the only ones the
+   assistant needs beyond what the layout already declares: a subtle surface
+   for message cards, and a "ready" green that is separate from the status
+   accent so a model that is ready always reads green regardless of theme. */
+:root {
+  --assistant-surface: var(--bg-surface-elevated);
+  --assistant-border: var(--border-subtle);
+  --assistant-ready: #22c55e;
+}
+
+/* ---- Assistant animations ---------------------------------------------
+   All of these are opacity and transform only, every one under 250ms, and
+   every one is disabled when the user has asked for reduced motion. The
+   thinking dots are the only exception to the "no looping" rule, and even they
+   are paused by prefers-reduced-motion. */
+@media (prefers-reduced-motion: reduce) {
+  .assistant-fade,
+  .assistant-slide,
+  .assistant-drawer,
+  .assistant-reader,
+  .assistant-thinking-dot {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@keyframes assistant-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.assistant-fade {
+  animation: assistant-fade-in 180ms ease-out both;
+}
+
+@keyframes assistant-slide-in {
+  from { opacity: 0; transform: translateX(100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.assistant-slide {
+  animation: assistant-slide-in 200ms ease-out both;
+}
+
+@keyframes assistant-drawer-in {
+  from { opacity: 0; transform: translateX(-100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.assistant-drawer {
+  animation: assistant-drawer-in 200ms ease-out both;
+}
+
+@keyframes assistant-reader-in {
+  from { opacity: 0; transform: translateX(100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.assistant-reader {
+  animation: assistant-reader-in 200ms ease-out both;
+}
+
+@keyframes assistant-thinking-dot {
+  0%, 60%, 100% { opacity: 0.2; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+
+.assistant-thinking-dot {
+  animation: assistant-thinking-dot 1.2s ease-in-out infinite;
+}
+
+/* ---- Focus timer status tokens -------------------------------------------
+   Status color by timer mode, per theme. Focus uses the theme accent token;
+   short break and long break use dedicated calm tokens. All three are
+   distinct within every theme (dark and light). */
+[data-theme="studying"] {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #10b981;
+  --timer-long-break: #8b5cf6;
+}
+html[data-theme="studying"].light {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #059669;
+  --timer-long-break: #7c3aed;
+}
+[data-theme="working"] {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #22c55e;
+  --timer-long-break: #3b82f6;
+}
+html[data-theme="working"].light {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #16a34a;
+  --timer-long-break: #2563eb;
+}
+[data-theme="researching"] {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #22c55e;
+  --timer-long-break: #6366f1;
+}
+html[data-theme="researching"].light {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #16a34a;
+  --timer-long-break: #4f46e5;
+}
+[data-theme="playing"] {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #22c55e;
+  --timer-long-break: #8b5cf6;
+}
+html[data-theme="playing"].light {
+  --timer-focus: var(--accent-primary);
+  --timer-short-break: #16a34a;
+  --timer-long-break: #7c3aed;
+}

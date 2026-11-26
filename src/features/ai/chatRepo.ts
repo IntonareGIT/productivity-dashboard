@@ -2,6 +2,8 @@ import { db } from '../../db/db';
 import type { ChatMessageRow, ChatSession } from '../../types';
 import { newId } from '../../utils/id';
 import type { ChatMessage } from './types';
+import { extractThinking } from './thinking';
+import { trimToWindow } from './historyNormalizer';
 
 /**
  * Persistent assistant chat history (schema v7).
@@ -85,6 +87,8 @@ export async function appendMessage(sessionId: string, msg: ChatMessage): Promis
     toolCallId: msg.toolCallId ?? null,
     toolName: msg.name ?? null,
     display: msg.display ?? null,
+    reasoning: msg.reasoning ?? null,
+    image: msg.image ?? null,
     error: msg.error ?? false,
     createdAt: new Date().toISOString(),
   };
@@ -104,41 +108,60 @@ export async function autoTitle(sessionId: string, text: string): Promise<void> 
 }
 
 /**
- * Rebuild a request transcript from stored rows using the most recent `limit`
- * messages, without ever splitting a tool-call sequence.
+ * Rebuild a request transcript from stored rows.
  *
- * Two rules matter for the provider:
- *  1. An assistant message carrying `tool_calls` must stay together with the
- *     `tool` messages answering it.
- *  2. What we send is the stored `raw` object, never a reconstruction.
+ * Trimming now happens at TURN BOUNDARIES: the window is walked back to the
+ * start of its exchange so it always opens on a user turn and never splits a
+ * `tool_calls` turn from the results answering it. The previous version walked
+ * back only when a result's parent was already visible, which left the window
+ * free to START on a call.
  *
- * Orphaned tool results (whose parent fell outside the window) are dropped
- * rather than sent, since an unpaired `tool_call_id` is rejected outright.
+ * The turn-order guarantees themselves live in `normalizeHistoryForProvider`,
+ * which every request goes through; this function only decides WHICH rows are
+ * worth sending.
  */
 export function buildTranscript(rows: ChatMessageRow[], limit = 20): ChatMessage[] {
   if (rows.length === 0) return [];
+  // The rows keep their provider-native fields (`raw`, `reasoning`), so the cast
+  // is safe: `trimToWindow` only re-slices, it never rebuilds a turn.
+  return trimToWindow(rows.map(toChatMessage), limit).window as ChatMessage[];
+}
 
-  // Index of the assistant turn that issued a given tool call.
-  const parentOf = (callId: string) =>
-    rows.findIndex((c) => c.role === 'assistant' && c.toolCallIds && c.toolCallIds.includes(callId));
+/**
+ * @deprecated Superseded by `normalizeHistoryForProvider`, which enforces the
+ * full turn-order contract instead of only patching unanswered calls. It also
+ * fixed a bug this could not: it appended a synthetic response straight after
+ * the call, so a parallel call that already had a stored response came out in
+ * the wrong order. Kept exported because the older suite asserts on it, and
+ * because removing it would change behaviour the store has not been re-checked
+ * against. Nothing in the request path calls it any more.
+ */
+export function closeDanglingCalls(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (let idx = 0; idx < messages.length; idx += 1) {
+    const m = messages[idx];
+    out.push(m);
+    if (m.role !== 'assistant' || !m.toolCalls || m.toolCalls.length === 0) continue;
 
-  // Start as late as the limit allows, then move earlier if any tool result in
-  // the tail needs its issuing turn. The window may end up slightly longer than
-  // `limit` — that is deliberate: a tool_calls turn must never be separated
-  // from the results answering it.
-  let start = Math.max(0, rows.length - limit);
-  for (const m of rows.slice(start)) {
-    if (m.role === 'tool' && m.toolCallId) {
-      const parent = parentOf(m.toolCallId);
-      if (parent >= 0) start = Math.min(start, parent);
+    // Ids answered by the tool turns that directly follow this call.
+    const answered = new Set<string>();
+    for (let j = idx + 1; j < messages.length && messages[j].role === 'tool'; j += 1) {
+      if (messages[j].toolCallId) answered.add(messages[j].toolCallId as string);
+    }
+    for (const call of m.toolCalls) {
+      if (answered.has(call.id)) continue;
+      out.push({
+        role: 'tool',
+        content: JSON.stringify({
+          ok: false,
+          error: 'This action did not run: its result was never recorded. Treat it as not performed.',
+        }),
+        toolCallId: call.id,
+        name: call.name,
+      });
     }
   }
-
-  return rows
-    .slice(start)
-    // Never send a tool result that no assistant turn asked for.
-    .filter((r) => !(r.role === 'tool' && r.toolCallId && parentOf(r.toolCallId) < 0))
-    .map(toChatMessage);
+  return out;
 }
 
 function toChatMessage(row: ChatMessageRow): ChatMessage {
@@ -165,6 +188,7 @@ function toChatMessage(row: ChatMessageRow): ChatMessage {
   if (row.toolName) msg.name = row.toolName;
   if (row.display) msg.display = row.display;
   if (row.error) msg.error = true;
+  if (row.image) msg.image = row.image;
   return msg;
 }
 
@@ -172,7 +196,15 @@ export interface AssistantViewMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool';
   text: string;
+  /** A small inline thumbnail (<~20 KB) for an attached photo, or null. */
+  image?: string | null;
   toolName?: string;
+  /**
+   * Model reasoning for this turn, extracted from `<think>`-style tags or the
+   * provider's native reasoning field. Absent for standard models, which is what
+   * lets the UI skip the thought block entirely.
+   */
+  thought?: string;
   error?: boolean;
 }
 
@@ -181,6 +213,11 @@ export interface AssistantViewMessage {
  *
  * Only user and assistant prose is shown as conversation. Tool calls and tool
  * results collapse into a small "action" confirmation — never raw JSON.
+ *
+ * Assistant prose is passed through `extractThinking`, so a rendered message is
+ * always the ANSWER with any reasoning split out into `thought`. Doing this here
+ * (rather than at write time) means rows stored before this change still display
+ * correctly, and the stored `content` stays exactly what the provider sent.
  */
 export function toViewMessages(rows: ChatMessageRow[]): AssistantViewMessage[] {
   const out: AssistantViewMessage[] = [];
@@ -188,7 +225,13 @@ export function toViewMessages(rows: ChatMessageRow[]): AssistantViewMessage[] {
     if (row.role === 'user' && row.content) {
       out.push({ id: row.id, role: 'user', text: row.content });
     } else if (row.role === 'assistant' && row.content) {
-      out.push({ id: row.id, role: 'assistant', text: row.content });
+      const { thought, body } = extractThinking(row.content, row.reasoning);
+      out.push({
+        id: row.id,
+        role: 'assistant',
+        text: body,
+        thought: thought ?? undefined,
+      });
     } else if (row.role === 'tool') {
       out.push({
         id: row.id,

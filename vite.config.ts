@@ -5,6 +5,11 @@ import path from 'path';
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  define: {
+    // Injected at build time and shown on the About / Help page. `toISOString`
+    // so the page can slice it into a readable date without parsing.
+    __BUILD_DATE__: JSON.stringify(new Date().toISOString()),
+  },
   plugins: [
     react(),
     VitePWA({
@@ -32,7 +37,24 @@ export default defineConfig({
         ]
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,webmanifest}']
+        // Only same-origin build assets are precached, so Dexie Cloud requests
+        // (a different origin) are never served from, or written to, the cache.
+        // Keeping runtimeCaching empty means Workbox registers no fetch handler
+        // for cross-origin traffic, so sync requests always hit the network —
+        // or fail cleanly while offline, rather than returning stale data.
+        // `mjs` is essential, not optional: `pdfjs-dist`'s worker is emitted as
+        // `pdf.worker.min-<hash>.mjs`, and it was the ONE file in dist without
+        // an extension in this list. Workbox silently skipped it, so the app
+        // installed and precached fine but every PDF failed offline with a
+        // "Setting up fake worker failed / Failed to fetch dynamically
+        // imported module" error — the viewer, not the network, was broken.
+        // Adding `mjs` is what makes PDFs work with no connection.
+        globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,woff,woff2,webmanifest}'],
+        // Belt and braces: never let a stale precache entry point at a file
+        // that a new build no longer emits, or the SW 404s on a cache hit.
+        navigateFallback: 'index.html',
+        runtimeCaching: [],
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5 MiB
       }
     })
   ],
