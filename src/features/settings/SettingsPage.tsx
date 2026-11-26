@@ -6,10 +6,12 @@ import { useThemeStatusMap } from '../../hooks/useThemeStatusMap';
 import { WeeklySchedulesSettings } from './components/WeeklySchedulesSettings';
 import { PomodoroSettingsSection } from './components/PomodoroSettingsSection';
 import { AiModelsSettings } from './components/AiModelsSettings';
+import { ASSISTANT_ENABLED } from '../ai/assistantEnabled';
 import { ChatHistorySettings } from './components/ChatHistorySettings';
 import { FloatingAiSettings } from './components/FloatingAiSettings';
 import { AssistantRedesignSettings } from './components/AssistantRedesignSettings';
 import { SyncSettings } from './components/SyncSettings';
+import { INSTINCT_WHATSAPP_URL, WhatsAppIcon } from '../../components/layout/InstinctSidebarButton';
 import { DataBackupSection } from './components/DataBackupSection';
 import { FileMigrationSection } from './components/FileMigrationSection';
 import { CloudCopiesSection } from './components/CloudCopiesSection';
@@ -46,6 +48,24 @@ export const SettingsPage: React.FC<{ onOpenAbout?: () => void }> = ({ onOpenAbo
         </h1>
       </div>
 
+      {/* While the built-in assistant is hidden, this is the reliable way to
+          reach Instinct on phones, where the sidebar is not shown. */}
+      {!ASSISTANT_ENABLED && (
+        <Card
+          title="Chat with Instinct"
+          subtitle="Questions, changes or help with this dashboard"
+        >
+          <a
+            href={INSTINCT_WHATSAPP_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold bg-accent hover:bg-accent-hover text-white transition-colors"
+          >
+            <WhatsAppIcon className="w-4 h-4" /> Open WhatsApp chat
+          </a>
+        </Card>
+      )}
+
       {/* Per-week work rosters (each week is an independent record) */}
       <WeeklySchedulesSettings />
 
@@ -55,14 +75,21 @@ export const SettingsPage: React.FC<{ onOpenAbout?: () => void }> = ({ onOpenAbo
       {/* User AI Models (display name, provider, base URL, model ID, capabilities, encrypted API key) */}
       <AiModelsSettings />
 
-      {/* Assistant conversation history */}
-      <ChatHistorySettings />
+      {/* Assistant-only sections, hidden while ASSISTANT_ENABLED is false.
+          AI Models above stays visible because PDF markdown extraction also
+          uses it. */}
+      {ASSISTANT_ENABLED && (
+        <>
+          {/* Assistant conversation history */}
+          <ChatHistorySettings />
 
-      {/* Floating AI button visibility, one switch for both modes */}
-      <FloatingAiSettings />
+          {/* Floating AI button visibility, one switch for both modes */}
+          <FloatingAiSettings />
 
-      {/* Assistant redesign preview toggle */}
-      <AssistantRedesignSettings />
+          {/* Assistant redesign preview toggle */}
+          <AssistantRedesignSettings />
+        </>
+      )}
 
       {/* Cross-device sync (Dexie Cloud) */}
       <SyncSettings />

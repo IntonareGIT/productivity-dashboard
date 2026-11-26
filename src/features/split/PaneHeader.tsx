@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Columns2, FileText, Maximize2, Minimize2, NotebookPen, PanelLeftClose, X } from 'lucide-react';
 import { db } from '../../db/db';
 import { previewKindFor } from '../library/previewKind';
+import { ASSISTANT_ENABLED } from '../ai/assistantEnabled';
 import { FilePicker } from '../library/components/FilePicker';
 import {
   labelForNote, labelForResource, type PickerKinds, type PickerWant,
@@ -161,7 +162,8 @@ export const PaneHeader: React.FC<PaneHeaderProps> = ({
         <option value="pdf">PDF preview</option>
         <option value="image">Image</option>
         <option value="notes">Notes</option>
-        <option value="assistant">Assistant</option>
+        {/* Hidden while ASSISTANT_ENABLED is false. */}
+        {ASSISTANT_ENABLED && <option value="assistant">Assistant</option>}
         <option value="markdown">Markdown</option>
       </select>
 
@@ -219,7 +221,7 @@ export const PaneHeader: React.FC<PaneHeaderProps> = ({
     <>
       {!split && (
         <button
-          onClick={() => setState((s) => addSecondPane(s, { kind: 'assistant' }))}
+          onClick={() => setState((s) => addSecondPane(s, { kind: ASSISTANT_ENABLED ? 'assistant' : 'empty' }))}
           aria-label="Open split view"
           title="Open split view"
           className={ico}

@@ -13,6 +13,8 @@ import {
 import { useAssistantStore } from '../../stores/useAssistantStore';
 import { usePomodoroStore } from '../../stores/usePomodoroStore';
 import { AssistantSidebarList } from './AssistantSidebarList';
+import { InstinctSidebarButton } from './InstinctSidebarButton';
+import { ASSISTANT_ENABLED } from '../../features/ai/assistantEnabled';
 import { FocusTimerWidget } from './FocusTimerWidget';
 
 export type NavTab = 'dashboard' | 'library' | 'calendar' | 'shifts' | 'focus' | 'settings' | 'about';
@@ -117,13 +119,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
         })}
       </div>
 
-      {/* AI Assistant: collapsible chat list */}
-      <AssistantSidebarList
-        isCollapsed={isCollapsed}
-        chatsOpen={assistantChatsOpen}
-        onToggleChats={() => setAssistantChatsOpen((v) => !v)}
-        onOpenAssistant={openAssistant}
-      />
+      {/* AI Assistant: collapsible chat list. While the built-in assistant is
+          disabled (ASSISTANT_ENABLED), a WhatsApp button to Instinct takes its
+          place in the sidebar. */}
+      {ASSISTANT_ENABLED ? (
+        <AssistantSidebarList
+          isCollapsed={isCollapsed}
+          chatsOpen={assistantChatsOpen}
+          onToggleChats={() => setAssistantChatsOpen((v) => !v)}
+          onOpenAssistant={openAssistant}
+        />
+      ) : (
+        <InstinctSidebarButton isCollapsed={isCollapsed} />
+      )}
 
       {/* Focus timer widget (visible only while a session is active) */}
       <FocusTimerWidget isCollapsed={isCollapsed} />

@@ -17,6 +17,7 @@ import { ShiftsPage } from './features/shifts/ShiftsPage';
 import { FocusPage } from './features/focus/FocusPage';
 import { SettingsPage } from './features/settings/SettingsPage';
 import { AboutPage } from './features/about/AboutPage';
+import { ASSISTANT_ENABLED } from './features/ai/assistantEnabled';
 import { AssistantLauncher } from './features/ai/components/AssistantLauncher';
 import { AssistantPanel } from './features/ai/components/AssistantPanel';
 import { AssistantPage } from './features/ai/components/AssistantPage';
@@ -69,7 +70,7 @@ export const App: React.FC = () => {
     splitOpen,
     panes: splitState.panes,
     assistantPage,
-    settingEnabled: floatingAiEnabled,
+    settingEnabled: floatingAiEnabled && ASSISTANT_ENABLED,
     fullscreenActive: !!fullScreenResource,
   });
 
@@ -319,7 +320,7 @@ export const App: React.FC = () => {
         ) : null
       }
     >
-      {assistantPage ? (
+      {ASSISTANT_ENABLED && assistantPage ? (
         <AssistantPage
           onOpenSettings={openAssistantSettings}
           onExit={closeAssistantPage}
@@ -340,6 +341,10 @@ export const App: React.FC = () => {
           (`shouldShowFloatingAi`) rather than from a prop tied directly to
           whether split view is open, because the rule depends on what the panes
           are showing, not just on split state. */}
+      {/* Hidden while ASSISTANT_ENABLED is false; the code stays so the
+          assistant can be restored by flipping the flag back. */}
+      {ASSISTANT_ENABLED && (
+        <>
       <AssistantLauncher
         configured={assistantConfigured}
         onOpenSettings={openAssistantSettings}
@@ -351,6 +356,8 @@ export const App: React.FC = () => {
           onExpand={openAssistantPage}
           mode={splitOpen ? 'split' : 'standalone'}
         />
+        </>
+      )}
 
           {/* Action confirmations raised by the assistant's function calls. */}
           <Toaster />

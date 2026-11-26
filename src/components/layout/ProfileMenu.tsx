@@ -5,6 +5,8 @@ import { useCloudAccount } from '../../features/settings/components/useCloudAcco
 import { SyncAccountPanel } from '../../features/settings/components/SyncAccountPanel';
 import type { NavTab } from '../layout/Sidebar';
 import type { ThemeMode, UserStatus } from '../../types';
+import { InstinctMenuRow } from './InstinctSidebarButton';
+import { ASSISTANT_ENABLED } from '../../features/ai/assistantEnabled';
 import { Z } from '../ui/zIndex';
 
 const THEMES: { value: ThemeMode; label: string; swatch: string }[] = [
@@ -212,6 +214,12 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ onNavigate }) => {
 
             {/* Settings link */}
             <div className="border-t border-border/60 pt-1.5 mt-1.5">
+              {/* While the built-in assistant is hidden, the WhatsApp chat is
+                  the way to ask for help; on phones this menu is its entry
+                  point, since the sidebar is desktop-only. */}
+              {!ASSISTANT_ENABLED && (
+                <InstinctMenuRow className={`${row} text-content-secondary hover:bg-bg-elevated hover:text-content-primary`} />
+              )}
               <button
                 role="menuitem"
                 onClick={() => go('settings')}

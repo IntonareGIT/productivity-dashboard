@@ -18,6 +18,7 @@ import { db } from '../../db/db';
 import { setOverrideForDate, clearOverrideForDate } from '../../features/shifts/shiftsRepo';
 import { usePomodoroStore } from '../../stores/usePomodoroStore';
 import { useAssistantStore } from '../../stores/useAssistantStore';
+import { ASSISTANT_ENABLED } from '../../features/ai/assistantEnabled';
 import type { NavTab } from '../layout/Sidebar';
 import { createPortal } from 'react-dom';
 import { Z } from './zIndex';
@@ -114,7 +115,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
           });
         },
       },
-      {
+      // Hidden while ASSISTANT_ENABLED is false.
+      ...(ASSISTANT_ENABLED ? [{
         id: 'toggle-ai-assistant',
         group: 'AI Assistant',
         label: 'Open AI assistant',
@@ -124,7 +126,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
           onClose();
           useAssistantStore.getState().setOpen(true);
         },
-      },
+      }] : []),
     ];
 
     const navItems: { id: NavTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
@@ -159,6 +161,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     const matched = commands.filter(
       (c) => c.label.toLowerCase().includes(q) || c.group.toLowerCase().includes(q)
     );
+
+    // Hidden while ASSISTANT_ENABLED is false.
+    if (!ASSISTANT_ENABLED) return matched;
 
     const askAssistantCommand: Command = {
       id: 'ai-assistant-ask',
