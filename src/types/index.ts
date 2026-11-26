@@ -83,6 +83,12 @@ export interface Resource {
    * resource, and only ever a group of the same subject.
    */
   groupId?: string | null;
+  /**
+   * Manual position among the resources of the same topic + group (lower first).
+   * Optional and unindexed: rows without it sort after ordered rows by the
+   * default rule, so no migration is needed.
+   */
+  order?: number;
   kind: ResourceKind;      // 'link' = urlOrPath is a URL/path; 'file' = blob holds the upload
   title: string;           // Resource title
   /**
@@ -393,5 +399,4 @@ export interface UiState {
   themeOverride: ThemeMode | null;
   updatedAt: string;   // ISO 8601
 }
-
 
