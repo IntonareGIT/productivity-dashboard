@@ -33,6 +33,7 @@ import {
   executeLibraryTool,
 } from './toolsLibrary';
 import { topicPlainText, fileLocation } from '../library/libraryRepo';
+import { REVIEW_TOOL_SPECS, executeReviewTool } from './toolsReview';
 import {
   CALENDAR_CONFIRM_TOOL_NAMES,
   CALENDAR_TOOL_NAMES,
@@ -83,6 +84,8 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   // Quick capture: list is read-only; file writes, delete is confirm-gated below.
   'fileCapture',
   'deleteCapture',
+  // Review reminders: logging a review writes the topic.
+  'markTopicReviewed',
   // Files and extraction
   'queueExtraction',
   'retryExtraction',
@@ -258,6 +261,7 @@ export const TOOL_SPECS: ToolSpec[] = [
   ...CALENDAR_TOOL_SPECS,
   ...TODO_TOOL_SPECS,
   ...CAPTURE_TOOL_SPECS,
+  ...REVIEW_TOOL_SPECS,
 ];
 
 /* ---------------- Read-only functions ---------------- */
@@ -881,6 +885,8 @@ export async function executeTool(name: string, argsJson: string): Promise<ToolE
       // The calendar tools for the CURRENT calendar (Phase 4) are checked
       // before the older modules, so the new names always win.
       if (CALENDAR_TOOL_NAMES.includes(name)) return executeCalendarTool(name, args);
+      const review = await executeReviewTool(name, args);
+      if (review) return review;
       // Library write / delete functions live in toolsLibrary.ts.
       const library = await executeLibraryTool(name, args);
       if (library) return library;

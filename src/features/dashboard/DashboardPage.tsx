@@ -11,6 +11,7 @@ import { ExamCountdownCard } from './components/ExamCountdownCard';
 import { FreeHoursCard } from './components/FreeHoursCard';
 import { InstinctUpdatesCard } from './components/InstinctUpdatesCard';
 import { TodoCard } from './components/TodoCard';
+import { ReviewCard } from './components/ReviewCard';
 import type { NavTab } from '../../components/layout/Sidebar';
 import { format } from 'date-fns';
 import { occursOn } from '../calendar/recurrence';
@@ -131,6 +132,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, fill =
           schedules={schedules}
           onNavigateShifts={() => onNavigate('shifts')}
         />
+
+        {/* Small card: spaced review reminders for studied topics */}
+        <ReviewCard onNavigateLibrary={() => onNavigate('library')} />
 
         {/* Full-width: stats view (days studied, focus hours, sessions, resources) */}
         <div className="md:col-span-3">

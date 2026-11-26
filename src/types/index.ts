@@ -47,6 +47,13 @@ export interface Topic {
   order: number;           // manual ordering within a subject
   createdAt: string;       // ISO 8601
   updatedAt: string;       // ISO 8601
+  /**
+   * Review reminders (additive, optional). Once status is 'confident' the
+   * topic comes back for a spaced review (see features/review/reviewLogic):
+   * each review stamps lastReviewedAt and bumps reviewStage one interval out.
+   */
+  lastReviewedAt?: string; // ISO 8601
+  reviewStage?: number;    // index into REVIEW_INTERVAL_DAYS; >= length = done
 }
 
 export type ResourceKind = 'link' | 'file';
