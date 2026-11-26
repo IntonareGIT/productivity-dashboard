@@ -400,3 +400,22 @@ export interface UiState {
   updatedAt: string;   // ISO 8601
 }
 
+
+/**
+ * One entry in the "From Instinct" feed on the dashboard homepage (schema v18).
+ *
+ * Written by Instinct (or manually from the card): the daily summary posted
+ * alongside the daily plan, plus any important update or reminder in between.
+ * `kind` separates the nightly digest from ad-hoc updates so the card can
+ * badge them.
+ */
+export interface InstinctUpdate {
+  id: string;
+  /** ISO 8601 creation time; the feed is sorted newest first on this. */
+  createdAt: string;
+  kind: 'daily' | 'update';
+  /** Short headline, e.g. "Daily summary - Thu, Nov 27". */
+  title: string;
+  /** Plain text body; line breaks are preserved when rendered. */
+  body: string;
+}
