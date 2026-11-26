@@ -1022,6 +1022,20 @@ export async function moveResourceToGroup(resourceId: string, groupId: string | 
   await db.resources.put({ ...resource, groupId });
 }
 
+/**
+ * Persist a manual order for ONE sibling set (same topic + group). Takes the
+ * full ordered id list; each resource gets order = its index.
+ */
+export async function reorderResources(orderedIds: string[]): Promise<void> {
+  if (orderedIds.length === 0) return;
+  await db.transaction('rw', db.resources, async () => {
+    for (let i = 0; i < orderedIds.length; i += 1) {
+      const r = await db.resources.get(orderedIds[i]);
+      if (r && r.order !== i) await db.resources.put({ ...r, order: i });
+    }
+  });
+}
+
 /** Move several resources at once, skipping any that would cross a subject. */
 export async function moveResourcesToGroup(resourceIds: string[], groupId: string | null): Promise<void> {
   if (resourceIds.length === 0) return;
@@ -1175,6 +1189,5 @@ export async function measureStorage(): Promise<{
     } : undefined,
   };
 }
-
 
 
