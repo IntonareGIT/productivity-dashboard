@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { Bookmark, Clock, ArrowRight, FlaskConical } from 'lucide-react';
 import { Card } from '../../../components/ui/Card';
 import type { Assessment, Resource } from '../../../types';
+import { useDeepLinkStore } from '../../../stores/useDeepLinkStore';
 
 interface UpcomingDeadlinesCardProps {
   resources?: Resource[];
@@ -18,6 +19,9 @@ interface DeadlineItem {
   badgeClasses: string;
   subject: string | null;
   icon: 'resource' | 'assessment';
+  subjectId: string;
+  resourceId?: string;
+  assessmentId?: string;
 }
 
 export const UpcomingDeadlinesCard: React.FC<UpcomingDeadlinesCardProps> = ({
@@ -26,6 +30,12 @@ export const UpcomingDeadlinesCard: React.FC<UpcomingDeadlinesCardProps> = ({
   subjectName,
   onNavigateLibrary,
 }) => {
+  const openLibrary = useDeepLinkStore((s) => s.openLibrary);
+  const goTo = (item: DeadlineItem) => {
+    openLibrary({ subjectId: item.subjectId, resourceId: item.resourceId, assessmentId: item.assessmentId });
+    onNavigateLibrary();
+  };
+
   const deadlineItems = useMemo<DeadlineItem[]>(() => {
     const resItems: DeadlineItem[] = resources
       .filter((r) => r.dueDate && !r.completed)
@@ -37,6 +47,8 @@ export const UpcomingDeadlinesCard: React.FC<UpcomingDeadlinesCardProps> = ({
         badgeClasses: 'bg-accent-subtle text-accent-text',
         subject: subjectName ? subjectName(r.subjectId) : null,
         icon: 'resource',
+        subjectId: r.subjectId,
+        resourceId: r.id,
       }));
     const asmItems: DeadlineItem[] = assessments
       .filter((a) => a.status === 'upcoming')
@@ -48,6 +60,8 @@ export const UpcomingDeadlinesCard: React.FC<UpcomingDeadlinesCardProps> = ({
         badgeClasses: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
         subject: subjectName ? subjectName(a.subjectId) : null,
         icon: 'assessment',
+        subjectId: a.subjectId,
+        assessmentId: a.id,
       }));
     return [...resItems, ...asmItems]
       .sort((a, b) => a.date.localeCompare(b.date))
@@ -75,7 +89,13 @@ export const UpcomingDeadlinesCard: React.FC<UpcomingDeadlinesCardProps> = ({
           </div>
         ) : (
           deadlineItems.map((item) => (
-            <div key={item.key} className="p-2.5 rounded-xl bg-bg-elevated/40 border border-border flex items-center justify-between gap-2">
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => goTo(item)}
+              aria-label={`Open ${item.title}`}
+              className="w-full text-left p-2.5 rounded-xl bg-bg-elevated/40 border border-border hover:border-accent transition-colors flex items-center justify-between gap-2"
+            >
               <div className="truncate min-w-0">
                 <p className="text-xs font-medium text-content-primary truncate">{item.title}</p>
                 <p className="text-[10px] text-content-tertiary flex items-center space-x-1 mt-0.5">
@@ -87,7 +107,7 @@ export const UpcomingDeadlinesCard: React.FC<UpcomingDeadlinesCardProps> = ({
               <span className={`text-[10px] px-2 py-0.5 rounded font-semibold flex-shrink-0 ${item.badgeClasses}`}>
                 {item.badge}
               </span>
-            </div>
+            </button>
           ))
         )}
       </div>

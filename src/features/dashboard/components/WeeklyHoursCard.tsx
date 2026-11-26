@@ -49,7 +49,12 @@ export const WeeklyHoursCard: React.FC<WeeklyHoursCardProps> = ({
       }
       className="flex flex-col justify-between"
     >
-      <div className="my-2">
+      <button
+        type="button"
+        onClick={onNavigateShifts}
+        aria-label="Open shifts"
+        className="my-2 block w-full text-left rounded-lg hover:bg-bg-elevated/40 transition-colors"
+      >
         <div className="flex items-baseline justify-between mb-2 gap-2">
           <div>
             <span className="text-2xl font-bold font-mono text-content-primary">{worked}h</span>
@@ -68,7 +73,7 @@ export const WeeklyHoursCard: React.FC<WeeklyHoursCardProps> = ({
             style={{ width: `${Math.max(scheduled > 0 && worked > 0 ? 4 : 0, percentage)}%` }}
           />
         </div>
-      </div>
+      </button>
 
       <div className="pt-3 border-t border-border/40 flex items-center justify-between text-xs text-content-secondary gap-2">
         <div className="flex items-center space-x-1.5 min-w-0">

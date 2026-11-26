@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useDeepLinkStore } from '../../stores/useDeepLinkStore';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { addDays, format, startOfWeek } from 'date-fns';
 import {
@@ -87,6 +88,19 @@ function DayStatusBlock({ day }: { day: ResolvedShiftDay }) {
 export const ShiftsPage: React.FC = () => {
   const [anchor, setAnchor] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+
+  // Dashboard card deep link: show that day's week and open that day.
+  const shiftsTarget = useDeepLinkStore((s) => s.shifts);
+  const clearShiftsTarget = useDeepLinkStore((s) => s.clearShifts);
+  useEffect(() => {
+    if (!shiftsTarget) return;
+    const d = new Date(`${shiftsTarget.date}T12:00:00`);
+    if (!Number.isNaN(d.getTime())) {
+      setAnchor(d);
+      setSelectedDate(d);
+    }
+    clearShiftsTarget();
+  }, [shiftsTarget, clearShiftsTarget]);
 
   const overrides = useLiveQuery(() => db.shiftOverrides.toArray()) ?? [];
   const schedules = useLiveQuery(() => db.weeklySchedules.toArray()) ?? [];
