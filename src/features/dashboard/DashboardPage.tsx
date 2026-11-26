@@ -8,6 +8,7 @@ import { WeeklyHoursCard } from './components/WeeklyHoursCard';
 import { StatsCard } from './components/StatsCard';
 import { SignInBanner } from './components/SignInBanner';
 import { ExamCountdownCard } from './components/ExamCountdownCard';
+import { FreeHoursCard } from './components/FreeHoursCard';
 import { InstinctUpdatesCard } from './components/InstinctUpdatesCard';
 import { TodoCard } from './components/TodoCard';
 import type { NavTab } from '../../components/layout/Sidebar';
@@ -90,6 +91,20 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, fill =
             subjects={subjects}
             topics={topics}
             onNavigateLibrary={() => onNavigate('library')}
+          />
+        </div>
+
+        {/* Full-width: free study windows over the next three days */}
+        <div className="md:col-span-3">
+          <FreeHoursCard
+            events={allEvents}  /* 3 days ahead, so every event, not just today's */
+            overrides={overrides}
+            schedules={schedules}
+            assessments={assessments}
+            subjects={subjects}
+            topics={topics}
+            resources={pendingResources}
+            onNavigateFocus={() => onNavigate('focus')}
           />
         </div>
 
