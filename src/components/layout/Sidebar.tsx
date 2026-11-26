@@ -107,9 +107,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className={`w-full flex items-center rounded-xl text-sm font-medium transition-all duration-150 ${
                 isCollapsed ? 'justify-center p-3' : 'space-x-3 px-3 py-2.5'
               } ${
-                isActive
-                  ? 'bg-accent text-white shadow-sm shadow-accent/20'
-                  : 'text-content-secondary hover:text-content-primary hover:bg-bg-elevated'
+                isActive ? 'nav-item-active' : 'nav-item'
               }`}
             >
               <Icon className="w-5 h-5 flex-shrink-0" />
