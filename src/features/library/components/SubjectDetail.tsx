@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { endOfWeek, format, isBefore, isToday, isWithinInterval, parseISO, startOfWeek } from 'date-fns';
-import { ArrowLeft, BookOpenCheck, CalendarClock, Check, ChevronDown, ChevronUp, ChevronRight, Clock, Columns2, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Loader2, Pencil, Plus, Search, Timer, Trash2, AlertTriangle } from 'lucide-react';
+import { ArrowDown, ArrowDownAZ, ArrowUp, ArrowLeft, BookOpenCheck, CalendarClock, Check, ChevronDown, ChevronUp, ChevronRight, Clock, Columns2, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Loader2, Pencil, Plus, Search, Timer, Trash2, AlertTriangle } from 'lucide-react';
 import { db } from '../../../db/db';
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
@@ -19,7 +19,7 @@ import { GroupTree } from './GroupTree';
 import MarkdownViewer from './MarkdownViewer';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
 import { startExtraction } from '../../../features/ai/extractionRunner';
-import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, moveGroup, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes, saveNote } from '../libraryRepo';
+import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, moveGroup, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes, saveNote, reorderResources } from '../libraryRepo';
 import type { Assessment, Note, Resource, ResourceGroup, Subject, Topic, TopicStatus } from '../../../types';
 
 /**
@@ -71,6 +71,8 @@ interface ResourceRowProps {
   confirmDelete: boolean;
   onToggle: () => void;
   onEdit: () => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
   onDelete: () => void;
   onCopy: () => void;
   onPreview: () => void;
@@ -89,7 +91,19 @@ interface ResourceRowProps {
   onViewMarkdown?: (fileId: string, fileTitle: string) => void;
 }
 
-function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDelete, onCopy, onPreview, onDownload, onSplitWithNotes, fallbackTopicId, groups, note, onStartExtraction, onViewMarkdown }: ResourceRowProps) {
+/** Manual order wins when both rows have one; otherwise the default rule (natural title order). */
+function compareResources(a: Resource, b: Resource): number {
+  if (a.order != null && b.order != null) return a.order - b.order;
+  if (a.order != null) return -1;
+  if (b.order != null) return 1;
+  if (a.completed !== b.completed) return a.completed ? 1 : -1;
+  if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+  if (a.dueDate) return -1;
+  if (b.dueDate) return 1;
+  return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onMoveUp, onMoveDown, onDelete, onCopy, onPreview, onDownload, onSplitWithNotes, fallbackTopicId, groups, note, onStartExtraction, onViewMarkdown }: ResourceRowProps) {
   const meta = dueMeta(resource);
   const isFile = resource.kind === 'file';
   const isPdf = isFile && (resource.mimeType === 'application/pdf' || resource.fileName?.toLowerCase().endsWith('.pdf'));
@@ -278,6 +292,8 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onDele
             currentGroupId={resource.groupId ?? null}
             groups={groups}
           />}
+          {onMoveUp && <button onClick={onMoveUp} aria-label="Move up" title="Move up" className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"><ArrowUp className="w-3.5 h-3.5" /></button>}
+          {onMoveDown && <button onClick={onMoveDown} aria-label="Move down" title="Move down" className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"><ArrowDown className="w-3.5 h-3.5" /></button>}
           <button onClick={onEdit} aria-label="Edit resource" className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-bg-elevated transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
           <button onClick={onDelete} aria-label="Delete resource" className={`p-2 rounded-lg ${confirmDelete ? 'bg-rose-600 text-white' : 'text-content-tertiary hover:text-rose-500 hover:bg-rose-500/10'}`}>
             <Trash2 className="w-3.5 h-3.5" />
@@ -540,16 +556,39 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
     if (!selectedTopic) return [];
     const q = filter.trim().toLowerCase();
     const list = resources.filter((r) => r.topicId === selectedTopic.id || (r.topicId == null && topics.length <= 1));
-    const sorted = [...list].sort((a, b) => {
-      if (a.completed !== b.completed) return a.completed ? 1 : -1;
-      if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
-      if (a.dueDate) return -1;
-      if (b.dueDate) return 1;
-      return a.title.localeCompare(b.title);
-    });
+    const sorted = [...list].sort(compareResources);
     if (!q) return sorted;
     return sorted.filter((r) => r.title.toLowerCase().includes(q) || (r.urlOrPath ?? '').toLowerCase().includes(q) || (r.fileName ?? '').toLowerCase().includes(q) || r.tags.some((t) => t.toLowerCase().includes(q)));
   }, [resources, selectedTopic, filter, topics.length]);
+
+  /** Move a resource one place up/down among its siblings (same topic + group). */
+  const moveResourceBy = useCallback(async (resource: Resource, delta: -1 | 1) => {
+    const sibs = resources
+      .filter((r) => r.topicId === resource.topicId && (r.groupId ?? null) === (resource.groupId ?? null))
+      .sort(compareResources);
+    const i = sibs.findIndex((r) => r.id === resource.id);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= sibs.length) return;
+    const ids = sibs.map((r) => r.id);
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    await reorderResources(ids);
+  }, [resources]);
+
+  /** Sort every sibling set of the open topic A to Z (natural: "2" before "10"). */
+  const sortTopicByName = useCallback(async () => {
+    if (!selectedTopic) return;
+    const byGroup = new Map<string, Resource[]>();
+    for (const r of resources) {
+      if (r.topicId !== selectedTopic.id && !(r.topicId == null && topics.length <= 1)) continue;
+      const k = r.groupId ?? '';
+      byGroup.set(k, [...(byGroup.get(k) ?? []), r]);
+    }
+    for (const list of byGroup.values()) {
+      list.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' }));
+      await reorderResources(list.map((r) => r.id));
+    }
+    toast('success', 'Sorted', 'Resources in this topic are now A to Z.');
+  }, [resources, selectedTopic, topics.length]);
 
   /** The resources with no group, shown after the grouped sections. */
   const ungroupedResources = useMemo(
@@ -806,8 +845,15 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
           {/* The group controls sit OUTSIDE the "no resources" branch on purpose.
               Previously they only existed when the topic already had resources,
               so a new empty topic could not host a group at all. */}
-          <div className="mb-3">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
             <NewGroupButton onCreate={createGroup} />
+            <button
+              onClick={() => void sortTopicByName()}
+              className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary transition-colors"
+              title="Sort every group in this topic A to Z. You can still move single files with the arrows."
+            >
+              <ArrowDownAZ className="w-3.5 h-3.5" /> Sort A to Z
+            </button>
           </div>
           {topicResources.length === 0 ? (
             <p className="text-xs text-content-tertiary py-6 text-center">{filter ? 'No resources match.' : 'No resources for this topic yet.'}</p>
@@ -839,6 +885,8 @@ renderResources={(groupId) => {
                       copied={copiedId === resource.id}
                       confirmDelete={deleteResourceId === resource.id}
                       onToggle={() => toggleResourceCompleted(resource)}
+                      onMoveUp={() => void moveResourceBy(resource, -1)}
+                      onMoveDown={() => void moveResourceBy(resource, 1)}
                       onEdit={() => setEditingResource(resource)}
                       onDelete={() => {
                       const r = resources.find((x) => x.id === resource.id);
@@ -887,6 +935,8 @@ renderResources={(groupId) => {
                         copied={copiedId === resource.id}
                     confirmDelete={pendingDelete?.id === resource.id}
                         onToggle={() => toggleResourceCompleted(resource)}
+                        onMoveUp={() => void moveResourceBy(resource, -1)}
+                        onMoveDown={() => void moveResourceBy(resource, 1)}
                         onEdit={() => setEditingResource(resource)}
                     onDelete={() => {
                       const r = resources.find((x) => x.id === resource.id);
@@ -1111,4 +1161,3 @@ const DeleteResourceModal: React.FC<{
     </Modal>
   );
 };
-
