@@ -20,6 +20,7 @@ import MarkdownViewer from './MarkdownViewer';
 import { useAssistantStore } from '../../../stores/useAssistantStore';
 import { startExtraction } from '../../../features/ai/extractionRunner';
 import { deleteAssessment, deleteResource, deleteResourceGroup, deleteTopicCascade, ensureDefaultTopic, moveGroup, topicUsesHtml, updateTopicContentHtml, renameResourceGroup, saveResourceGroup, setTopicStatus, toggleAssessmentStatus, toggleResourceCompleted, updateTopicNotes, saveNote, reorderResources, reorderTopics } from '../libraryRepo';
+import { useDeepLinkStore } from '../../../stores/useDeepLinkStore';
 import type { Assessment, Note, Resource, ResourceGroup, Subject, Topic, TopicStatus } from '../../../types';
 
 /**
@@ -67,6 +68,8 @@ function fmtBytes(bytes?: number | null): string {
 
 interface ResourceRowProps {
   resource: Resource;
+  /** Briefly emphasised after a dashboard card deep-linked to this row. */
+  highlight?: boolean;
   copied: boolean;
   confirmDelete: boolean;
   onToggle: () => void;
@@ -103,7 +106,7 @@ function compareResources(a: Resource, b: Resource): number {
   return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' });
 }
 
-function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onMoveUp, onMoveDown, onDelete, onCopy, onPreview, onDownload, onSplitWithNotes, fallbackTopicId, groups, note, onStartExtraction, onViewMarkdown }: ResourceRowProps) {
+function ResourceRow({ resource, highlight, copied, confirmDelete, onToggle, onEdit, onMoveUp, onMoveDown, onDelete, onCopy, onPreview, onDownload, onSplitWithNotes, fallbackTopicId, groups, note, onStartExtraction, onViewMarkdown }: ResourceRowProps) {
   const meta = dueMeta(resource);
   const isFile = resource.kind === 'file';
   const isPdf = isFile && (resource.mimeType === 'application/pdf' || resource.fileName?.toLowerCase().endsWith('.pdf'));
@@ -215,7 +218,7 @@ function ResourceRow({ resource, copied, confirmDelete, onToggle, onEdit, onMove
   };
 
   return (
-    <div className={`rounded-xl border p-3 ${resource.completed ? 'border-border bg-bg-elevated/30 opacity-70' : 'border-border bg-bg-elevated/40'}`}>
+    <div data-resource-id={resource.id} className={`rounded-xl border p-3 transition-shadow ${highlight ? 'border-accent ring-2 ring-accent bg-accent-subtle' : resource.completed ? 'border-border bg-bg-elevated/30 opacity-70' : 'border-border bg-bg-elevated/40'}`}>
       <div className="flex items-start gap-2.5">
         <button onClick={onToggle} aria-label="Toggle complete" className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${resource.completed ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-border-strong text-transparent hover:border-emerald-500'}`}>
           <Check className="w-3.5 h-3.5" />
@@ -549,6 +552,44 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
     setSelectedTopicId(null); setEditingNotes(false); setFilter('');
     setDeleteResourceId(null); setDeleteTopicId(null); setConfirmDeleteSubject(false);
   }, [subject.id]);
+
+  // Deep link from a dashboard card: select the item's topic, reveal it (expand
+  // its group), scroll to it and flash it. Waits until the item has loaded.
+  const deepTarget = useDeepLinkStore((s) => s.library);
+  const clearDeepTarget = useDeepLinkStore((s) => s.clearLibrary);
+  const [flashId, setFlashId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!deepTarget || deepTarget.subjectId !== subject.id) return;
+    const { resourceId, assessmentId } = deepTarget;
+    if (resourceId) {
+      const r = resources.find((x) => x.id === resourceId);
+      if (!r) { if (topics.length > 0 || resources.length > 0) clearDeepTarget(); return; }
+      if (r.topicId) setSelectedTopicId(r.topicId);
+      if (r.groupId) {
+        setCollapsedGroups((prev) => {
+          if (!prev.has(r.groupId as string)) return prev;
+          const next = new Set(prev); next.delete(r.groupId as string); return next;
+        });
+      }
+    } else if (!assessmentId) { clearDeepTarget(); return; }
+    else if (!assessments.some((a) => a.id === assessmentId)) {
+      if (assessments.length > 0) clearDeepTarget();
+      return;
+    }
+    const id = (resourceId ?? assessmentId) as string;
+    setFlashId(id);
+    let tries = 0;
+    const timer = window.setInterval(() => {
+      const el = document.querySelector(`[data-resource-id="${id}"], [data-assessment-id="${id}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        window.clearInterval(timer);
+      } else if (++tries > 20) window.clearInterval(timer);
+    }, 100);
+    const off = window.setTimeout(() => setFlashId(null), 2600);
+    clearDeepTarget();
+    return () => { window.clearInterval(timer); window.clearTimeout(off); };
+  }, [deepTarget, subject.id, resources, assessments, topics.length, clearDeepTarget]);
 
   useEffect(() => {
     setEditingNotes(false); setNotesSaved(false);
@@ -918,6 +959,7 @@ renderResources={(groupId) => {
                   return members.map((resource) => (
                     <ResourceRow
                       key={resource.id}
+                      highlight={flashId === resource.id}
                       resource={resource}
                       copied={copiedId === resource.id}
                       confirmDelete={deleteResourceId === resource.id}
@@ -968,6 +1010,7 @@ renderResources={(groupId) => {
                 renderUngrouped={() => ungroupedResources.map((resource) => (
                   <ResourceRow
                     key={resource.id}
+                        highlight={flashId === resource.id}
                         resource={resource}
                         copied={copiedId === resource.id}
                     confirmDelete={pendingDelete?.id === resource.id}
@@ -1024,7 +1067,7 @@ renderResources={(groupId) => {
           ) : (
             <div className="space-y-2.5">
               {sortedAssessments.map((a) => (
-                <div key={a.id} className="rounded-xl border border-border bg-bg-elevated/40 p-3">
+                <div key={a.id} data-assessment-id={a.id} className={`rounded-xl border p-3 transition-shadow ${flashId === a.id ? 'border-accent ring-2 ring-accent bg-accent-subtle' : 'border-border bg-bg-elevated/40'}`}>
                   <div className="flex items-start gap-2.5">
                     <button onClick={() => toggleAssessmentStatus(a)} aria-label="Toggle done" className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${a.status === 'done' ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-border-strong text-transparent hover:border-emerald-500'}`}>
                       <Check className="w-3.5 h-3.5" />

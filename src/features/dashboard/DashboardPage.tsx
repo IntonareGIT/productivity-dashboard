@@ -107,7 +107,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, fill =
 
         {/* Full-width: stats view (days studied, focus hours, sessions, resources) */}
         <div className="md:col-span-3">
-          <StatsCard />
+          <StatsCard onNavigate={onNavigate} />
         </div>
       </div>
     </>

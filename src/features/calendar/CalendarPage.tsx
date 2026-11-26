@@ -13,6 +13,7 @@ import { WeekView } from './components/WeekView';
 import { EventModal } from './components/EventModal';
 import { DayPanel, type DayItem } from './components/DayPanel';
 import { useOpenSubjectStore } from '../../stores/useOpenSubjectStore';
+import { useDeepLinkStore } from '../../stores/useDeepLinkStore';
 
 type ViewMode = 'month' | 'week';
 
@@ -117,6 +118,19 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({
 
   // Date of the clicked occurrence (needed for series-scope edits/deletes).
   const [occurrenceDate, setOccurrenceDate] = useState<string | null>(null);
+
+  // Dashboard card deep link: jump to that date and open its full day panel.
+  const calendarTarget = useDeepLinkStore((s) => s.calendar);
+  const clearCalendarTarget = useDeepLinkStore((s) => s.clearCalendar);
+  useEffect(() => {
+    if (!calendarTarget) return;
+    const d = new Date(`${calendarTarget.date}T12:00:00`);
+    if (!Number.isNaN(d.getTime())) {
+      setAnchor(d);
+      setOpenDay(calendarTarget.date);
+    }
+    clearCalendarTarget();
+  }, [calendarTarget, clearCalendarTarget]);
 
   // Command palette quick-add: jump to today and open the new-event modal.
   useEffect(() => {

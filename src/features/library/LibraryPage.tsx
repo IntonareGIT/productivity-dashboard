@@ -6,6 +6,7 @@ import type { Assessment, Resource, Subject, Topic } from '../../types';
 import { deleteSubjectCascade } from './libraryRepo';
 import { SubjectModal } from './components/SubjectModal';
 import { useOpenSubjectStore } from '../../stores/useOpenSubjectStore';
+import { useDeepLinkStore } from '../../stores/useDeepLinkStore';
 import { SubjectDetail } from './components/SubjectDetail';
 
 const STATUS_LABEL: Record<Topic['status'], string> = {
@@ -34,6 +35,15 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onSplitWithNotes }) =>
     setSelectedId(openSubjectId);
     clearOpenSubject();
   }, [openSubjectId, openNonce, clearOpenSubject]);
+
+  // A dashboard card asked for an exact resource/assessment: open its subject.
+  // SubjectDetail applies the rest (topic, scroll, highlight) and clears it.
+  const libraryTarget = useDeepLinkStore((s) => s.library);
+  useEffect(() => {
+    if (!libraryTarget) return;
+    setSelectedId(libraryTarget.subjectId);
+    setQuery('');
+  }, [libraryTarget]);
 
   const subjects = useLiveQuery(() => db.subjects.toArray()) ?? [];
   const topics = useLiveQuery(() => db.topics.toArray()) ?? [];

@@ -4,13 +4,19 @@ import { endOfWeek, format, isWithinInterval, startOfWeek } from 'date-fns';
 import { BarChart3, BookOpenCheck, CalendarCheck2, Timer } from 'lucide-react';
 import { Card } from '../../../components/ui/Card';
 import { db } from '../../../db/db';
+import type { NavTab } from '../../../components/layout/Sidebar';
 
 /**
  * Simple stats view (Phase 6): days studied this week, focus hours this
  * month, sessions this week, and library completion — all derived from
  * existing pomodoro/library data (no new schema).
  */
-export const StatsCard: React.FC = () => {
+interface StatsCardProps {
+  /** Each tile opens the page its number comes from. */
+  onNavigate?: (tab: NavTab) => void;
+}
+
+export const StatsCard: React.FC<StatsCardProps> = ({ onNavigate }) => {
   const sessions = useLiveQuery(() => db.pomodoroSessions.toArray()) ?? [];
   const resources = useLiveQuery(() => db.resources.toArray()) ?? [];
 
@@ -45,21 +51,25 @@ export const StatsCard: React.FC = () => {
       icon: CalendarCheck2,
       value: `${stats.daysStudied}`,
       label: 'Days studied this week',
+      tab: 'focus' as NavTab,
     },
     {
       icon: Timer,
       value: `${stats.focusHours}h`,
       label: 'Focus hours this month',
+      tab: 'focus' as NavTab,
     },
     {
       icon: BarChart3,
       value: `${stats.sessionsThisWeek}`,
       label: 'Focus sessions this week',
+      tab: 'focus' as NavTab,
     },
     {
       icon: BookOpenCheck,
       value: `${stats.doneResources}/${stats.totalResources}`,
       label: 'Resources completed',
+      tab: 'library' as NavTab,
     },
   ];
 
@@ -67,9 +77,12 @@ export const StatsCard: React.FC = () => {
     <Card title="Stats" subtitle="From your focus sessions and library">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {tiles.map((tile) => (
-          <div
+          <button
             key={tile.label}
-            className="rounded-xl border border-border bg-bg-elevated/40 p-3 sm:p-4 flex flex-col gap-1.5"
+            type="button"
+            onClick={() => onNavigate?.(tile.tab)}
+            aria-label={`${tile.label}: open ${tile.tab === 'focus' ? 'Focus' : 'Library'}`}
+            className="text-left rounded-xl border border-border bg-bg-elevated/40 hover:border-accent transition-colors p-3 sm:p-4 flex flex-col gap-1.5"
           >
             <tile.icon className="w-4 h-4 text-accent" />
             <span className="text-xl sm:text-2xl font-bold font-mono text-content-primary leading-none">
@@ -78,7 +91,7 @@ export const StatsCard: React.FC = () => {
             <span className="text-[11px] text-content-secondary leading-tight">
               {tile.label}
             </span>
-          </div>
+          </button>
         ))}
       </div>
     </Card>

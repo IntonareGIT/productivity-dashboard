@@ -4,6 +4,7 @@ import { Calendar, Clock, Briefcase, Plane, Coffee, CalendarX } from 'lucide-rea
 import { Card } from '../../../components/ui/Card';
 import type { CalendarEvent, ShiftOverride, WeeklySchedule } from '../../../types';
 import { buildShiftContext, resolveDay } from '../../shifts/shiftLogic';
+import { useDeepLinkStore } from '../../../stores/useDeepLinkStore';
 
 interface TodayTimelineStripProps {
   events: CalendarEvent[];
@@ -25,6 +26,13 @@ export const TodayTimelineStrip: React.FC<TodayTimelineStripProps> = ({
   onNavigateShifts,
 }) => {
   const today = new Date();
+  const todayKey = format(today, 'yyyy-MM-dd');
+  const openShifts = useDeepLinkStore((s) => s.openShifts);
+  const openCalendar = useDeepLinkStore((s) => s.openCalendar);
+  /** Open the shift editor for today (its week, that day selected). */
+  const goShift = () => { openShifts(todayKey); onNavigateShifts(); };
+  /** Open the calendar on today with the full day panel (that event inside). */
+  const goDay = () => { openCalendar(todayKey); onNavigateCalendar(); };
 
   // Week-specific lookup — an unassigned week resolves to 'unscheduled'.
   const day = resolveDay(buildShiftContext(overrides, schedules), today);
@@ -78,7 +86,8 @@ export const TodayTimelineStrip: React.FC<TodayTimelineStripProps> = ({
       {/* Horizontal timeline: shift block + calendar events */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
         <button
-          onClick={onNavigateShifts}
+          onClick={goShift}
+          aria-label="Open today's shift"
           className={`p-3 rounded-xl border transition-all text-left flex flex-col justify-between min-h-[76px] ${
             day.kind === 'pto'
               ? 'bg-amber-500/10 border-amber-500/30 hover:border-amber-500/60'
@@ -132,7 +141,8 @@ export const TodayTimelineStrip: React.FC<TodayTimelineStripProps> = ({
               {events.map((evt) => (
                 <button
                   key={evt.id}
-                  onClick={onNavigateCalendar}
+                  onClick={goDay}
+                  aria-label={`Open ${evt.title} on the calendar`}
                   className="p-2.5 rounded-xl bg-bg-elevated/60 border border-border hover:border-border-strong transition-colors flex flex-col justify-between text-left min-h-[76px]"
                 >
                   <div className="flex items-center justify-between gap-2">
