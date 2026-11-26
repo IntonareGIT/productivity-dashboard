@@ -105,10 +105,7 @@ export const CONFIRMATION_TOOL_NAMES: ReadonlySet<string> = new Set([
   'addPTO',
   'addOneOffShiftException',
   'deleteCalendarEvent',
-  // To-do list: add/edit/complete run immediately; delete also asks (below).
-  'addTodo',
-  'updateTodo',
-  'completeTodo',
+  // To-do list: add/edit/complete run immediately; only delete asks.
   'deleteTodo',
   // Files and extraction - confirm because they use quota
   'startExtraction',
