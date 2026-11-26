@@ -454,6 +454,7 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
    * branch in one subject survives leaving that subject and coming back, which
    * is what "remembered expand state per subject" has to mean in practice.
    */
+  const [showEmptyGroups, setShowEmptyGroups] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => collapsedBySubject.get(subject.id) ?? new Set(),
   );
@@ -497,7 +498,11 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
   const createGroup = useCallback(async (name: string, parentGroupId: string | null = null) => {
     const ok = await runGroupAction('create group',
       () => saveResourceGroup({ subjectId: subject.id, name, parentGroupId }));
-    if (ok) toast('success', 'Group created', name);
+    if (ok) {
+      // A brand-new group is empty by definition: reveal empty groups so it does not vanish.
+      setShowEmptyGroups(true);
+      toast('success', 'Group created', name);
+    }
   }, [runGroupAction, subject.id]);
 
   const renameGroup = useCallback(async (groupId: string, name: string) => {
@@ -906,6 +911,8 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
                 onCreateGroup={createGroup}
                 onDeleteGroup={removeGroup}
                 onMoveGroup={moveGroupAction}
+                showEmpty={showEmptyGroups}
+                onToggleShowEmpty={() => setShowEmptyGroups((v) => !v)}
 renderResources={(groupId) => {
                   const members = topicResources.filter((r) => r.groupId === groupId);
                   return members.map((resource) => (
