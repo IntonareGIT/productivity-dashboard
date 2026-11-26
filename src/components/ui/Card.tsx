@@ -17,7 +17,7 @@ export const Card: React.FC<CardProps> = ({
 }) => {
   return (
     <div
-      className={`bg-bg-surface border border-border rounded-2xl p-4 sm:p-5 shadow-sm transition-all ${className}`}
+      className={`card-surface bg-bg-surface border border-border rounded-2xl p-4 sm:p-5 transition-all duration-200 hover:-translate-y-px ${className}`}
     >
       {(title || action) && (
         <div className="flex items-center justify-between mb-3.5 pb-2.5 border-b border-border/50">
