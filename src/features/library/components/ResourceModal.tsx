@@ -235,9 +235,14 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
             }
           }
         } else {
-          // Re-adding an orphaned cloud copy: the bytes are already in R2 and
-          // cached locally, so the only thing to do is write the row pointing
-          // at the existing key. No upload, no file, no progress bar.
+          // Two cases share this branch:
+          //   - Re-adding an orphaned cloud copy (cloudKey set): the bytes are
+          //     already in R2 and cached locally, so the only thing to do is
+          //     write the row pointing at the existing key.
+          //   - Editing an existing file row without replacing its bytes
+          //     (cloudKey unset, no new file picked): keep the row's existing
+          //     blob/r2Key and file metadata, and just update the fields.
+          //     saveResource treats `undefined` as "keep the stored value".
           const resourceId = await saveResource({
             id: resource?.id,
             subjectId,
@@ -245,11 +250,11 @@ export const ResourceModal: React.FC<ResourceModalProps> = ({ subjectId, topicId
             kind,
             title,
             urlOrPath: resource?.urlOrPath ?? '',
-            blob: null,
-            r2Key: cloudKey!,
-            fileName: cloudKey!.split('/').pop() ?? null,
-            mimeType: null,
-            fileSize: null,
+            blob: cloudKey ? null : undefined,
+            r2Key: cloudKey ?? undefined,
+            fileName: cloudKey ? (cloudKey.split('/').pop() ?? null) : undefined,
+            mimeType: cloudKey ? null : undefined,
+            fileSize: cloudKey ? null : undefined,
             tags,
             dueDate: dueDate || null,
             groupId: groupId || null,
