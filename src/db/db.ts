@@ -1,6 +1,7 @@
 import Dexie, { type Table } from 'dexie';
 import dexieCloud from 'dexie-cloud-addon';
 import type {
+  QuickCapture,
   AiProvider,
   Assessment,
   Note,
@@ -66,6 +67,7 @@ export class ProductivityDB extends Dexie {
   uiState!: Table<UiState, string>;
   instinctUpdates!: Table<InstinctUpdate, string>;
   todos!: Table<TodoItem, string>;
+  quickCaptures!: Table<QuickCapture, string>;
   /**
    * Local cache of R2 blobs, keyed by r2Key. Never synced: it is a pure
    * convenience so re-opening a file in the same session (or after a reload)
@@ -530,6 +532,16 @@ export class ProductivityDB extends Dexie {
     this.version(19)
       .stores({
         todos: 'id, done, createdAt, dueDate, subjectId, topicId',
+      });
+
+    /**
+     * v20: quick capture inbox. ADDITIVE ONLY. Notes/links captured from the
+     * top-bar button wait here (status 'inbox') until the assistant files
+     * them into a subject; task captures go straight to `todos` (v19).
+     */
+    this.version(20)
+      .stores({
+        quickCaptures: 'id, createdAt, status',
       });
   }
 }

@@ -448,3 +448,20 @@ export interface TodoItem {
   /** Manual ordering within the open list; lower sorts first. */
   sortIndex?: number;
 }
+
+
+/**
+ * Quick capture inbox: notes and links dumped via the top-bar button, waiting
+ * to be filed into a subject by the assistant (fileCapture). Task captures go
+ * straight to `todos` instead, so they never sit here.
+ */
+export interface QuickCapture {
+  id: string;
+  createdAt: string; // ISO
+  kind: 'note' | 'link';
+  text: string;
+  status: 'inbox' | 'filed';
+  /** Set when filed: where it landed. */
+  filedToSubjectId?: string | null;
+  filedToTopicId?: string | null;
+}

@@ -41,6 +41,7 @@ import {
   executeCalendarTool,
 } from './toolsCalendar';
 import { TODO_TOOL_SPECS, TODO_TOOL_NAMES, describeTodoToolCall, executeTodoTool } from './toolsTodos';
+import { CAPTURE_TOOL_SPECS, CAPTURE_TOOL_NAMES, CAPTURE_CONFIRM_TOOL_NAMES, describeCaptureToolCall, executeCaptureTool } from './toolsCaptures';
 import { isAmbiguous, resolveItem } from './toolResolve';
 import { parentOf } from '../library/groupTree';
 import type { ToolSpec } from './types';
@@ -79,6 +80,9 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   'updateTodo',
   'completeTodo',
   'deleteTodo',
+  // Quick capture: list is read-only; file writes, delete is confirm-gated below.
+  'fileCapture',
+  'deleteCapture',
   // Files and extraction
   'queueExtraction',
   'retryExtraction',
@@ -117,6 +121,7 @@ export const CONFIRMATION_TOOL_NAMES: ReadonlySet<string> = new Set([
   // only ungroups, because it still removes a row the user made, so it asks
   // first. A second model call CANNOT perform it; only Confirm can.
   ...LIBRARY_CONFIRM_TOOL_NAMES,
+  ...CAPTURE_CONFIRM_TOOL_NAMES,
   // Phase 4: the three calendar deletes, plus createRecurringEvents because it
   // can create up to 60 events and the user must see the list first.
   ...CALENDAR_CONFIRM_TOOL_NAMES,
@@ -252,6 +257,7 @@ export const TOOL_SPECS: ToolSpec[] = [
   // tool cannot be added without being registered for the model too.
   ...CALENDAR_TOOL_SPECS,
   ...TODO_TOOL_SPECS,
+  ...CAPTURE_TOOL_SPECS,
 ];
 
 /* ---------------- Read-only functions ---------------- */
@@ -836,6 +842,7 @@ export function describeToolCall(name: string, argsJson: string): string {
       if (LIBRARY_TOOL_NAMES.has(name)) return describeLibraryToolCall(name, args);
       if (CALENDAR_TOOL_NAMES.includes(name)) return describeCalendarToolCall(name, argsJson);
       if (TODO_TOOL_NAMES.includes(name)) return describeTodoToolCall(name, argsJson);
+      if (CAPTURE_TOOL_NAMES.includes(name)) return describeCaptureToolCall(name, args);
       return describeExtendedToolCall(name, args);
   }
 }
@@ -882,6 +889,8 @@ export async function executeTool(name: string, argsJson: string): Promise<ToolE
         const todo = await executeTodoTool(name, args);
         if (todo) return todo;
       }
+      const capture = await executeCaptureTool(name, args);
+      if (capture) return capture;
       // Library / calendar / status functions live in toolsExtended.ts.
       const extended = await executeExtendedTool(name, args);
       if (extended) return extended;

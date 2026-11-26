@@ -3,6 +3,7 @@ import { format } from 'date-fns';
 import { Sun, Moon, Columns2 } from 'lucide-react';
 import { useStatusThemeStore } from '../../stores/useStatusThemeStore';
 import { ProfileMenu } from './ProfileMenu';
+import { QuickCaptureButton } from '../../features/capture/QuickCapture';
 import type { NavTab } from './Sidebar';
 
 interface TopBarProps {
@@ -56,8 +57,9 @@ export const TopBar: React.FC<TopBarProps> = ({ onSelectTab, splitOpen, onToggle
         </span>
       )}
 
-      {/* Right side: light/dark toggle + profile avatar */}
+      {/* Right side: quick capture + light/dark toggle + profile avatar */}
       <div className="flex items-center space-x-2 sm:space-x-3">
+        <QuickCaptureButton />
         <button
           onClick={toggleColorScheme}
           aria-label="Toggle Light/Dark Theme"
