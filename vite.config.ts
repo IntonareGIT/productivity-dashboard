@@ -1,7 +1,40 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import path from 'path';
+import fs from 'fs';
+
+// Copies the pdf.js decoder assets (wasm, cmaps, standard fonts, ICC profiles)
+// from node_modules into `/pdfjs/...`, in both the dev server and the build.
+// Without them pdf.js cannot draw JBIG2/JPEG2000 scans (pages come out blank).
+// They are fetched on demand, not precached, so the service worker stays small.
+const PDFJS_ASSET_DIRS = ['wasm', 'cmaps', 'standard_fonts', 'iccs'];
+function copyPdfjsAssets(): Plugin {
+  const root = path.resolve(__dirname, 'node_modules/pdfjs-dist');
+  let outDir = 'dist';
+  return {
+    name: 'copy-pdfjs-assets',
+    configResolved(config) {
+      outDir = path.resolve(config.root, config.build.outDir);
+    },
+    configureServer(server) {
+      server.middlewares.use('/pdfjs', (req, res, next) => {
+        const rel = decodeURIComponent((req.url ?? '').split('?')[0]).replace(/^\/+/, '');
+        const file = path.join(root, rel);
+        const dir = rel.split('/')[0];
+        if (!PDFJS_ASSET_DIRS.includes(dir) || !file.startsWith(root) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return next();
+        if (file.endsWith('.wasm')) res.setHeader('Content-Type', 'application/wasm');
+        fs.createReadStream(file).pipe(res);
+      });
+    },
+    closeBundle() {
+      for (const dir of PDFJS_ASSET_DIRS) {
+        const from = path.join(root, dir);
+        if (fs.existsSync(from)) fs.cpSync(from, path.join(outDir, 'pdfjs', dir), { recursive: true });
+      }
+    },
+  };
+}
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -12,6 +45,7 @@ export default defineConfig({
   },
   plugins: [
     react(),
+    copyPdfjsAssets(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
@@ -65,4 +99,3 @@ export default defineConfig({
     }
   }
 });
-
