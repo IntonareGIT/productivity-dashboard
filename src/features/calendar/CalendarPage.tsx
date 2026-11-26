@@ -310,7 +310,9 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({
           shiftKindByDate={shiftKindByDate}
           assessmentsByDate={assessmentsByDate}
           today={new Date()}
-          onDayClick={(dateKey) => setNewDate(dateKey)}
+          // Clicking a day opens its full day view (DayPanel has the +
+          // add-event button); adding an event no longer jumps out directly.
+          onDayClick={(dateKey) => setOpenDay(dateKey)}
           onEventClick={handleOccurrenceClick}
           onOpenDay={setOpenDay}
           onOpenAssessment={handleOpenAssessment}
@@ -323,7 +325,7 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({
           shiftKindByDate={shiftKindByDate}
           assessmentsByDate={assessmentsByDate}
           today={new Date()}
-          onDayClick={(dateKey) => setNewDate(dateKey)}
+          onDayClick={(dateKey) => setOpenDay(dateKey)}
           onEventClick={handleOccurrenceClick}
           onOpenDay={setOpenDay}
           onOpenAssessment={handleOpenAssessment}
