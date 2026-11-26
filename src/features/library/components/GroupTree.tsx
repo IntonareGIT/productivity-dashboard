@@ -112,6 +112,14 @@ export interface GroupTreeProps {
   renderResources: (groupId: string) => React.ReactNode;
   /** Renders the resources that belong to no group. */
   renderUngrouped: () => React.ReactNode;
+  /**
+   * Groups belong to the whole subject, so every topic would list every group,
+   * including ones that only hold files in OTHER topics. By default a group with
+   * no resources in the shown list (itself or any subgroup) is hidden; this
+   * flag brings them back. The group data itself is never filtered or changed.
+   */
+  showEmpty: boolean;
+  onToggleShowEmpty: () => void;
 }
 
 /**
@@ -129,6 +137,7 @@ export const GroupTree: React.FC<GroupTreeProps> = ({
   subjectId, groups, resources, collapsedIds, onToggleCollapsed,
   renamingGroupId, onStartRename, onCommitRename,
   onCreateGroup, onDeleteGroup, onMoveGroup, renderResources, renderUngrouped,
+  showEmpty, onToggleShowEmpty,
 }) => {
   // `undefined` means the editor is closed; `null` means the TOP-level editor.
   const [addingUnder, setAddingUnder] = useState<string | null | undefined>(undefined);
@@ -164,6 +173,15 @@ export const GroupTree: React.FC<GroupTreeProps> = ({
 
   const hasUngrouped = resources.some((r) => !r.groupId);
 
+  // totalResources already includes every subgroup, so a parent of a non-empty
+  // subgroup is never hidden. A group whose editor is open stays visible so it
+  // cannot vanish while being renamed, moved or deleted.
+  const visibleTree = showEmpty
+    ? tree
+    : tree.filter((n) => n.totalResources > 0
+      || n.id === renamingGroupId || n.id === deleteId || n.id === moveId || n.id === addingUnder);
+  const hiddenCount = tree.length - visibleTree.length;
+
   return (
     <div className="space-y-2.5" data-group-tree={subjectId}>
       {tree.length === 0 && !hasUngrouped && (
@@ -172,7 +190,18 @@ export const GroupTree: React.FC<GroupTreeProps> = ({
         </p>
       )}
 
-      {tree.map((node) => {
+      {(hiddenCount > 0 || (showEmpty && tree.some((n) => n.totalResources === 0))) && (
+        <button
+          onClick={onToggleShowEmpty}
+          aria-pressed={showEmpty}
+          data-toggle-empty-groups
+          className="px-3 min-h-[36px] rounded-lg border border-border text-[11px] font-semibold text-content-secondary hover:text-content-primary transition-colors"
+        >
+          {showEmpty ? 'Hide empty groups' : `Show ${hiddenCount} empty group${hiddenCount === 1 ? '' : 's'}`}
+        </button>
+      )}
+
+      {visibleTree.map((node) => {
         const collapsed = collapsedIds.has(node.id);
         const open = addingUnder === node.id;
         const impact = deleteImpact(groups, node.id, counts);
