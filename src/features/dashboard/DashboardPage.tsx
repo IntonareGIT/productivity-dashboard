@@ -7,6 +7,7 @@ import { UpcomingDeadlinesCard } from './components/UpcomingDeadlinesCard';
 import { WeeklyHoursCard } from './components/WeeklyHoursCard';
 import { StatsCard } from './components/StatsCard';
 import { SignInBanner } from './components/SignInBanner';
+import { ExamCountdownCard } from './components/ExamCountdownCard';
 import { InstinctUpdatesCard } from './components/InstinctUpdatesCard';
 import { TodoCard } from './components/TodoCard';
 import type { NavTab } from '../../components/layout/Sidebar';
@@ -49,6 +50,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, fill =
 
   const assessments = useLiveQuery(() => db.assessments.toArray()) || [];
   const subjects = useLiveQuery(() => db.subjects.toArray()) || [];
+  const topics = useLiveQuery(() => db.topics.toArray()) || [];
   const subjectName = (id: string) => subjects.find((s) => s.id === id)?.name ?? null;
 
   // The card list, shared by both layouts so the split pane and the full page
@@ -80,6 +82,16 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, fill =
           onNavigateCalendar={() => onNavigate('calendar')}
           onNavigateShifts={() => onNavigate('shifts')}
         />
+
+        {/* Full-width: days left to each quiz/exam and what is still unstudied */}
+        <div className="md:col-span-3">
+          <ExamCountdownCard
+            assessments={assessments}
+            subjects={subjects}
+            topics={topics}
+            onNavigateLibrary={() => onNavigate('library')}
+          />
+        </div>
 
         {/* Full-width: the From Instinct feed (daily summary + updates) */}
         <div className="md:col-span-3">

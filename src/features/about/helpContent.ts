@@ -79,6 +79,7 @@ export const HELP_SECTIONS: HelpSection[] = [
           { lead: 'Links', text: 'A title with a URL or file path. Open it in place, or copy the path.' },
           { lead: 'Uploads', text: 'A file stored in the app, with its original name, type and size. You can preview, download, and open it full-screen.' },
           { lead: 'Due dates and completion', text: 'Mark a resource done, and give it a due date. Both are tracked per resource and surfaced on the dashboard.' },
+          { lead: 'Exam countdown', text: 'The dashboard lists days left to each upcoming quiz or exam, and the topics of that subject not yet marked Confident. Tap a row to open the subject.' },
           { lead: 'Tags', text: 'Free-form labels, filterable with the search box above the list.' },
 { lead: 'Groups can nest', text: 'A group can sit inside another group, up to five levels deep. Each level is indented, shows its own count of resources and subgroups, and has buttons to expand it, add a subgroup, move it, rename it or delete it. An empty group stays visible, and which groups are expanded is remembered per subject.' },
           { lead: 'Moving a group', text: 'The "Move group" button lists only valid destinations: the top level of the subject, and any group that is not the group itself or one of its own subgroups. An illegal move therefore cannot be reached in the first place.' },
