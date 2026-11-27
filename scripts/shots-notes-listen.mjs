@@ -51,6 +51,25 @@ const open = async (viewport, theme) => {
   return page;
 };
 
+// The counter text ("4 / 23") and the highlight the browser is painting.
+const counterOf = async (page, n = 0) =>
+  (await page.locator('span.tabular-nums').nth(n).innerText()).replace(/\s+/g, ' ').trim();
+const highlightState = (page) =>
+  page.evaluate(() => {
+    const reg = window.CSS && CSS.highlights;
+    if (!reg) return { supported: false };
+    const hl = reg.get('notes-listen');
+    if (!hl) return { supported: true, present: false };
+    const ranges = Array.from(hl);
+    const first = ranges[0];
+    return {
+      supported: true,
+      present: true,
+      ranges: ranges.length,
+      text: first ? String(first).replace(/\s+/g, ' ').trim().slice(0, 120) : null,
+    };
+  });
+
 const desktop = await open({ width: 1180, height: 900 });
 await desktop.screenshot({ path: 'shots/listen-desktop-idle.png' });
 await desktop.screenshot({ path: 'shots/listen-desktop-full.png', fullPage: true });
@@ -59,9 +78,32 @@ await desktop.screenshot({ path: 'shots/listen-desktop-full.png', fullPage: true
 await desktop.locator('button:has-text("Listen")').first().click();
 await desktop.waitForTimeout(500);
 const playingLabel = await desktop.locator('button:has-text("Pause")').count();
-const counter = await desktop.locator('span.tabular-nums').first().innerText();
+const counter = await counterOf(desktop);
 console.log('after play ->', { pauseButton: playingLabel, counter });
+console.log('highlight after play ->', await highlightState(desktop));
 await desktop.screenshot({ path: 'shots/listen-desktop-playing.png' });
+
+// Navigation: next sentence advances the counter by one, previous goes back.
+await desktop.locator('button[aria-label="Next sentence"]').first().click();
+await desktop.waitForTimeout(250);
+const afterNext = await counterOf(desktop);
+await desktop.locator('button[aria-label="Next sentence"]').first().click();
+await desktop.waitForTimeout(250);
+const afterNext2 = await counterOf(desktop);
+await desktop.locator('button[aria-label="Previous sentence"]').first().click();
+await desktop.waitForTimeout(250);
+const afterPrev = await counterOf(desktop);
+// Next paragraph jumps several sentences at once.
+await desktop.locator('button[aria-label="Next paragraph"]').first().click();
+await desktop.waitForTimeout(250);
+const afterParagraph = await counterOf(desktop);
+const paragraphHighlight = await highlightState(desktop);
+await desktop.screenshot({ path: 'shots/listen-desktop-paragraph.png' });
+// Restart goes back to the first sentence.
+await desktop.locator('button[aria-label="Start from the beginning"]').first().click();
+await desktop.waitForTimeout(250);
+const afterRestart = await counterOf(desktop);
+console.log('navigation ->', { afterNext, afterNext2, afterPrev, afterParagraph, afterRestart, paragraphHighlight });
 
 // Pause: the same button becomes Resume.
 await desktop.locator('button:has-text("Pause")').first().click();
@@ -84,11 +126,26 @@ await light.waitForTimeout(400);
 await light.screenshot({ path: 'shots/listen-desktop-light.png' });
 await light.close();
 
+// Start from a selection: select part of a sentence in note 2, then press
+// Listen. The counter should start at that sentence, not at 1.
+const selection = await open({ width: 1180, height: 900 });
+await selection.locator('[data-testid="select-sentence"]').click();
+await selection.waitForTimeout(150);
+const selected = await selection.evaluate(() => String(window.getSelection() ?? ''));
+await selection.locator('button:has-text("Listen")').nth(1).click();
+await selection.waitForTimeout(400);
+const selectionCounter = await counterOf(selection);
+const selectionHighlight = (await highlightState(selection)).text;
+console.log('selection start ->', { selected, selectionCounter, selectionHighlight });
+await selection.screenshot({ path: 'shots/listen-desktop-selection.png' });
+await selection.close();
+
 const phone = await open({ width: 390, height: 844 });
 await phone.screenshot({ path: 'shots/listen-phone-idle.png' });
 await phone.locator('button:has-text("Listen")').first().click();
 await phone.waitForTimeout(500);
 await phone.screenshot({ path: 'shots/listen-phone-playing.png' });
+console.log('phone highlight ->', await highlightState(phone));
 await phone.close();
 
 await browser.close();

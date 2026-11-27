@@ -311,7 +311,7 @@ function stripInline(input: string): string {
 }
 
 /** A formula's words, or the cue that sends the reader's eyes to the screen. */
-function formulaWordsOrCue(source: string): string {
+export function formulaWordsOrCue(source: string): string {
   return formulaToWords(source) ?? FORMULA_CUE;
 }
 
@@ -322,7 +322,7 @@ function formulaWordsOrCue(source: string): string {
  * prose. A filename or a bare URL is not a description, and then the reader is
  * sent to the picture itself.
  */
-function imageWords(alt: string): string {
+export function imageWords(alt: string): string {
   const text = decodeEntities(alt ?? '').trim();
   const looksLikePath = !text
     || /^[\w./-]+\.(png|jpe?g|gif|webp|svg|avif)$/i.test(text)
@@ -494,7 +494,13 @@ function markdownToBlocks(markdown: string): { text: string; heading: boolean; p
  * A period only ends a sentence when whitespace or the end of the text follows
  * it: "k = 1.2 kN/m" is one thing to say, not "k = 1." and "2 kN/m".
  */
-function splitSentences(text: string): string[] {
+/** Abbreviations whose full stop does not end a sentence. */
+const ABBREVIATIONS = new Set([
+  'e.g', 'i.e', 'etc', 'vs', 'cf', 'al', 'fig', 'figs', 'eq', 'eqs', 'no', 'nos',
+  'approx', 'resp', 'mr', 'mrs', 'ms', 'dr', 'prof', 'st', 'sec', 'ch', 'vol',
+]);
+
+export function splitSentences(text: string): string[] {
   const out: string[] = [];
   let start = 0;
   for (let i = 0; i < text.length; i += 1) {
@@ -502,6 +508,10 @@ function splitSentences(text: string): string[] {
     if (ch !== '.' && ch !== '!' && ch !== '?' && ch !== ';') continue;
     const next = text[i + 1];
     if (next && !/\s/.test(next)) continue;
+    // "e.g. mass" and "J. Smith" are not sentence ends: the reader would hear a
+    // pause in the middle of the thought, and the highlight would stop there too.
+    const word = /([A-Za-z.]+)$/.exec(text.slice(0, i))?.[1].toLowerCase() ?? '';
+    if (ch === '.' && (ABBREVIATIONS.has(word) || /^[a-z]$/.test(word))) continue;
     out.push(text.slice(start, i + 1));
     start = i + 1;
   }

@@ -32,7 +32,7 @@ await build({
 });
 
 const {
-  notesToSpeech, formulaToWords, FORMULA_CUE, IMAGE_CUE, CUE_PAUSE_MS,
+  notesToSpeech, formulaToWords, splitSentences, imageWords, FORMULA_CUE, IMAGE_CUE, CUE_PAUSE_MS,
 } = await import(`file://${bundleFile.replace(/\\/g, '/')}`);
 
 let pass = 0;
@@ -153,6 +153,24 @@ check('html bold text kept', htmlSpoken.includes('damping is zeta'));
 check('html image reads its alt', htmlSpoken.includes('Image: decay curve of a damped system.'));
 check('html image without alt is cued', htmlSpoken.includes(IMAGE_CUE));
 check('html note ignores the markdown body', !htmlSpoken.includes('ignored when hasHtml'));
+
+/* ------------------------------------------------- sentences and highlight */
+// The highlight and the sentence-by-sentence navigation both stand on this, so
+// a sentence must end where a reader hears it end, not mid-number.
+const split = splitSentences('Vibration is motion. It has 3 parts, e.g. mass, spring and damper. Right?');
+check('sentences split at the full stop', split[0] === 'Vibration is motion.', split[0]);
+check('a sentence keeps its inner commas and abbreviation', split[1] === 'It has 3 parts, e.g. mass, spring and damper.', split[1]);
+check('a question is its own sentence', split[2] === 'Right?', split[2]);
+check('no sentence is empty', split.every((s) => s.trim().length > 0));
+check('a decimal does not split', splitSentences('Damping is 0.1 here.').length === 1);
+check('a heading stays one sentence', splitSentences('1.2 Natural frequency').join('|') === '1.2 Natural frequency');
+
+/* ------------------------------------------------------------------ images */
+check('alt text becomes a spoken image line', imageWords('decay curve') === 'Image: decay curve.');
+check('a trailing full stop is not doubled', imageWords('decay curve.') === 'Image: decay curve.');
+check('an empty alt is cued', imageWords('') === IMAGE_CUE);
+check('a bare filename is cued', imageWords('vib-01.png') === IMAGE_CUE);
+check('a path is cued', imageWords('/slides/vib-01.png') === IMAGE_CUE);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
