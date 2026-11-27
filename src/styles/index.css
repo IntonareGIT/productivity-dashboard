@@ -35,9 +35,9 @@
   background: var(--border-strong);
 }
 
-/* ---------- Visual refresh (styling only, no behavior changes) ---------- */
-/* Everything derives from the theme CSS variables, so every mood theme and
-   light mode picks these up unchanged. */
+/* ---------- Flat, clean surfaces ----------
+   No gradients, glow, sheen or shadows. Everything derives from the theme
+   variables, so every mood theme and light mode works unchanged. */
 
 @layer base {
   html {
@@ -45,17 +45,8 @@
     text-rendering: optimizeLegibility;
   }
 
-  body {
-    /* Depth: a faint accent glow top-left over a slightly deepened base. */
-    background-color: color-mix(in srgb, var(--bg-primary) 94%, black);
-    background-image:
-      radial-gradient(1200px 600px at 15% -10%, color-mix(in srgb, var(--accent-primary) 11%, transparent), transparent 60%),
-      radial-gradient(900px 500px at 110% 0%, color-mix(in srgb, var(--accent-primary) 7%, transparent), transparent 55%);
-    background-attachment: fixed;
-  }
-
   ::selection {
-    background: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 30%, transparent);
   }
 
   :focus-visible {
@@ -65,70 +56,53 @@
   }
 }
 
-/* Shared card surface: softer edge, ambient shadow with a faint accent tint,
-   and a gentle hover lift. Targets the Card component via its own classes so
-   one-off surfaces keep their look. */
-.card-surface,
-div[class*="bg-bg-surface"][class*="rounded-2xl"] {
-  border-color: color-mix(in srgb, var(--border-subtle) 70%, transparent);
-  box-shadow:
-    0 1px 0 0 color-mix(in srgb, #ffffff 4%, transparent) inset,
-    0 8px 24px -12px color-mix(in srgb, #000000 45%, transparent);
-}
-
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--border-strong) 70%, transparent);
-  border-radius: 9999px;
-  border: 2px solid transparent;
-  background-clip: content-box;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--accent-primary) 55%, transparent);
-  background-clip: content-box;
-}
-
-/* ---------- Bolder pass: nav, cards, type ---------- */
-
-/* Sidebar / nav items: active gets a gradient pill with an accent glow and a
-   left highlight bar; hover washes the item in the theme accent. */
+/* Sidebar nav: quiet text items; the active one is a flat tinted row. */
 .nav-item {
   color: var(--text-secondary);
-  border: 1px solid transparent;
 }
 .nav-item:hover {
-  color: var(--accent-text);
-  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
-  border-color: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+  color: var(--text-primary);
+  background: var(--bg-surface-elevated);
 }
 .nav-item-active,
 .nav-item-active:hover {
-  color: #ffffff;
-  background: linear-gradient(135deg, var(--accent-primary), var(--accent-hover));
-  border-color: color-mix(in srgb, var(--accent-primary) 60%, #ffffff 10%);
-  box-shadow:
-    inset 3px 0 0 0 color-mix(in srgb, #ffffff 55%, transparent),
-    0 6px 18px -6px color-mix(in srgb, var(--accent-primary) 55%, transparent);
+  color: var(--text-primary);
+  background: var(--accent-subtle);
 }
 .nav-item-active svg {
-  color: #ffffff;
+  color: var(--accent-text);
 }
 
-/* Card surfaces: a soft vertical sheen so cards read as layered panes, not
-   flat rectangles. */
-.card-surface,
-div[class*="bg-bg-surface"][class*="rounded-2xl"] {
-  background-image: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--bg-surface) 88%, #ffffff 12%) 0%,
-    var(--bg-surface) 120px
-  );
-}
-
-/* Stronger hierarchy: display headings tighten up. */
 h1, h2, h3 {
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
+}
+
+/* ---------- Subtle motion ----------
+   Short, quiet, and off entirely for people who ask for reduced motion. */
+@keyframes enter-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes enter-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.page-enter { animation: enter-fade 180ms ease-out backwards; }
+.card-enter { animation: enter-up 220ms ease-out backwards; }
+.list-enter { animation: enter-up 180ms ease-out backwards; }
+
+/* Hover and press feedback on every button and link. */
+button, [role="button"], a {
+  transition-property: background-color, border-color, color, opacity, transform;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+button:not(:disabled):active, [role="button"]:active {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter, .card-enter, .list-enter { animation: none; }
+  button, [role="button"], a { transition: none; }
+  button:not(:disabled):active, [role="button"]:active { transform: none; }
 }

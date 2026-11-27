@@ -113,7 +113,7 @@ export const TodoPage: React.FC = () => {
       );
     }
     return (
-      <div key={t.id} className="flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2.5 group">
+      <div key={t.id} className="flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2.5 group list-enter">
         <button
           onClick={() => void setTodoDone(t.id, !t.done)}
           aria-label={t.done ? 'Reopen task' : 'Complete task'}

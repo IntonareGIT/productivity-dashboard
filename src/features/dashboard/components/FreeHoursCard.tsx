@@ -40,7 +40,7 @@ export const FreeHoursCard: React.FC<FreeHoursCardProps> = ({
         </button>
       }
     >
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3">
         {days.map((day) => (
           <div key={day.dateKey} className="rounded-xl border border-border bg-bg-elevated/40 p-3 flex flex-col gap-2">
             <div className="flex items-baseline justify-between gap-2">
