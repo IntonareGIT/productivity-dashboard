@@ -303,9 +303,9 @@ return createPortal(
                 <React.Fragment key={`${node.kind}-${node.id}-${i}`}>
                   {/* The Recent section heading. Not a button: it labels the rows
                       under it rather than going anywhere. */}
-                  {i === recentCount && (
+                  {showRecent && (i === 0 || i === recentCount) && (
                     <p className="px-2.5 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-content-tertiary">
-                      Recent
+                      {i === 0 ? 'Recent' : 'All subjects'}
                     </p>
                   )}
                   <button
