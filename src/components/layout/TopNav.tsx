@@ -38,7 +38,7 @@ export const TopNav: React.FC<TopNavProps> = ({ activeTab, onSelectTab, splitOpe
       </button>
 
       {!splitOpen ? (
-        <nav className="hidden md:flex items-center gap-0.5" aria-label="Main">
+        <nav className="hidden md:flex items-center gap-0.5 min-w-0" aria-label="Main">
           {navItems.map((item) => {
             const Icon = item.icon;
             const active = activeTab === item.id;
@@ -48,10 +48,10 @@ export const TopNav: React.FC<TopNavProps> = ({ activeTab, onSelectTab, splitOpe
                 onClick={() => onSelectTab(item.id)}
                 title={item.label}
                 aria-current={active ? 'page' : undefined}
-                className={`relative inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium ${active ? 'nav-item-active' : 'nav-item'}`}
+                className={`relative inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 rounded-lg text-sm font-medium ${active ? 'nav-item-active' : 'nav-item'}`}
               >
                 <Icon className="w-4 h-4" />
-                <span className="hidden xl:inline">{item.label}</span>
+                <span className={active ? 'inline' : 'hidden 2xl:inline'}>{item.label}</span>
               </button>
             );
           })}
@@ -63,7 +63,7 @@ export const TopNav: React.FC<TopNavProps> = ({ activeTab, onSelectTab, splitOpe
       <div className="flex-1" />
 
       {!splitOpen && (
-        <span className="hidden sm:inline text-xs text-content-secondary whitespace-nowrap mr-1">
+        <span className="hidden xl:inline text-xs text-content-secondary whitespace-nowrap mr-1">
           {format(now, 'EEE, MMM d')} <span className="font-mono">{format(now, 'HH:mm')}</span>
         </span>
       )}
