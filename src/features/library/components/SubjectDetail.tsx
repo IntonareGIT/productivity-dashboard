@@ -346,7 +346,7 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [editingNotes, setEditingNotes] = useState(false);
   const [notesSaved, setNotesSaved] = useState(false);
-  const [notesMinimized, setNotesMinimized] = useState(true);
+  const [notesMinimized, setNotesMinimized] = useState(false);
   const [manageTopics, setManageTopics] = useState(false);
   const [filter, setFilter] = useState('');
 
