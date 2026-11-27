@@ -530,7 +530,7 @@ check('keyboard: arrows, Enter, Backspace and Escape are handled',
 check('every row shows the file name with its path beneath',
   /node\.path && node\.path !== node\.name/.test(compSrc));
 check('the Recent section is rendered above the subjects, as a heading',
-  /i === recentCount/.test(compSrc) && />\s*Recent\s*</.test(compSrc));
+  /i === recentCount/.test(compSrc) && /'Recent'/.test(compSrc) && /showRecent && \(i === 0/.test(compSrc));
 check('the Recent section is suppressed while searching, where it would mislead',
   /!query\.trim\(\) && path\.length === 0/.test(compSrc));
 check('the component takes a slotKey so two panes keep separate state',
