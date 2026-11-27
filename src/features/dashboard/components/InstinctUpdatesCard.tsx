@@ -110,21 +110,21 @@ export const InstinctUpdatesCard: React.FC = () => {
   return (
     <Card
       title="From Instinct"
-      subtitle="Daily summary and anything worth knowing, newest first"
+      subtitle="Daily summary and updates"
       action={
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 shrink-0">
           <a
             href={INSTINCT_WHATSAPP_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1.5 text-[11px] font-semibold text-accent hover:underline"
+            className="flex items-center gap-1.5 whitespace-nowrap text-xs font-medium text-accent hover:underline"
             title="Open the Instinct WhatsApp chat in a new tab"
           >
             <WhatsAppIcon className="w-3.5 h-3.5" /> WhatsApp chat
           </a>
           <button
             onClick={() => setComposerOpen((v) => !v)}
-            className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"
+            className="flex items-center gap-1 whitespace-nowrap text-xs font-medium text-accent hover:underline"
             aria-expanded={composerOpen}
           >
             <Plus className="w-3 h-3" /> Add update

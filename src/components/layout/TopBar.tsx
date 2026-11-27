@@ -34,7 +34,7 @@ export const TopBar: React.FC<TopBarProps> = ({ onSelectTab, splitOpen, onToggle
   }, [splitOpen]);
 
   return (
-    <header className="h-14 shrink-0 border-b border-border bg-bg-surface/80 backdrop-blur-md sticky top-0 z-30 px-4 md:px-6 flex items-center justify-between transition-colors">
+    <header className="h-14 shrink-0 border-b border-border bg-bg sticky top-0 z-30 px-4 md:px-6 flex items-center justify-between transition-colors">
       {/* Left side: Date & Time.
           Focus Mode: hidden entirely while the split view is open, so the bar
           carries nothing but the controls on the right. The bar keeps its

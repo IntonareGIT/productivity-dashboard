@@ -69,15 +69,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
-      className={`hidden md:flex flex-col border-r border-border bg-bg-surface/50 backdrop-blur-sm h-screen sticky top-0 transition-all duration-300 ease-in-out z-20 ${
-        isCollapsed ? 'w-16' : 'w-60'
+      className={`hidden md:flex flex-col border-r border-border bg-bg-surface h-screen sticky top-0 transition-all duration-300 ease-in-out z-20 ${
+        isCollapsed ? 'w-16' : 'w-56'
       }`}
     >
       {/* Brand Header */}
-      <div className="h-14 flex items-center justify-between px-4 border-b border-border">
+      <div className="h-14 flex items-center justify-between px-4">
         {!isCollapsed && (
           <div className="flex items-center space-x-2.5 overflow-hidden">
-            <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center text-white font-bold text-sm shadow-sm flex-shrink-0">
+            <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
               P
             </div>
             <span className="font-semibold text-sm tracking-tight text-content-primary truncate">
@@ -87,7 +87,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
         {isCollapsed && (
           <div className="w-full flex justify-center">
-            <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center text-white font-bold text-sm shadow-sm">
+            <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center text-white font-bold text-sm">
               P
             </div>
           </div>
@@ -95,7 +95,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Nav links */}
-      <div className="flex-1 py-4 px-2 space-y-1 overflow-y-auto">
+      <div className="flex-1 py-4 px-3 space-y-0.5 overflow-y-auto">
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
@@ -104,13 +104,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               key={item.id}
               onClick={() => onSelectTab(item.id)}
               title={isCollapsed ? item.label : undefined}
-              className={`w-full flex items-center rounded-xl text-sm font-medium transition-all duration-150 ${
+              className={`w-full flex items-center rounded-lg text-sm font-medium transition-colors duration-150 ${
                 isCollapsed ? 'justify-center p-3' : 'space-x-3 px-3 py-2.5'
               } ${
                 isActive ? 'nav-item-active' : 'nav-item'
               }`}
             >
-              <Icon className="w-5 h-5 flex-shrink-0" />
+              <Icon className="w-[18px] h-[18px] flex-shrink-0" />
               {!isCollapsed && <span className="truncate">{item.label}</span>}
             </button>
           );
@@ -129,7 +129,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <FocusTimerWidget isCollapsed={isCollapsed} />
 
       {/* Collapse Toggle Footer */}
-      <div className="p-2 border-t border-border">
+      <div className="p-2">
         <button
           onClick={onToggleCollapse}
           aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}

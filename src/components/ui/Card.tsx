@@ -17,13 +17,13 @@ export const Card: React.FC<CardProps> = ({
 }) => {
   return (
     <div
-      className={`card-surface bg-bg-surface border border-border rounded-2xl p-5 sm:p-6 transition-all duration-200 hover:-translate-y-px ${className}`}
+      className={`bg-bg-surface border border-border rounded-xl p-5 sm:p-6 ${className}`}
     >
       {(title || action) && (
-        <div className="flex items-center justify-between mb-4 pb-3 border-b border-border/40">
+        <div className="flex items-start justify-between gap-3 mb-4">
           <div>
-            {title && <h3 className="font-semibold text-base sm:text-lg tracking-tight text-content-primary">{title}</h3>}
-            {subtitle && <p className="text-[11px] uppercase tracking-wider text-accent-text/70 mt-1">{subtitle}</p>}
+            {title && <h3 className="font-semibold text-base text-content-primary">{title}</h3>}
+            {subtitle && <p className="text-xs text-content-tertiary mt-0.5">{subtitle}</p>}
           </div>
           {action && <div>{action}</div>}
         </div>
