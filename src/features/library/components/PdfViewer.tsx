@@ -426,13 +426,22 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
    * store back immediately rather than waiting for GC. A page that scrolls out of
    * the render window would otherwise hold a multi-megabyte bitmap that nothing
    * releases promptly on a phone, and several of those are what blank the tab.
+   *
+   * The geometry record is forgotten FIRST, before the canvas lookup. React
+   * unmounts the <canvas> of a page that leaves the render window during the
+   * commit, BEFORE this effect cleanup runs, so there is usually no canvas to
+   * clear here. The early return used to keep the stale key, and the render
+   * pipeline then skipped the freshly remounted (blank) canvas when the user
+   * scrolled back: the page stayed blank until a zoom or resize changed the
+   * key. The canvas-zeroing stays for the case where the element is still
+   * mounted, so the memory is still handed back promptly.
    */
   const releaseCanvas = useCallback((n: number) => {
+    renderedKeyRef.current.delete(n);
     const canvas = canvasRefs.current.get(n);
     if (!canvas) return;
     canvas.width = 0;
     canvas.height = 0;
-    renderedKeyRef.current.delete(n);
   }, []);
   /**
    * Milliseconds since the last commit. A touchpad's momentum tail keeps firing
@@ -1381,6 +1390,10 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     setPageSizes({});
     renderTasksRef.current.clear();
     renderTokensRef.current.clear();
+    // Geometry records from the previous document must not survive it either:
+    // a same-numbered page of the new file mounts a blank canvas, and a stale
+    // key at the same geometry would make the render pipeline skip it.
+    renderedKeyRef.current.clear();
     resumeTargetRef.current = null;
     resumeDoneRef.current = false;
     // Disarm snippet tool when the file changes.
