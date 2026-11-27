@@ -40,7 +40,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
           splitOpen={splitOpen}
           onToggleSplit={onToggleSplit}
         />
-        <main key={activeTab} className="page-enter flex-1 min-h-0 px-4 py-4 md:px-8 md:py-6 max-w-6xl w-full mx-auto overflow-y-auto">
+        <main key={activeTab} className="page-enter flex-1 min-h-0 px-4 py-4 md:px-6 md:py-5 max-w-[2000px] w-full mx-auto overflow-y-auto">
           {children}
         </main>
         {overlay}
