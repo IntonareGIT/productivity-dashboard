@@ -131,8 +131,10 @@ const P = await import(`file://${outFile.replace(/\\/g, '/')}`);
 const {
   getChildren, searchAll, pathToResource, noteOpened, getRecentNodes,
   lastLocation, rememberLocation, labelForResource, pathToTopic, labelForNote,
-  DEFAULT_KINDS,
+  DEFAULT_KINDS, setPickerMode, getPickerMode,
 } = P;
+// The suite below was written for the folder view; topic view has its own section at the end.
+setPickerMode('folder');
 
 let pass = 0;
 let fail = 0;
@@ -528,7 +530,7 @@ check('keyboard: arrows, Enter, Backspace and Escape are handled',
 check('every row shows the file name with its path beneath',
   /node\.path && node\.path !== node\.name/.test(compSrc));
 check('the Recent section is rendered above the subjects, as a heading',
-  /i === recentCount/.test(compSrc) && />\s*Recent\s*</.test(compSrc));
+  /i === recentCount/.test(compSrc) && /'Recent'/.test(compSrc) && /showRecent && \(i === 0/.test(compSrc));
 check('the Recent section is suppressed while searching, where it would mislead',
   /!query\.trim\(\) && path\.length === 0/.test(compSrc));
 check('the component takes a slotKey so two panes keep separate state',
@@ -541,6 +543,30 @@ check('a dimmed row is genuinely disabled, not just styled that way',
   /disabled=\{Boolean\(node\.disabledReason\)\}/.test(compSrc));
 check('the current open file is marked for the row renderer',
   /aria-current=\{node\.isCurrent/.test(compSrc));
+
+/* ============ topic view ============ */
+check('topic view is the default for a fresh session', (setPickerMode('topic'), getPickerMode() === 'topic'));
+globalThis.__S.resources.set('r8', pdf('r8', 'topic-file', { topicId: 'n1', groupId: 'g1' }));
+const tNode = node('s1', 'subject', 'Thermodynamics');
+const tRoot = await getChildren(tNode, 'pdf', null, ['resource', 'note'], 'topic');
+const topicRows = tRoot.filter((r) => r.kind === 'topic');
+check('a subject lists its topics as folders', topicRows.some((r) => r.id === 'n1') && topicRows.some((r) => r.id === 'n3'), names(tRoot));
+check('files with no topic sit under a No topic bucket', topicRows.some((r) => r.name === 'No topic'));
+check('topic view hides resource groups at the subject level', !tRoot.some((r) => r.kind === 'group'));
+const inTopic = await getChildren(topicRows.find((r) => r.id === 'n1'), 'pdf', null, ['resource', 'note'], 'topic');
+check('a topic holds its notes row and its files', inTopic[0]?.kind === 'note' && inTopic.some((r) => r.name === 'topic-file'), names(inTopic));
+check('a file in a topic carries subject / topic / folder in its path', inTopic.find((r) => r.name === 'topic-file')?.path === 'Thermodynamics / Thermodynamics\'s Notes / Lectures', inTopic.find((r) => r.name === 'topic-file')?.path);
+const noTopic = await getChildren(topicRows.find((r) => r.name === 'No topic'), 'pdf', null, DEFAULT_KINDS, 'topic');
+check('the No topic bucket lists only untopiced files', noTopic.length > 0 && !noTopic.some((r) => r.name === 'topic-file'), names(noTopic));
+const pathT = await pathToResource('r8', 'topic');
+check('the picker opens a file at subject > topic in topic view', pathT.length === 2 && pathT[1].kind === 'topic', pathT.map((n) => n.name).join(' > '));
+const tHits = await searchAll('thermodynamics topic-file', 'pdf', null, DEFAULT_KINDS);
+check('search matches words across the path and the title', tHits.some((r) => r.name === 'topic-file'));
+const scoped = await searchAll('intro', 'pdf', null, DEFAULT_KINDS, 's2');
+check('search hits from the browsed subject come first', scoped[0]?.resource?.subjectId === 's2', names(scoped));
+const topicHit = await searchAll('recap', 'pdf', null, ['resource', 'note']);
+check('search finds a topic by name', topicHit.some((r) => r.kind === 'topic' && r.name === 'Lecture 4 recap'));
+globalThis.__S.resources.delete('r8');
 
 console.log(`\nfile-picker: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
