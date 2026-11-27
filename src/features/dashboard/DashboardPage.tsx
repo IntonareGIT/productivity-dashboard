@@ -1,7 +1,10 @@
 import React, { useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../db/db';
-import { TodayTimelineStrip } from './components/TodayTimelineStrip';
+import { TodayAgenda } from './components/TodayAgenda';
+import { StatStrip } from './components/StatStrip';
+import { buildAgenda } from './agenda';
+import { buildTargets } from './freeHours';
 import { PomodoroMiniWidget } from './components/PomodoroMiniWidget';
 import { UpcomingDeadlinesCard } from './components/UpcomingDeadlinesCard';
 import { WeeklyHoursCard } from './components/WeeklyHoursCard';
@@ -14,7 +17,6 @@ import { TodoCard } from './components/TodoCard';
 import { ReviewCard } from './components/ReviewCard';
 import type { NavTab } from '../../components/layout/Sidebar';
 import { format } from 'date-fns';
-import { occursOn } from '../calendar/recurrence';
 
 
 interface DashboardPageProps {
@@ -33,11 +35,6 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, fill =
 
   // Dexie live queries
   const allEvents = useLiveQuery(() => db.calendarEvents.toArray()) || [];
-  const today = new Date();
-  const events = useMemo(
-    () => allEvents.filter((e) => occursOn(e, today)),
-    [allEvents, todayStr]
-  );
 
   const schedules = useLiveQuery(() => db.weeklySchedules.toArray()) || [];
 
@@ -55,92 +52,80 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, fill =
   const topics = useLiveQuery(() => db.topics.toArray()) || [];
   const subjectName = (id: string) => subjects.find((s) => s.id === id)?.name ?? null;
 
-  // The card list, shared by both layouts so the split pane and the full page
-  // can never show different content.
+  const todos = useLiveQuery(() => db.todos.toArray(), []) || [];
+  const freeInfo = useMemo(() => {
+    const now = new Date();
+    const targets = buildTargets(assessments, subjects, topics, pendingResources, now);
+    return buildAgenda({ date: now, now, events: allEvents, overrides, schedules, todos, targets });
+  }, [allEvents, overrides, schedules, todos, assessments, subjects, topics, pendingResources]);
+
+  const agenda = (
+    <TodayAgenda
+      events={allEvents}
+      overrides={overrides}
+      schedules={schedules}
+      todos={todos}
+      assessments={assessments}
+      subjects={subjects}
+      topics={topics}
+      resources={pendingResources}
+      onNavigate={onNavigate}
+    />
+  );
+
+  const secondary = (
+    <div className="flex flex-col gap-4 min-w-0">
+      <InstinctUpdatesCard />
+      <TodoCard onNavigateTodos={() => onNavigate('todos')} />
+      <ReviewCard onNavigateLibrary={() => onNavigate('library')} />
+      <ExamCountdownCard
+        assessments={assessments}
+        subjects={subjects}
+        topics={topics}
+        onNavigateLibrary={() => onNavigate('library')}
+      />
+      <FreeHoursCard
+        events={allEvents}
+        overrides={overrides}
+        schedules={schedules}
+        assessments={assessments}
+        subjects={subjects}
+        topics={topics}
+        resources={pendingResources}
+        onNavigateFocus={() => onNavigate('focus')}
+      />
+      <UpcomingDeadlinesCard
+        resources={pendingResources}
+        assessments={assessments}
+        subjectName={subjectName}
+        onNavigateLibrary={() => onNavigate('library')}
+      />
+      <WeeklyHoursCard overrides={overrides} schedules={schedules} onNavigateShifts={() => onNavigate('shifts')} />
+      <PomodoroMiniWidget onNavigateFocus={() => onNavigate('focus')} />
+      <StatsCard onNavigate={onNavigate} />
+    </div>
+  );
+
   const cards = (
     <>
-      {/* Not-signed-in warning. Dashboard only, above the welcome heading. */}
       <SignInBanner />
-
-      {/* Welcome Banner */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-1">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-content-primary">
-            Welcome back
-          </h1>
-          <p className="text-xs sm:text-sm text-content-secondary mt-0.5">
-            Here is your daily snapshot across shifts, calendar, and focus tasks.
-          </p>
+      <StatStrip
+        assessments={assessments}
+        subjects={subjects}
+        topics={topics}
+        todos={todos}
+        freeMinutes={freeInfo.freeMinutes}
+        shiftLine={freeInfo.shiftLine}
+        onNavigate={onNavigate}
+      />
+      {fill ? (
+        <div className="flex flex-col gap-4">{agenda}{secondary}</div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          <div className="lg:col-span-8 min-w-0">{agenda}</div>
+          <aside className="lg:col-span-4 min-w-0" aria-label="More">{secondary}</aside>
         </div>
-      </div>
-
-      {/* Bento-grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {/* Full-width "today" strip merging calendar events + work shift */}
-        <TodayTimelineStrip
-          events={events}
-          overrides={overrides}
-          schedules={schedules}
-          onNavigateCalendar={() => onNavigate('calendar')}
-          onNavigateShifts={() => onNavigate('shifts')}
-        />
-
-        {/* Full-width: days left to each quiz/exam and what is still unstudied */}
-        <div className="md:col-span-3">
-          <ExamCountdownCard
-            assessments={assessments}
-            subjects={subjects}
-            topics={topics}
-            onNavigateLibrary={() => onNavigate('library')}
-          />
-        </div>
-
-        {/* Full-width: free study windows over the next three days */}
-        <div className="md:col-span-3">
-          <FreeHoursCard
-            events={allEvents}  /* 3 days ahead, so every event, not just today's */
-            overrides={overrides}
-            schedules={schedules}
-            assessments={assessments}
-            subjects={subjects}
-            topics={topics}
-            resources={pendingResources}
-            onNavigateFocus={() => onNavigate('focus')}
-          />
-        </div>
-
-        {/* Full-width: the From Instinct feed (daily summary + updates) */}
-        <div className="md:col-span-3">
-          <InstinctUpdatesCard />
-        <TodoCard onNavigateTodos={() => onNavigate('todos')} />
-        </div>
-
-        {/* Small card: Pomodoro mini-widget */}
-        <PomodoroMiniWidget onNavigateFocus={() => onNavigate('focus')} />
-
-        {/* Small card: upcoming deadlines */}
-        <UpcomingDeadlinesCard
-          resources={pendingResources}
-          assessments={assessments}
-          subjectName={subjectName}
-          onNavigateLibrary={() => onNavigate('library')}
-        />
-
-        {/* Small card: this week's hours (live from the shift tracker) */}
-        <WeeklyHoursCard
-          overrides={overrides}
-          schedules={schedules}
-          onNavigateShifts={() => onNavigate('shifts')}
-        />
-
-        {/* Small card: spaced review reminders for studied topics */}
-        <ReviewCard onNavigateLibrary={() => onNavigate('library')} />
-
-        {/* Full-width: stats view (days studied, focus hours, sessions, resources) */}
-        <div className="md:col-span-3">
-          <StatsCard onNavigate={onNavigate} />
-        </div>
-      </div>
+      )}
     </>
   );
 
