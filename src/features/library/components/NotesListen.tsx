@@ -183,7 +183,16 @@ export const NotesListen: React.FC<{
       if (run !== runRef.current) return; // a newer run owns the queue
       indexRef.current = at + 1;
       setIndex(at + 1);
-      speakFrom(at + 1);
+      // A cue tells the listener to look at the screen, so leave a moment to do
+      // it before the next sentence starts.
+      const wait = chunk.pauseAfter ?? 0;
+      if (wait > 0) {
+        window.setTimeout(() => {
+          if (run === runRef.current) speakFrom(at + 1);
+        }, wait);
+      } else {
+        speakFrom(at + 1);
+      }
     };
     utterance.onend = advance;
     utterance.onerror = (event) => {

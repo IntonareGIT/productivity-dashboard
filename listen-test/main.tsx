@@ -81,6 +81,18 @@ $$ \\omega_n = \\sqrt{\\frac{k}{m}} $$
 
 The natural frequency depends only on stiffness and mass, never on the amplitude of the motion. Halving the mass raises the natural frequency by a factor of 1.41.
 
+## 1.3 Damped free vibration
+
+The equation of motion is $m\ddot{x} + c\dot{x} + kx = 0$, and the damping ratio decides the shape of the response.
+
+$$ \zeta = \frac{c}{2\sqrt{km}} $$
+
+The general solution needs the roots of the characteristic equation, which is beyond a simple reading:
+
+$$ s_{1,2} = -\zeta\omega_n \pm \omega_n\sqrt{\zeta^2 - 1} $$
+
+![Logarithmic decrement between two peaks](/slides/vib-03-decrement.png)
+
 ## Self-check
 
 1. What happens to the natural frequency when the spring stiffness is quadrupled?
