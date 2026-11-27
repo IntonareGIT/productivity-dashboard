@@ -347,6 +347,7 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
   const [editingNotes, setEditingNotes] = useState(false);
   const [notesSaved, setNotesSaved] = useState(false);
   const [notesMinimized, setNotesMinimized] = useState(true);
+  const [manageTopics, setManageTopics] = useState(false);
   const [filter, setFilter] = useState('');
 
   const exportTopicNotes = (format: 'pdf' | 'word') => {
@@ -766,6 +767,11 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
         subtitle="Select a topic to see its notes + resources"
         action={
           <div className="flex items-center gap-2">
+            {manageTopics && (
+              <button onClick={() => setManageTopics(false)} className="px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary transition-colors">
+                Done
+              </button>
+            )}
             <button
               onClick={() => void sortTopicsByName()}
               className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary transition-colors"
@@ -781,6 +787,28 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
       >
         {sortedTopics.length === 0 ? (
           <p className="text-xs text-content-tertiary py-4 text-center">Creating the first topic…</p>
+        ) : !manageTopics ? (
+          <div className="flex items-center gap-2">
+            <div className="flex-1 min-w-0 flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Topics">
+              {sortedTopics.map((topic) => {
+                const active = selectedTopic?.id === topic.id;
+                return (
+                  <button
+                    key={topic.id}
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setSelectedTopicId(topic.id)}
+                    className={`shrink-0 max-w-[260px] truncate px-3 min-h-[40px] rounded-xl border text-xs font-semibold transition-colors ${active ? 'border-accent bg-accent-subtle/40 text-content-primary' : 'border-border bg-bg-elevated/40 text-content-secondary hover:border-border-strong hover:text-content-primary'}`}
+                  >
+                    {topic.title}
+                  </button>
+                );
+              })}
+            </div>
+            <button onClick={() => setManageTopics(true)} className="shrink-0 px-3 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary transition-colors">
+              Manage topics
+            </button>
+          </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
             {sortedTopics.map((topic, topicIdx) => {
