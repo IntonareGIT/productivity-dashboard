@@ -108,19 +108,60 @@ const HTML_NOTE = `<h2>2. Free vibration</h2>
 
 function Harness() {
   const fake = new URLSearchParams(window.location.search).has('fake');
+  // The rendered note bodies, so Listen can highlight the sentence it reads and
+  // can start from a selection made inside them.
+  const mdBodyRef = React.useRef<HTMLDivElement>(null);
+  const htmlBodyRef = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
     if (fake) installFakeSpeech();
   }, [fake]);
 
+  /**
+   * Selects part of one sentence in the rich-text note, so the "start from
+   * selection" path can be clicked through here. A real reader selects with the
+   * mouse; this just does the same thing a drag would.
+   */
+  const selectPartOfSentence = () => {
+    const root = htmlBodyRef.current;
+    if (!root) return;
+    const target = Array.from(root.querySelectorAll('p')).find((el) =>
+      (el.textContent ?? '').includes('damping ratio'),
+    );
+    if (!target) return;
+    const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node && !(node.textContent ?? '').includes('damping ratio')) node = walker.nextNode();
+    if (!node) return;
+    const at = (node.textContent ?? '').indexOf('damping ratio');
+    const range = document.createRange();
+    range.setStart(node, at);
+    range.setEnd(node, at + 'damping ratio'.length);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  };
+
   return (
     <div className="p-4 sm:p-6 max-w-2xl space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          data-testid="select-sentence"
+          onClick={selectPartOfSentence}
+          className="px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary"
+        >
+          Select "damping ratio" in note 2
+        </button>
+      </div>
       <Card title="Notes — 1-Fundamentals" subtitle="Markdown, LaTeX and code supported">
         <div className="flex items-center justify-between mb-2">
           <span className="flex items-center gap-1 text-xs font-semibold text-content-secondary">Hide notes</span>
         </div>
         <div className="mb-1 text-base font-semibold text-content-primary">1-Fundamentals</div>
-        <NotesListen text={NOTE} className="mb-2" />
-        <MarkdownNotes text={NOTE} />
+        <NotesListen text={NOTE} containerRef={mdBodyRef} className="mb-2" />
+        <div ref={mdBodyRef}>
+          <MarkdownNotes text={NOTE} />
+        </div>
         <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-border/50">
           <button className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary">
             Edit notes
@@ -129,8 +170,10 @@ function Harness() {
       </Card>
 
       <Card title="Notes — 2-Free vibration" subtitle="Rich-text note">
-        <NotesListen text={NOTE} html={HTML_NOTE} hasHtml className="mb-2" />
-        <MarkdownNotes text="" html={HTML_NOTE} hasHtml />
+        <NotesListen text={NOTE} html={HTML_NOTE} hasHtml containerRef={htmlBodyRef} className="mb-2" />
+        <div ref={htmlBodyRef}>
+          <MarkdownNotes text="" html={HTML_NOTE} hasHtml />
+        </div>
       </Card>
     </div>
   );

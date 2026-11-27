@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { endOfWeek, format, isBefore, isToday, isWithinInterval, parseISO, startOfWeek } from 'date-fns';
 import { ArrowDown, ArrowDownAZ, ArrowUp, ArrowLeft, BookOpenCheck, CalendarClock, Check, ChevronDown, ChevronUp, ChevronRight, Clock, Columns2, Copy, Download, ExternalLink, Eye, FileText, FlaskConical, ListChecks, Loader2, Pencil, Plus, Search, Timer, Trash2, AlertTriangle } from 'lucide-react';
@@ -346,6 +346,8 @@ export const SubjectDetail: React.FC<SubjectDetailProps> = ({ subject, onBack, o
 
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [editingNotes, setEditingNotes] = useState(false);
+  // The rendered note, so Listen can highlight the sentence it is reading.
+  const notesBodyRef = useRef<HTMLDivElement>(null);
   const [notesSaved, setNotesSaved] = useState(false);
   const [notesMinimized, setNotesMinimized] = useState(false);
   const [manageTopics, setManageTopics] = useState(false);
@@ -926,13 +928,16 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
                         text={selectedTopic.notes}
                         html={selectedTopic.contentHtml}
                         hasHtml={topicUsesHtml(selectedTopic)}
+                        containerRef={notesBodyRef}
                         className="mb-2"
                       />
-                      <MarkdownNotes
-                        text={selectedTopic.notes}
-                        html={selectedTopic.contentHtml}
-                        hasHtml={topicUsesHtml(selectedTopic)}
-                      />
+                      <div ref={notesBodyRef}>
+                        <MarkdownNotes
+                          text={selectedTopic.notes}
+                          html={selectedTopic.contentHtml}
+                          hasHtml={topicUsesHtml(selectedTopic)}
+                        />
+                      </div>
                       {notesSaved && <div className="flex justify-end mt-2"><span className="text-xs text-emerald-500 font-medium">Saved</span></div>}
                     </div>
                   )}

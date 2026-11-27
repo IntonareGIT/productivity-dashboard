@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Pencil } from 'lucide-react';
 import { db } from '../../db/db';
@@ -26,6 +26,8 @@ export const NotesPane: React.FC<NotesPaneProps> = ({ topicId }) => {
   ) as Topic | undefined;
 
   const [editing, setEditing] = useState(false);
+  // The rendered note, so Listen can highlight the sentence it is reading.
+  const notesBodyRef = useRef<HTMLDivElement>(null);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -88,13 +90,16 @@ export const NotesPane: React.FC<NotesPaneProps> = ({ topicId }) => {
           text={topic.notes}
           html={topic.contentHtml}
           hasHtml={topicUsesHtml(topic)}
+          containerRef={notesBodyRef}
           className="mb-2"
         />
-        <MarkdownNotes
-          text={topic.notes}
-          html={topic.contentHtml}
-          hasHtml={topicUsesHtml(topic)}
-        />
+        <div ref={notesBodyRef}>
+          <MarkdownNotes
+            text={topic.notes}
+            html={topic.contentHtml}
+            hasHtml={topicUsesHtml(topic)}
+          />
+        </div>
       </div>
       <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-border/50">
         {saved && (

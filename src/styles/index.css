@@ -106,3 +106,15 @@ button:not(:disabled):active, [role="button"]:active {
   button, [role="button"], a { transition: none; }
   button:not(:disabled):active, [role="button"]:active { transform: none; }
 }
+
+/* The sentence the Listen control is reading, painted with the CSS Custom
+   Highlight API so the note's own DOM is never touched. Flat: a tinted run of
+   text with a thin underline, in the theme's accent. */
+::highlight(notes-listen) {
+  background-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-primary);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}

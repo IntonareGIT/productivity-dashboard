@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pause, Play, Square, Volume2 } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronsDown, ChevronsUp, Pause, Play, RotateCcw, SkipBack, SkipForward, Square, Volume2 } from 'lucide-react';
 import { notesToSpeech } from './notesSpeech';
+import { chunksFromDom } from './notesDomChunks';
 
 /**
  * Read a note aloud with the voice the device already has.
@@ -11,12 +12,15 @@ import { notesToSpeech } from './notesSpeech';
  * Google's network voices in Chrome, Microsoft's natural voices in Edge — so
  * quality varies, and a device with no voices installed simply shows no button.
  *
+ * While it reads, the sentence being spoken is highlighted in the note itself
+ * and scrolled into view, and the controls move by sentence or by paragraph, so
+ * a note can be followed and re-heard without hunting for the place.
+ *
  * Two engine quirks shape the implementation:
  *
  *  - Desktop Chrome cuts a long utterance off after about fifteen seconds with
- *    Google's network voices, silently. Speaking one sentence at a time (the
- *    chunks `notesToSpeech` produces) is the robust fix, and it gives a progress
- *    count for free.
+ *    Google's network voices, silently. Speaking one sentence at a time is the
+ *    robust fix, and it is also what makes the highlight and the jumps exact.
  *  - Android's `pause()` is unreliable, so pausing there stops the queue and
  *    remembers the sentence to resume from.
  */
@@ -27,6 +31,34 @@ type Status = 'idle' | 'playing' | 'paused';
 const RATES = [0.75, 1, 1.25, 1.5, 2] as const;
 
 const RATE_KEY = 'notes-listen-rate';
+
+/** Name of the highlight in the CSS Custom Highlight registry. */
+const HIGHLIGHT_NAME = 'notes-listen';
+
+/**
+ * Two Listen controls can be on screen at once (a note in the library and a
+ * note in the split pane), and the stylesheet rule is a single
+ * `::highlight(notes-listen)`. So they share one highlight name, and only the
+ * instance that painted it last may clear it: otherwise a note going idle would
+ * wipe the highlight off the note that is still being read.
+ */
+let highlightOwner: object | null = null;
+
+const clearHighlight = (token: object) => {
+  if (highlightOwner !== token) return;
+  highlightOwner = null;
+  highlightRegistry()?.delete(HIGHLIGHT_NAME);
+};
+
+interface ListenChunk {
+  text: string;
+  heading?: boolean;
+  pauseAfter?: number;
+  /** Paragraph number, for the paragraph jumps. */
+  block?: number;
+  /** The sentence's place in the rendered note. */
+  range?: Range | null;
+}
 
 function readRate(): number {
   try {
@@ -110,6 +142,21 @@ const isAndroid = (): boolean =>
  */
 const readers = new Set<() => void>();
 
+/** Do two ranges overlap at all? */
+/** Whether two ranges in the same note overlap, touching counted as overlap. */
+function rangesIntersect(a: Range, b: Range): boolean {
+  return a.isPointInRange(b.startContainer, b.startOffset)
+    || a.isPointInRange(b.endContainer, b.endOffset)
+    || b.isPointInRange(a.startContainer, a.startOffset);
+}
+
+/** The highlight registry, where the browser has one. */
+function highlightRegistry(): { set: (name: string, h: unknown) => void; delete: (name: string) => void } | null {
+  const css = (window as unknown as { CSS?: { highlights?: unknown } }).CSS;
+  const registry = css?.highlights as { set: (n: string, h: unknown) => void; delete: (n: string) => void } | undefined;
+  return registry ?? null;
+}
+
 export const NotesListen: React.FC<{
   /** Markdown note body. Always the source when `hasHtml` is false. */
   text?: string;
@@ -117,9 +164,11 @@ export const NotesListen: React.FC<{
   html?: string;
   /** Whether `contentFormat` says the note is stored as HTML. */
   hasHtml?: boolean;
+  /** The rendered note, so the sentence being read can be highlighted in it. */
+  containerRef?: React.RefObject<HTMLElement | null>;
   className?: string;
-}> = ({ text = '', html, hasHtml = false, className = '' }) => {
-  const chunks = useMemo(() => notesToSpeech({ text, html, hasHtml }), [text, html, hasHtml]);
+}> = ({ text = '', html, hasHtml = false, containerRef, className = '' }) => {
+  const [chunks, setChunks] = useState<ListenChunk[]>([]);
   const [status, setStatus] = useState<Status>('idle');
   const [index, setIndex] = useState(0);
   const [rate, setRate] = useState<number>(() => readRate());
@@ -128,7 +177,7 @@ export const NotesListen: React.FC<{
 
   // Every handler reads through refs: an utterance started seconds ago must see
   // the CURRENT speed and voice, and a cancelled run must never resume itself.
-  const chunksRef = useRef(chunks);
+  const chunksRef = useRef<ListenChunk[]>(chunks);
   const indexRef = useRef(0);
   const rateRef = useRef(rate);
   const voiceRef = useRef(voice);
@@ -142,6 +191,20 @@ export const NotesListen: React.FC<{
   statusRef.current = status;
 
   const supported = typeof window !== 'undefined' && 'speechSynthesis' in window;
+
+  /**
+   * Build the sentences from the note as it is RENDERED, so each one can be
+   * highlighted where it sits. Falls back to the pure text pipeline if the note
+   * is not in the page (it is rendered below this control, so this runs once the
+   * DOM exists).
+   */
+  useEffect(() => {
+    const root = containerRef?.current;
+    const fromDom = root ? chunksFromDom(root) : [];
+    setChunks(fromDom.length
+      ? fromDom
+      : notesToSpeech({ text, html, hasHtml }).map((chunk) => ({ ...chunk })));
+  }, [text, html, hasHtml, containerRef]);
 
   const finish = useCallback(() => {
     runRef.current += 1;
@@ -215,21 +278,78 @@ export const NotesListen: React.FC<{
     setStatus('idle');
   }, [supported]);
 
+  /**
+   * Where to begin: the sentence containing the text Omar has selected, if he
+   * has selected any inside this note, otherwise the top.
+   */
+  /**
+   * The last selection made inside this note.
+   *
+   * Pressing the Listen button collapses the selection in every browser (a click
+   * on a button drops the range), so reading the live selection alone would
+   * always start at the top. Watching `selectionchange` keeps the range the
+   * reader actually highlighted, and start() uses it once.
+   */
+  const rememberedSelection = useRef<Range | null>(null);
+  useEffect(() => {
+    const root = containerRef?.current;
+    if (!root) return;
+    const remember = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return;
+      const range = selection.getRangeAt(0);
+      if (root.contains(range.startContainer) && root.contains(range.endContainer)) {
+        rememberedSelection.current = range.cloneRange();
+      }
+    };
+    document.addEventListener('selectionchange', remember);
+    return () => document.removeEventListener('selectionchange', remember);
+  }, [containerRef]);
+
+  const selectionStart = useCallback((): number => {
+    const root = containerRef?.current;
+    const selection = window.getSelection();
+    const live = selection && selection.rangeCount > 0 && !selection.isCollapsed
+      ? selection.getRangeAt(0)
+      : null;
+    const remembered = rememberedSelection.current;
+    const selected = live && root?.contains(live.startContainer)
+      ? live
+      : remembered && root?.contains(remembered.startContainer) && root.contains(remembered.endContainer)
+        ? remembered
+        : null;
+    if (!root || !selected) return 0;
+    const found = chunksRef.current.findIndex((chunk) => chunk.range && rangesIntersect(chunk.range, selected));
+    // One shot: after starting from a selection, a later Listen starts at the top.
+    rememberedSelection.current = null;
+    return found >= 0 ? found : 0;
+  }, [containerRef]);
+
   const start = useCallback(() => {
     if (!supported || chunksRef.current.length === 0) return;
-    // Silence any other note that is reading, then start this one from the top.
+    // Silence any other note that is reading, then start this one.
     readers.forEach((other) => { if (other !== stop) other(); });
     window.speechSynthesis.cancel();
     runRef.current += 1;
-    indexRef.current = 0;
-    setIndex(0);
-    speakFrom(0);
-  }, [speakFrom, stop, supported]);
+    const at = selectionStart();
+    indexRef.current = at;
+    setIndex(at);
+    speakFrom(at);
+  }, [selectionStart, speakFrom, stop, supported]);
 
-  useEffect(() => {
-    readers.add(stop);
-    return () => { readers.delete(stop); };
-  }, [stop]);
+  /** Move the reading position, and the voice with it if it is running. */
+  const seek = useCallback((target: number) => {
+    const list = chunksRef.current;
+    if (!list.length) return;
+    const at = Math.max(0, Math.min(target, list.length - 1));
+    indexRef.current = at;
+    setIndex(at);
+    if (statusRef.current === 'playing') {
+      runRef.current += 1;
+      window.speechSynthesis.cancel();
+      speakFrom(at);
+    }
+  }, [speakFrom]);
 
   const togglePause = useCallback(() => {
     if (!supported) return;
@@ -269,6 +389,28 @@ export const NotesListen: React.FC<{
     }
   }, [speakFrom]);
 
+  const jumpParagraph = useCallback((direction: 1 | -1) => {
+    const list = chunksRef.current;
+    const current = list[indexRef.current]?.block ?? 0;
+    if (direction === 1) {
+      const next = list.findIndex((chunk, i) => i > indexRef.current && (chunk.block ?? 0) > current);
+      seek(next >= 0 ? next : list.length - 1);
+      return;
+    }
+    let target = -1;
+    for (let i = indexRef.current - 1; i >= 0; i -= 1) {
+      if ((list[i].block ?? 0) < current) { target = i; break; }
+    }
+    if (target < 0) {
+      seek(0);
+      return;
+    }
+    // Walk back to the first sentence of that paragraph.
+    const block = list[target].block;
+    while (target > 0 && (list[target - 1].block ?? 0) === block) target -= 1;
+    seek(target);
+  }, [seek]);
+
   // A different note (or an edit to this one) invalidates the queue. Not on
   // mount, though: a pane opening beside a note that is already reading must not
   // silence it.
@@ -283,10 +425,39 @@ export const NotesListen: React.FC<{
   }, [chunks]);
 
   // Leaving the page, or the pane closing, must not leave a voice talking.
+  const instanceToken = useRef({});
   useEffect(() => () => {
     runRef.current += 1;
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+    clearHighlight(instanceToken.current);
   }, []);
+
+  /**
+   * Keep the highlight on the sentence being read, and bring it into view when
+   * it has scrolled out of sight.
+   */
+  useEffect(() => {
+    const registry = highlightRegistry();
+    if (!registry) return;
+    const chunk = status === 'idle' ? null : chunks[index];
+    const HighlightCtor = (window as unknown as { Highlight?: new (r: Range) => unknown }).Highlight;
+    if (!chunk?.range || !HighlightCtor) {
+      clearHighlight(instanceToken.current);
+      return;
+    }
+    highlightOwner = instanceToken.current;
+    registry.set(HIGHLIGHT_NAME, new HighlightCtor(chunk.range));
+    const rect = chunk.range.getBoundingClientRect();
+    const viewport = window.innerHeight;
+    if (rect.height > 0 && (rect.top < 96 || rect.bottom > viewport - 96)) {
+      const node = chunk.range.startContainer;
+      const el = node.nodeType === Node.ELEMENT_NODE
+        ? (node as Element)
+        : node.parentElement;
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+    return () => clearHighlight(instanceToken.current);
+  }, [chunks, index, status]);
 
   if (!supported || chunks.length === 0) return null;
 
@@ -294,16 +465,18 @@ export const NotesListen: React.FC<{
   // Show the sentence being read, not the number finished: the first one is
   // playing from the moment Listen is pressed.
   const spoken = Math.min(index + 1, chunks.length);
-  const percent = chunks.length ? Math.round((spoken / chunks.length) * 100) : 0;
+  const percent = chunks.length ? Math.round((index / chunks.length) * 100) : 0;
+
+  const navButton = 'flex items-center justify-center w-8 h-8 rounded-lg border border-border text-content-secondary hover:text-content-primary hover:border-border-strong transition-colors';
 
   return (
     <div className={className}>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-1.5">
         {!active ? (
           <button
             type="button"
             onClick={start}
-            title="Read this note aloud. Formulas, code and images are skipped."
+            title="Read this note aloud. Formulas, code and images are skipped. Select text first to start from there."
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-accent transition-colors"
           >
             <Volume2 className="w-3.5 h-3.5" /> Listen
@@ -318,13 +491,28 @@ export const NotesListen: React.FC<{
               {status === 'playing' ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
               {status === 'playing' ? 'Pause' : 'Resume'}
             </button>
+            <button type="button" onClick={() => seek(0)} title="Start from the beginning" aria-label="Start from the beginning" className={navButton}>
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+            <button type="button" onClick={() => seek(indexRef.current - 1)} title="Previous sentence" aria-label="Previous sentence" className={navButton}>
+              <SkipBack className="w-3.5 h-3.5" />
+            </button>
+            <button type="button" onClick={() => seek(indexRef.current + 1)} title="Next sentence" aria-label="Next sentence" className={navButton}>
+              <SkipForward className="w-3.5 h-3.5" />
+            </button>
+            <button type="button" onClick={() => jumpParagraph(-1)} title="Previous paragraph" aria-label="Previous paragraph" className={navButton}>
+              <ChevronsUp className="w-3.5 h-3.5" />
+            </button>
+            <button type="button" onClick={() => jumpParagraph(1)} title="Next paragraph" aria-label="Next paragraph" className={navButton}>
+              <ChevronsDown className="w-3.5 h-3.5" />
+            </button>
             <button
               type="button"
               onClick={stop}
               aria-label="Stop reading"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-border-strong transition-colors"
+              className="flex items-center justify-center w-8 h-8 rounded-lg border border-border text-content-secondary hover:text-content-primary hover:border-border-strong transition-colors"
             >
-              <Square className="w-3 h-3" /> Stop
+              <Square className="w-3 h-3" />
             </button>
             <select
               value={rate}
