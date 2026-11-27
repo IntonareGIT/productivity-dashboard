@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Pencil } from 'lucide-react';
 import { db } from '../../db/db';
 import { MarkdownNotes, NoteTitleInput } from '../library/components/MarkdownNotes';
+import { NotesListen } from '../library/components/NotesListen';
 import { NotesEditorBody } from '../library/components/NotesEditorBody';
 import { updateTopicNotes, topicUsesHtml } from '../library/libraryRepo';
 import type { Topic } from '../../types';
@@ -83,6 +84,12 @@ export const NotesPane: React.FC<NotesPaneProps> = ({ topicId }) => {
         className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 shrink-0 mb-1"
       />
       <div className="flex-1 min-h-0 overflow-auto">
+        <NotesListen
+          text={topic.notes}
+          html={topic.contentHtml}
+          hasHtml={topicUsesHtml(topic)}
+          className="mb-2"
+        />
         <MarkdownNotes
           text={topic.notes}
           html={topic.contentHtml}

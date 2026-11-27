@@ -7,6 +7,7 @@ import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
 import { toast } from '../../../stores/useToastStore';
 import { MarkdownNotes, NoteTitleInput } from './MarkdownNotes';
+import { NotesListen } from './NotesListen';
 import { NotesEditorBody } from './NotesEditorBody';
 import { TopicModal } from './TopicModal';
 import { ResourceModal } from './ResourceModal';
@@ -913,6 +914,12 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
                       <NoteTitleInput
                         topic={selectedTopic}
                         className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 mb-1"
+                      />
+                      <NotesListen
+                        text={selectedTopic.notes}
+                        html={selectedTopic.contentHtml}
+                        hasHtml={topicUsesHtml(selectedTopic)}
+                        className="mb-2"
                       />
                       <MarkdownNotes
                         text={selectedTopic.notes}
