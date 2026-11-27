@@ -19,7 +19,26 @@ import { getChildGroups, getDescendants, getAncestors, pathOf, parentOf } from '
  * Library tree, the AI tools and this picker all read.
  */
 
-export type PickerNodeKind = 'subject' | 'group' | 'note' | 'resource';
+export type PickerNodeKind = 'subject' | 'topic' | 'group' | 'note' | 'resource';
+
+/**
+ * How the picker lists the inside of a subject.
+ *
+ * 'topic' (the default): subject > topic > its notes and files, which is how the
+ * Library page itself is organised. 'folder': subject > resource groups, the
+ * original view. A resource's `topicId` and `groupId` are independent, so the two
+ * modes are two lenses over the same files; nothing is moved or changed.
+ */
+export type PickerMode = 'topic' | 'folder';
+let currentMode: PickerMode = 'topic';
+export const getPickerMode = (): PickerMode => currentMode;
+export const setPickerMode = (m: PickerMode): void => { currentMode = m; };
+
+/** Id of the "No topic" bucket for one subject (files with no topic). */
+export const noTopicId = (subjectId: string) => `none:${subjectId}`;
+/** The topic a resource sits in, or null when it has none (or a stale one). */
+const topicOf = (r: Resource, topics: Topic[]): Topic | null =>
+  (r.topicId ? topics.find((t) => t.id === r.topicId) ?? null : null);
 
 /**
  * Which kind of file the calling viewer can OPEN.
@@ -59,7 +78,7 @@ export const DEFAULT_KINDS: PickerKinds = ['resource'];
  * belonging to the subject itself, while a file is an attachment.
  */
 const kindRank = (k: PickerNodeKind): number =>
-  k === 'group' ? 0 : k === 'note' ? 1 : 2;
+  (k === 'group' || k === 'topic') ? 0 : k === 'note' ? 1 : 2;
 
 export interface PickerNode {
   id: string;
@@ -152,11 +171,14 @@ async function loadAll() {
 }
 
 /** "Subject / Lectures / Week 1" for one resource. */
-function fullPath(subjects: Subject[], groups: ResourceGroup[], r: Resource): string {
+function fullPath(subjects: Subject[], groups: ResourceGroup[], r: Resource, topics: Topic[] = []): string {
   const subjectName = subjects.find((s) => s.id === r.subjectId)?.name ?? '';
   const g = r.groupId ? groups.find((x) => x.id === r.groupId) : null;
   const gPath = g ? pathOf(groups, g.id) : '';
-  return [subjectName, gPath].filter(Boolean).join(' / ');
+  // The topic sits between subject and folder, so two files with the same name
+  // in different topics are told apart in search results and the pane header.
+  const topicName = topicOf(r, topics)?.title ?? '';
+  return [subjectName, topicName, gPath].filter(Boolean).join(' / ');
 }
 
 /**
@@ -194,10 +216,66 @@ export async function getChildren(
   want: PickerWant = 'pdf',
   currentResourceId?: string | null,
   kinds: PickerKinds = DEFAULT_KINDS,
+  mode: PickerMode = currentMode,
 ): Promise<PickerNode[]> {
   const { subjects, groups, resources, topics } = await loadAll();
   const wantNotes = kinds.includes('note');
   const wantFiles = kinds.includes('resource');
+
+  // ---- topic mode: subject > topic > notes + files
+  if (mode === 'topic' && node && (node.kind === 'subject' || node.kind === 'topic')) {
+    const out: PickerNode[] = [];
+    const fileNode = (r: Resource): PickerNode => ({
+      id: r.id, kind: 'resource', name: r.title, childCount: 0,
+      path: fullPath(subjects, groups, r, topics), resource: r,
+      disabledReason: disabledReasonFor(r, want) ?? undefined,
+      isCurrent: r.id === currentResourceId,
+    });
+    if (node.kind === 'subject') {
+      const inSubject = resources.filter((r) => r.subjectId === node.id && listableFor(r, want));
+      for (const t of topics.filter((x) => x.subjectId === node.id)) {
+        const n = (wantFiles ? inSubject.filter((r) => r.topicId === t.id).length : 0) + (wantNotes ? 1 : 0);
+        if (n === 0) continue;
+        out.push({
+          id: t.id, kind: 'topic', name: t.title, childCount: n,
+          path: t.title, topic: t,
+        });
+      }
+      out.sort((a, b) => ((a.topic?.order ?? 0) - (b.topic?.order ?? 0)) || byName(a, b));
+      const loose = wantFiles
+        ? inSubject.filter((r) => !topicOf(r, topics))
+        : [];
+      if (loose.length > 0) {
+        out.push({
+          id: noTopicId(node.id), kind: 'topic', name: 'No topic', childCount: loose.length,
+          path: 'No topic',
+        });
+      }
+      return out;
+    }
+    // Inside one topic (or the No topic bucket).
+    const subjectId = node.topic?.subjectId ?? node.id.replace(/^none:/, '');
+    const subjectName = subjects.find((s) => s.id === subjectId)?.name ?? '';
+    if (node.topic) {
+      const t = node.topic;
+      if (wantNotes) {
+        out.push({
+          id: t.id, kind: 'note', name: 'Notes', childCount: 0,
+          path: `${subjectName} / ${t.title}`, topic: t, isCurrent: t.id === currentResourceId,
+        });
+      }
+      if (wantFiles) {
+        const files = resources.filter((r) => r.topicId === t.id && listableFor(r, want));
+        files.sort((a, b) => ((a.order ?? 1e9) - (b.order ?? 1e9)) || byName({ name: a.title }, { name: b.title }));
+        out.push(...files.map(fileNode));
+      }
+    } else if (wantFiles) {
+      const files = resources.filter((r) => r.subjectId === subjectId && listableFor(r, want) && !topicOf(r, topics));
+      files.sort((a, b) => byName({ name: a.title }, { name: b.title }));
+      out.push(...files.map(fileNode));
+    }
+    return out;
+  }
 
   // ---- the root: every subject
   if (!node) {
@@ -206,9 +284,10 @@ export async function getChildren(
       const loose = resources.filter((r) => r.subjectId === s.id && !r.groupId && listableFor(r, want)).length;
       // A note is never inside a group, so it only ever adds at the subject level.
       const notes = wantNotes ? topics.filter((t) => t.subjectId === s.id).length : 0;
+      const topicCount = topics.filter((t) => t.subjectId === s.id).length;
       return {
         id: s.id, kind: 'subject' as const, name: s.name,
-        childCount: folders + loose + notes, path: s.name,
+        childCount: mode === 'topic' ? topicCount : folders + loose + notes, path: s.name,
       };
     });
   }
@@ -247,7 +326,7 @@ export async function getChildren(
         const disabled = disabledReasonFor(r, want);
         out.push({
           id: r.id, kind: 'resource', name: r.title, childCount: 0,
-          path: fullPath(subjects, groups, r), resource: r,
+          path: fullPath(subjects, groups, r, topics), resource: r,
           disabledReason: disabled ?? undefined,
           isCurrent: r.id === currentResourceId,
         });
@@ -291,9 +370,13 @@ export async function searchAll(
   want: PickerWant = 'pdf',
   currentResourceId?: string | null,
   kinds: PickerKinds = DEFAULT_KINDS,
+  scopeSubjectId?: string | null,
 ): Promise<PickerNode[]> {
   const q = query.trim().toLowerCase();
   if (!q) return [];
+  // Every word must appear somewhere in "subject / topic / folder title", in any
+  // order, so "vibrations lecture 3" finds "Lecture 3" inside Vibrations.
+  const words = q.split(/\s+/).filter(Boolean);
   const { subjects, groups, resources, topics } = await loadAll();
   const wantNotes = kinds.includes('note');
   const wantFiles = kinds.includes('resource');
@@ -306,6 +389,16 @@ export async function searchAll(
     const hasNotes = wantNotes && topics.some((t) => t.subjectId === s.id);
     if (!subjectHasOpenable(s.id, groups, resources, want) && !hasNotes) continue;
     out.push({ id: s.id, kind: 'subject', name: s.name, childCount: 0, path: s.name });
+  }
+
+  // Topics: a hit opens that topic's list, so "vibr" finds the topic itself.
+  for (const t of topics) {
+    if (!t.title.toLowerCase().includes(q)) continue;
+    const subjectName = subjects.find((s) => s.id === t.subjectId)?.name ?? '';
+    out.push({
+      id: t.id, kind: 'topic', name: t.title, childCount: 0,
+      path: subjectName, topic: t,
+    });
   }
 
   for (const g of groups) {
@@ -331,11 +424,12 @@ export async function searchAll(
   }
   if (wantFiles) {
     for (const r of resources) {
-      if (!r.title.toLowerCase().includes(q)) continue;
       if (!listableFor(r, want) || disabledReasonFor(r, want)) continue;
+      const hay = `${fullPath(subjects, groups, r, topics)} ${r.title}`.toLowerCase();
+      if (!words.every((w) => hay.includes(w))) continue;
       out.push({
         id: r.id, kind: 'resource', name: r.title, childCount: 0,
-        path: fullPath(subjects, groups, r), resource: r,
+        path: fullPath(subjects, groups, r, topics), resource: r,
         isCurrent: r.id === currentResourceId,
       });
     }
@@ -343,8 +437,14 @@ export async function searchAll(
   // Files first: someone searching is usually after a file, not a folder. Then
   // notes, then groups, then subjects, each naturally sorted.
   const rank = (k: PickerNodeKind) =>
-    k === 'resource' ? 0 : k === 'note' ? 1 : k === 'group' ? 2 : 3;
-  return out.sort((a, b) => (a.kind === b.kind ? byName(a, b) : rank(a.kind) - rank(b.kind)));
+    k === 'resource' ? 0 : k === 'note' ? 1 : k === 'topic' ? 2 : k === 'group' ? 3 : 4;
+  // Hits from the subject the user is browsing come first, so searching from
+  // inside Heat Transfer does not bury its files under other subjects'.
+  const subjectOf = (n: PickerNode) =>
+    n.resource?.subjectId ?? n.topic?.subjectId ?? n.group?.subjectId ?? (n.kind === 'subject' ? n.id : null);
+  const inScope = (n: PickerNode) => (scopeSubjectId && subjectOf(n) === scopeSubjectId ? 0 : 1);
+  return out.sort((a, b) => (inScope(a) - inScope(b))
+    || (a.kind === b.kind ? byName(a, b) : rank(a.kind) - rank(b.kind)));
 }
 
 /**
@@ -385,8 +485,8 @@ function subjectHasOpenable(
  * Used to OPEN the picker at the currently open file, so picking a neighbour is
  * one tap rather than a walk down from the root.
  */
-export async function pathToResource(resourceId: string): Promise<PickerNode[]> {
-  const { subjects, groups, resources } = await loadAll();
+export async function pathToResource(resourceId: string, mode: PickerMode = currentMode): Promise<PickerNode[]> {
+  const { subjects, groups, resources, topics } = await loadAll();
   const r = resources.find((x) => x.id === resourceId);
   if (!r) return [];
   const subject = subjects.find((s) => s.id === r.subjectId);
@@ -394,6 +494,13 @@ export async function pathToResource(resourceId: string): Promise<PickerNode[]> 
   const out: PickerNode[] = [{
     id: subject.id, kind: 'subject', name: subject.name, childCount: 0, path: subject.name,
   }];
+  if (mode === 'topic') {
+    const t = topicOf(r, topics);
+    out.push(t
+      ? { id: t.id, kind: 'topic', name: t.title, childCount: 0, path: t.title, topic: t }
+      : { id: noTopicId(subject.id), kind: 'topic', name: 'No topic', childCount: 0, path: 'No topic' });
+    return out;
+  }
   if (r.groupId) {
     // `getAncestors` returns the minimal GroupRef shape, so every row is
     // re-read from the full list: the payload must be a real ResourceGroup.
@@ -421,15 +528,19 @@ export async function pathToResource(resourceId: string): Promise<PickerNode[]> 
  * "start where the current item is" works for a notes pane exactly as it does
  * for a PDF, rather than the picker snapping to the root.
  */
-export async function pathToTopic(topicId: string): Promise<PickerNode[]> {
+export async function pathToTopic(topicId: string, mode: PickerMode = currentMode): Promise<PickerNode[]> {
   const { subjects, topics } = await loadAll();
   const t = topics.find((x) => x.id === topicId);
   if (!t) return [];
   const subject = subjects.find((s) => s.id === t.subjectId);
   if (!subject) return [];
-  return [{
+  const root: PickerNode = {
     id: subject.id, kind: 'subject', name: subject.name, childCount: 0, path: subject.name,
-  }];
+  };
+  if (mode === 'topic') {
+    return [root, { id: t.id, kind: 'topic', name: t.title, childCount: 0, path: t.title, topic: t }];
+  }
+  return [root];
 }
 
 /* ===== the last place the picker was left, per session ===== */
@@ -458,10 +569,10 @@ export function lastLocation(slotKey: string): PickerNode[] | null {
 
 /** The label for a resource: its title with its full path beside it. */
 export async function labelForResource(resourceId: string): Promise<{ title: string; path: string } | null> {
-  const { subjects, groups, resources } = await loadAll();
+  const { subjects, groups, resources, topics } = await loadAll();
   const r = resources.find((x) => x.id === resourceId);
   if (!r) return null;
-  return { title: r.title, path: fullPath(subjects, groups, r) };
+  return { title: r.title, path: fullPath(subjects, groups, r, topics) };
 }
 
 /**

@@ -5,9 +5,9 @@ import type { Resource, Topic } from '../../../types';
 import { Z } from '../../../components/ui/zIndex';
 import {
   DEFAULT_KINDS,
-  getChildren, getRecentNodes, lastLocation, noteOpened, pathToResource,
-  pathToTopic, rememberLocation, searchAll,
-  type PickerKinds, type PickerNode, type PickerWant,
+  getChildren, getPickerMode, getRecentNodes, lastLocation, noteOpened, pathToResource,
+  pathToTopic, rememberLocation, searchAll, setPickerMode,
+  type PickerKinds, type PickerMode, type PickerNode, type PickerWant,
 } from './filePickerData';
 
 export interface FilePickerProps {
@@ -63,6 +63,13 @@ export const FilePicker: React.FC<FilePickerProps> = ({
   const searchRef = useRef<HTMLInputElement>(null);
   const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [cursor, setCursor] = useState(0);
+  const [mode, setModeState] = useState<PickerMode>(getPickerMode());
+  const setMode = (m: PickerMode) => {
+    setPickerMode(m);
+    setModeState(m);
+    // Keep the subject, drop the level below it: its meaning changes with the view.
+    setPath((p) => p.slice(0, 1).filter((n) => n.kind === 'subject'));
+  };
 
   // A note counts as "the current item" exactly as a file does, so the picker
   // opens on the subject the open note lives in and highlights that note.
@@ -78,13 +85,14 @@ export const FilePicker: React.FC<FilePickerProps> = ({
     setRecents(getRecentNodes());
     void (async () => {
       const start = currentTopic
-        ? await pathToTopic(currentTopic.id)
+        ? await pathToTopic(currentTopic.id, mode)
         : currentResource
-          ? await pathToResource(currentResource.id)
+          ? await pathToResource(currentResource.id, mode)
           : (lastLocation(slotKey) ?? []);
       if (cancelled) return;
       setPath(start);
     })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, currentResource?.id, currentTopic?.id, slotKey]);
 
   const current = path.length > 0 ? path[path.length - 1] : null;
@@ -102,15 +110,16 @@ export const FilePicker: React.FC<FilePickerProps> = ({
     void (async () => {
       const q = query.trim();
       const list = q
-        ? await searchAll(q, want, currentId, kinds)
-        : await getChildren(current, want, currentId, kinds);
+        ? await searchAll(q, want, currentId, kinds, path[0]?.kind === 'subject' ? path[0].id : null)
+        : await getChildren(current, want, currentId, kinds, mode);
       if (cancelled) return;
       setRows(list);
       setCursor(0);
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [open, current, query, want, currentId, kinds]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, current, query, want, currentId, kinds, mode]);
 
   // Focus the search box on open, so typing works without a tap.
   useEffect(() => {
@@ -151,6 +160,15 @@ export const FilePicker: React.FC<FilePickerProps> = ({
       onClose();
       return;
     }
+    if (node.kind === 'topic' && node.topic && query.trim()) {
+      // A topic found by search: open it with its subject in the breadcrumb,
+      // in topic view, so Back goes to the subject rather than the root.
+      setPickerMode('topic');
+      setModeState('topic');
+      setQuery('');
+      void pathToTopic(node.topic.id, 'topic').then(setPath);
+      return;
+    }
     if (node.kind !== 'resource' || !node.resource) {
       setPath((p) => [...p, node]);
       return;
@@ -158,7 +176,7 @@ export const FilePicker: React.FC<FilePickerProps> = ({
     noteOpened(node);
     onPick(node.resource);
     onClose();
-  }, [onPick, onPickNote, onClose]);
+  }, [onPick, onPickNote, onClose, query]);
 
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
@@ -236,14 +254,36 @@ return createPortal(
           </button>
         </div>
 
-        {/* Search covers every subject and group at once. */}
+        {/* How to list a subject's contents: by topic (like the Library) or by
+            folder (resource groups). Only shown at the subject level and below. */}
+        {path.length > 0 && !query.trim() && (
+          <div className="flex items-center gap-1 px-3 pt-2" role="group" aria-label="Browse by">
+            <span className="text-[10px] uppercase tracking-wider text-content-tertiary mr-1">Browse by</span>
+            {(['topic', 'folder'] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                aria-pressed={mode === m}
+                data-picker-mode={m}
+                className={`px-2.5 min-h-[30px] rounded-full text-[11px] font-medium border transition-colors ${
+                  mode === m
+                    ? 'bg-accent-subtle text-accent border-accent'
+                    : 'text-content-secondary border-border hover:bg-bg-elevated'}`}
+              >
+                {m === 'topic' ? 'Topics' : 'Folders'}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Search covers every subject, topic and group at once. */}
         <div className="relative px-3 py-2 border-b border-border/60">
           <Search className="w-3.5 h-3.5 absolute left-5 top-1/2 -translate-y-1/2 text-content-tertiary" />
           <input
             ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search all files and folders…"
+            placeholder="Search all files, topics and folders…"
             aria-label="Search files and folders"
             className="w-full bg-bg-elevated border border-border rounded-lg pl-8 pr-3 py-2 text-xs text-content-primary outline-none focus:border-accent placeholder:text-content-tertiary"
           />
@@ -258,7 +298,7 @@ return createPortal(
             </p>
           ) : (
             visible.map((node, i) => {
-              const isFolder = node.kind !== 'resource';
+              const isFolder = node.kind !== 'resource' && node.kind !== 'note';
               return (
                 <React.Fragment key={`${node.kind}-${node.id}-${i}`}>
                   {/* The Recent section heading. Not a button: it labels the rows
