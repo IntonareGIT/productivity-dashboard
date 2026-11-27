@@ -860,7 +860,7 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
             <p className="text-xs text-content-tertiary">No topic selected.</p>
           ) : (
             <div className="mt-2">
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                 <button
                   onClick={() => setNotesMinimized((p) => !p)}
                   aria-label={notesMinimized ? 'Expand notes' : 'Collapse notes'}
@@ -869,6 +869,12 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
                   {notesMinimized ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
                   {notesMinimized ? 'Show notes' : 'Hide notes'}
                 </button>
+                <div className="flex flex-wrap items-center gap-2">
+                {!editingNotes && !notesMinimized && (
+                  <button onClick={() => setEditingNotes(true)} className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-accent transition-colors">
+                    <Pencil className="w-3 h-3" /> Edit notes
+                  </button>
+                )}
                 {selectedTopic.notes && !editingNotes && (
                   <>
                     <button
@@ -887,6 +893,7 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
                     </button>
                   </>
                 )}
+                </div>
               </div>
               {notesMinimized ? null : (
                 <div className="mt-3">
@@ -926,12 +933,7 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
                         html={selectedTopic.contentHtml}
                         hasHtml={topicUsesHtml(selectedTopic)}
                       />
-                      <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-border/50">
-                        {notesSaved && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
-                        <button onClick={() => setEditingNotes(true)} className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-border-strong transition-colors">
-                          <Pencil className="w-3 h-3" /> Edit notes
-                        </button>
-                      </div>
+                      {notesSaved && <div className="flex justify-end mt-2"><span className="text-xs text-emerald-500 font-medium">Saved</span></div>}
                     </div>
                   )}
                 </div>
