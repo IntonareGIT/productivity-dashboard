@@ -862,83 +862,88 @@ blockquote{border-left:3px solid #999;margin:.5rem 0;padding:.4rem .8rem}</style
             <p className="text-xs text-content-tertiary">No topic selected.</p>
           ) : (
             <div className="mt-2">
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                <button
-                  onClick={() => setNotesMinimized((p) => !p)}
-                  aria-label={notesMinimized ? 'Expand notes' : 'Collapse notes'}
-                  className="flex items-center gap-1 text-xs font-semibold text-content-secondary hover:text-content-primary transition-colors"
-                >
-                  {notesMinimized ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
-                  {notesMinimized ? 'Show notes' : 'Hide notes'}
-                </button>
-                <div className="flex flex-wrap items-center gap-2">
-                {!editingNotes && !notesMinimized && (
-                  <button onClick={() => setEditingNotes(true)} className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-accent transition-colors">
-                    <Pencil className="w-3 h-3" /> Edit notes
-                  </button>
-                )}
-                {selectedTopic.notes && !editingNotes && (
-                  <>
-                    <button
-                      onClick={() => exportTopicNotes('pdf')}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-accent transition-colors"
-                      title="Export notes as PDF"
-                    >
-                      <Download className="w-3 h-3" /> PDF
-                    </button>
-                    <button
-                      onClick={() => exportTopicNotes('word')}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-accent transition-colors"
-                      title="Export notes as Word"
-                    >
-                      <Download className="w-3 h-3" /> Word
-                    </button>
-                  </>
-                )}
+              {editingNotes ? (
+                <div>
+                  <NoteTitleInput
+                    topic={selectedTopic}
+                    className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 mb-1"
+                  />
+                  <NotesEditorBody
+                    topic={selectedTopic}
+                    minHeight="min-h-[280px]"
+                    onSaved={() => {
+                      setNotesSaved(true);
+                      window.setTimeout(() => setNotesSaved(false), 1500);
+                    }}
+                  />
+                  <div className="flex items-center justify-end gap-2 mt-2">
+                    <button onClick={() => setEditingNotes(false)} className="px-4 min-h-[40px] rounded-xl text-xs text-content-secondary hover:text-content-primary transition-colors">Done</button>
+                    {notesSaved && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
+                  </div>
                 </div>
-              </div>
-              {notesMinimized ? null : (
-                <div className="mt-3">
-                  {editingNotes ? (
-                    <div>
+              ) : (
+                <div>
+                  {/* The note's own header: the title, the Listen transport and
+                      the actions that used to sit above or below the body. The
+                      body scrolls in its own box UNDER this header, so the
+                      transport stays put while a long note moves, including when
+                      Listen scrolls the note to the sentence it is reading. */}
+                  <div className="flex flex-col gap-1.5 pb-2 border-b border-border/60">
+                    <div className="flex flex-wrap items-center gap-2">
                       <NoteTitleInput
                         topic={selectedTopic}
-                        className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 mb-1"
+                        className="flex-1 basis-40 min-w-0 bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60"
                       />
-                      <NotesEditorBody
-                        topic={selectedTopic}
-                        minHeight="min-h-[280px]"
-                        onSaved={() => {
-                          setNotesSaved(true);
-                          window.setTimeout(() => setNotesSaved(false), 1500);
-                        }}
-                      />
-                      <div className="flex items-center justify-end gap-2 mt-2">
-                        <button onClick={() => setEditingNotes(false)} className="px-4 min-h-[40px] rounded-xl text-xs text-content-secondary hover:text-content-primary transition-colors">Done</button>
-                        {notesSaved && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
-                      </div>
+                      {notesSaved && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
+                      {!notesMinimized && (
+                        <button onClick={() => setEditingNotes(true)} className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-accent transition-colors shrink-0">
+                          <Pencil className="w-3 h-3" /> Edit notes
+                        </button>
+                      )}
+                      {!notesMinimized && selectedTopic.notes && (
+                        <>
+                          <button
+                            onClick={() => exportTopicNotes('pdf')}
+                            className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-accent transition-colors shrink-0"
+                            title="Export notes as PDF"
+                          >
+                            <Download className="w-3 h-3" /> PDF
+                          </button>
+                          <button
+                            onClick={() => exportTopicNotes('word')}
+                            className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs font-semibold text-content-secondary hover:text-content-primary hover:border-accent transition-colors shrink-0"
+                            title="Export notes as Word"
+                          >
+                            <Download className="w-3 h-3" /> Word
+                          </button>
+                        </>
+                      )}
+                      <button
+                        onClick={() => setNotesMinimized((p) => !p)}
+                        aria-label={notesMinimized ? 'Expand notes' : 'Collapse notes'}
+                        title={notesMinimized ? 'Show the note' : 'Hide the note'}
+                        className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold text-content-secondary hover:text-content-primary transition-colors shrink-0"
+                      >
+                        {notesMinimized ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+                        {notesMinimized ? 'Show notes' : 'Hide notes'}
+                      </button>
                     </div>
-                  ) : (
-                    <div>
-                      <NoteTitleInput
-                        topic={selectedTopic}
-                        className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 mb-1"
-                      />
+                    {!notesMinimized && (
                       <NotesListen
                         text={selectedTopic.notes}
                         html={selectedTopic.contentHtml}
                         hasHtml={topicUsesHtml(selectedTopic)}
                         containerRef={notesBodyRef}
-                        className="mb-2"
                       />
-                      <div ref={notesBodyRef}>
-                        <MarkdownNotes
-                          text={selectedTopic.notes}
-                          html={selectedTopic.contentHtml}
-                          hasHtml={topicUsesHtml(selectedTopic)}
-                        />
-                      </div>
-                      {notesSaved && <div className="flex justify-end mt-2"><span className="text-xs text-emerald-500 font-medium">Saved</span></div>}
+                    )}
+                  </div>
+                  {notesMinimized ? null : (
+                    <div ref={notesBodyRef} className="mt-3 max-h-[68vh] overflow-y-auto">
+                      <MarkdownNotes
+                        text={selectedTopic.notes}
+                        html={selectedTopic.contentHtml}
+                        hasHtml={topicUsesHtml(selectedTopic)}
+                      />
                     </div>
                   )}
                 </div>

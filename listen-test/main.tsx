@@ -153,25 +153,35 @@ function Harness() {
           Select "damping ratio" in note 2
         </button>
       </div>
+      {/* The Library card, as it is now: ONE pinned header carrying the note
+          title, the Listen transport and Edit notes, with the body scrolling
+          underneath it. */}
       <Card title="Notes — 1-Fundamentals" subtitle="Markdown, LaTeX and code supported">
-        <div className="flex items-center justify-between mb-2">
-          <span className="flex items-center gap-1 text-xs font-semibold text-content-secondary">Hide notes</span>
+        <div className="flex flex-col gap-1.5 pb-2 border-b border-border/60">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="flex-1 basis-40 min-w-0 text-base font-semibold text-content-primary truncate">1-Fundamentals</span>
+            <button className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary shrink-0">
+              Edit notes
+            </button>
+          </div>
+          <NotesListen text={NOTE} containerRef={mdBodyRef} />
         </div>
-        <div className="mb-1 text-base font-semibold text-content-primary">1-Fundamentals</div>
-        <NotesListen text={NOTE} containerRef={mdBodyRef} className="mb-2" />
-        <div ref={mdBodyRef}>
+        <div ref={mdBodyRef} className="mt-3 max-h-[68vh] overflow-y-auto">
           <MarkdownNotes text={NOTE} />
-        </div>
-        <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-border/50">
-          <button className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary">
-            Edit notes
-          </button>
         </div>
       </Card>
 
       <Card title="Notes — 2-Free vibration" subtitle="Rich-text note">
-        <NotesListen text={NOTE} html={HTML_NOTE} hasHtml containerRef={htmlBodyRef} className="mb-2" />
-        <div ref={htmlBodyRef}>
+        <div className="flex flex-col gap-1.5 pb-2 border-b border-border/60">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="flex-1 basis-40 min-w-0 text-base font-semibold text-content-primary truncate">2-Free vibration</span>
+            <button className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary shrink-0">
+              Edit notes
+            </button>
+          </div>
+          <NotesListen text={NOTE} html={HTML_NOTE} hasHtml containerRef={htmlBodyRef} />
+        </div>
+        <div ref={htmlBodyRef} className="mt-3 max-h-[68vh] overflow-y-auto">
           <MarkdownNotes text="" html={HTML_NOTE} hasHtml />
         </div>
       </Card>

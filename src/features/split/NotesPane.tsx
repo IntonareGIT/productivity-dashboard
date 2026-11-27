@@ -80,19 +80,37 @@ export const NotesPane: React.FC<NotesPaneProps> = ({ topicId }) => {
       </div>
     </div>
   ) : (
-    <div className="p-3 flex flex-col h-full min-h-0">
-      <NoteTitleInput
-        topic={topic}
-        className="w-full bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60 shrink-0 mb-1"
-      />
-      <div className="flex-1 min-h-0 overflow-auto">
+    <div className="flex flex-col h-full min-h-0">
+      {/* The note's own header: the title, the Listen transport and Edit notes.
+          The body scrolls in the box below it, so the transport never leaves the
+          screen while a long note moves — and there is no separate bar at the
+          bottom any more. */}
+      <div className="shrink-0 flex flex-col gap-1.5 px-3 pt-2.5 pb-2 border-b border-border/60">
+        <div className="flex flex-wrap items-center gap-2">
+          <NoteTitleInput
+            topic={topic}
+            className="flex-1 basis-40 min-w-0 bg-transparent border-none outline-none text-base font-semibold text-content-primary placeholder:text-content-tertiary/60"
+          />
+          {saved && (
+            <span className="flex items-center gap-1 text-xs text-emerald-500 font-medium">
+              <Check className="w-3.5 h-3.5" /> Saved
+            </span>
+          )}
+          <button
+            onClick={() => setEditing(true)}
+            className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary transition-colors shrink-0"
+          >
+            <Pencil className="w-3.5 h-3.5" /> Edit notes
+          </button>
+        </div>
         <NotesListen
           text={topic.notes}
           html={topic.contentHtml}
           hasHtml={topicUsesHtml(topic)}
           containerRef={notesBodyRef}
-          className="mb-2"
         />
+      </div>
+      <div className="flex-1 min-h-0 overflow-auto px-3 py-3">
         <div ref={notesBodyRef}>
           <MarkdownNotes
             text={topic.notes}
@@ -100,19 +118,6 @@ export const NotesPane: React.FC<NotesPaneProps> = ({ topicId }) => {
             hasHtml={topicUsesHtml(topic)}
           />
         </div>
-      </div>
-      <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-border/50">
-        {saved && (
-          <span className="flex items-center gap-1 text-xs text-emerald-500 font-medium">
-            <Check className="w-3.5 h-3.5" /> Saved
-          </span>
-        )}
-        <button
-          onClick={() => setEditing(true)}
-          className="flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-border text-xs font-semibold text-content-secondary hover:text-content-primary transition-colors"
-        >
-          <Pencil className="w-3.5 h-3.5" /> Edit notes
-        </button>
       </div>
     </div>
   );
