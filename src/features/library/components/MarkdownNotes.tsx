@@ -24,20 +24,19 @@ export const NoteTitleInput: React.FC<{
   topic: Topic;
   className?: string;
 }> = ({ topic, className }) => {
-  const [draft, setDraft] = useState(topic.title);
-  const draftRef = useRef(topic.title);
+  const stored = (topic.title ?? '').trim();
+  const [draft, setDraft] = useState(topic.title ?? '');
+  const draftRef = useRef(draft);
   const timer = useRef<number | null>(null);
   draftRef.current = draft;
 
-  const stored = (topic.title ?? '').trim();
-
-  // Adopt an external change (topic switch, or a sync landing) — but never while
-  // the user has unsaved edits of their own, or the input would fight them.
-  useEffect(() => {
-    if (draftRef.current.trim() !== stored) return;
-    setDraft(topic.title);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topic.id, topic.title]);
+  // The note this input is showing, and that note's stored title as of the last
+  // time the input agreed with it. A change from OUTSIDE the draft is only
+  // recognisable against these two: the stored title alone cannot say whether it
+  // moved, and comparing the draft to the INCOMING title reads every outside
+  // change as "the user has unsaved edits", so the input never adopts anything.
+  const openIdRef = useRef(topic.id);
+  const openStoredRef = useRef(stored);
 
   const clearTimer = () => {
     if (timer.current !== null) {
@@ -46,18 +45,55 @@ export const NoteTitleInput: React.FC<{
     }
   };
 
-  const flush = () => {
-    clearTimer();
-    const next = draftRef.current.trim();
+  /** Write `value` to note `id`, unless it is empty or already what is stored. */
+  const commit = (id: string, value: string, against: string) => {
+    const next = value.trim();
     // An empty title falls back to the default in the repo, so a note is never
     // left unlabelled in a list.
-    if (!next || next === stored) return;
-    void setTopicTitle(topic.id, draftRef.current);
+    if (!next || next === against) return;
+    void setTopicTitle(id, value);
+  };
+
+  // Adopt changes made outside this input, which are two different things:
+  //
+  //  - a DIFFERENT note is open (the Library's topic list, or the split pane's
+  //    header, was used): the new note's title ALWAYS wins. The old draft belongs
+  //    to the note being left, so it is committed to that note first - switching
+  //    notes must not drop a title the user had just typed.
+  //  - the SAME note's stored title changed (a sync landing, a rename made
+  //    elsewhere): adopt it, but never over unsaved edits of the user's own, or
+  //    the input would fight them mid-word.
+  useEffect(() => {
+    const openId = openIdRef.current;
+    const openStored = openStoredRef.current;
+
+    if (openId !== topic.id) {
+      const pending = draftRef.current;
+      clearTimer();
+      commit(openId, pending, openStored);
+      openIdRef.current = topic.id;
+      openStoredRef.current = stored;
+      setDraft(topic.title ?? '');
+      return;
+    }
+
+    if (stored === openStored) return; // nothing arrived from outside
+    openStoredRef.current = stored;
+    if (draftRef.current.trim() !== openStored) return; // the user is typing
+    setDraft(topic.title ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topic.id, topic.title, stored]);
+
+  const flush = () => {
+    clearTimer();
+    commit(openIdRef.current, draftRef.current, openStoredRef.current);
   };
 
   useEffect(() => () => {
-    // Never lose a pending edit when the pane unmounts.
-    clearTimer();
+    // Never lose a pending edit when the pane unmounts: commit it to the note it
+    // was typed for. Clearing the timer alone would silently discard it.
+    flush();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -68,8 +104,7 @@ export const NoteTitleInput: React.FC<{
         clearTimer();
         timer.current = window.setTimeout(() => {
           timer.current = null;
-          const next = draftRef.current.trim();
-          if (next && next !== stored) void setTopicTitle(topic.id, draftRef.current);
+          commit(openIdRef.current, draftRef.current, openStoredRef.current);
         }, AUTOSAVE_MS);
       }}
       onBlur={flush}
