@@ -70,25 +70,17 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, fill =
         </p>
       </div>
 
-      {/* Today across the full width */}
-      <TodayTimelineStrip
-        events={events}
-        overrides={overrides}
-        schedules={schedules}
-        onNavigateCalendar={() => onNavigate('calendar')}
-        onNavigateShifts={() => onNavigate('shifts')}
-      />
-
-      {/* Two columns: planning and study on the left, updates and glances on
-          the right. One column on phones and inside a split pane. */}
+      {/* Left: today, to-do, free hours. Right rail: exams, updates, glances. One column on phones and inside a split pane. */}
       <div className={fill ? 'flex flex-col gap-4' : 'grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-6 items-start'}>
-        <div className={`flex flex-col gap-4 lg:gap-6 min-w-0 ${fill ? '' : 'lg:col-span-7'}`}>
-          <ExamCountdownCard
-            assessments={assessments}
-            subjects={subjects}
-            topics={topics}
-            onNavigateLibrary={() => onNavigate('library')}
+        <div className={`flex flex-col gap-4 lg:gap-6 min-w-0 ${fill ? '' : 'lg:col-span-8'}`}>
+          <TodayTimelineStrip
+            events={events}
+            overrides={overrides}
+            schedules={schedules}
+            onNavigateCalendar={() => onNavigate('calendar')}
+            onNavigateShifts={() => onNavigate('shifts')}
           />
+          <TodoCard onNavigateTodos={() => onNavigate('todos')} />
           <FreeHoursCard
             events={allEvents}  /* 3 days ahead, so every event, not just today's */
             overrides={overrides}
@@ -99,10 +91,15 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, fill =
             resources={pendingResources}
             onNavigateFocus={() => onNavigate('focus')}
           />
-          <TodoCard onNavigateTodos={() => onNavigate('todos')} />
           <StatsCard onNavigate={onNavigate} />
         </div>
-        <div className={`flex flex-col gap-4 lg:gap-6 min-w-0 ${fill ? '' : 'lg:col-span-5'}`}>
+        <div className={`flex flex-col gap-4 lg:gap-6 min-w-0 ${fill ? '' : 'lg:col-span-4'}`}>
+          <ExamCountdownCard
+            assessments={assessments}
+            subjects={subjects}
+            topics={topics}
+            onNavigateLibrary={() => onNavigate('library')}
+          />
           <InstinctUpdatesCard />
           <ReviewCard onNavigateLibrary={() => onNavigate('library')} />
           <UpcomingDeadlinesCard

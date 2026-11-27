@@ -39,7 +39,7 @@ export const TodoCard: React.FC<{ onNavigateTodos: () => void }> = ({ onNavigate
       ) : (
         <ul className="space-y-1.5">
           {shown.map((t) => (
-            <li key={t.id} className="flex items-center gap-2.5">
+            <li key={t.id} className="flex items-center gap-2.5 list-enter">
               <button
                 onClick={() => void setTodoDone(t.id, true)}
                 aria-label={`Complete "${t.title}"`}

@@ -47,7 +47,7 @@ export const ExamCountdownCard: React.FC<ExamCountdownCardProps> = ({
           <p className="text-[11px] mt-0.5">Add an assessment with a date in a subject to see its countdown</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+        <div className="grid grid-cols-1 grid-cols-1 gap-2.5">
           {shown.map((it) => {
             const urgent = it.daysLeft <= 3;
             const rest = it.unstudied.length - MAX_TOPICS;

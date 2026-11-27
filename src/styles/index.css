@@ -76,3 +76,33 @@
 h1, h2, h3 {
   letter-spacing: -0.01em;
 }
+
+/* ---------- Subtle motion ----------
+   Short, quiet, and off entirely for people who ask for reduced motion. */
+@keyframes enter-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes enter-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.page-enter { animation: enter-fade 180ms ease-out backwards; }
+.card-enter { animation: enter-up 220ms ease-out backwards; }
+.list-enter { animation: enter-up 180ms ease-out backwards; }
+
+/* Hover and press feedback on every button and link. */
+button, [role="button"], a {
+  transition-property: background-color, border-color, color, opacity, transform;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+button:not(:disabled):active, [role="button"]:active {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter, .card-enter, .list-enter { animation: none; }
+  button, [role="button"], a { transition: none; }
+  button:not(:disabled):active, [role="button"]:active { transform: none; }
+}
