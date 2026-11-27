@@ -1,7 +1,9 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../db/db';
 import { TodayAgenda } from './components/TodayAgenda';
+import { TodayCompact } from './components/TodayCompact';
+import { Minimize2 } from 'lucide-react';
 import { StatStrip } from './components/StatStrip';
 import { buildAgenda } from './agenda';
 import { buildTargets } from './freeHours';
@@ -73,38 +75,47 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, fill =
     />
   );
 
-  const secondary = (
-    <div className="flex flex-col gap-4 min-w-0">
-      <InstinctUpdatesCard />
-      <TodoCard onNavigateTodos={() => onNavigate('todos')} />
-      <ReviewCard onNavigateLibrary={() => onNavigate('library')} />
-      <ExamCountdownCard
-        assessments={assessments}
-        subjects={subjects}
-        topics={topics}
-        onNavigateLibrary={() => onNavigate('library')}
-      />
-      <FreeHoursCard
-        events={allEvents}
-        overrides={overrides}
-        schedules={schedules}
-        assessments={assessments}
-        subjects={subjects}
-        topics={topics}
-        resources={pendingResources}
-        onNavigateFocus={() => onNavigate('focus')}
-      />
-      <UpcomingDeadlinesCard
-        resources={pendingResources}
-        assessments={assessments}
-        subjectName={subjectName}
-        onNavigateLibrary={() => onNavigate('library')}
-      />
-      <WeeklyHoursCard overrides={overrides} schedules={schedules} onNavigateShifts={() => onNavigate('shifts')} />
-      <PomodoroMiniWidget onNavigateFocus={() => onNavigate('focus')} />
-      <StatsCard onNavigate={onNavigate} />
-    </div>
+  const [expandedRaw, setExpandedRaw] = useState(() => {
+    try { return localStorage.getItem('dash.todayExpanded') === '1'; } catch { return false; }
+  });
+  const expanded = expandedRaw && !fill;
+  const setExpanded = (v: boolean) => {
+    setExpandedRaw(v);
+    try { localStorage.setItem('dash.todayExpanded', v ? '1' : '0'); } catch { /* ignore */ }
+  };
+
+  // Cards flow into balanced columns (no empty holes under short cards).
+  const item = 'mb-4 break-inside-avoid';
+  const cardList = (
+    <>
+      {!expanded && (
+        <div className={item}>
+          <TodayCompact agenda={freeInfo} onExpand={() => setExpanded(true)} />
+        </div>
+      )}
+      <div className={item}><InstinctUpdatesCard /></div>
+      <div className={item}><TodoCard onNavigateTodos={() => onNavigate('todos')} /></div>
+      <div className={item}><ReviewCard onNavigateLibrary={() => onNavigate('library')} /></div>
+      <div className={item}>
+        <ExamCountdownCard assessments={assessments} subjects={subjects} topics={topics} onNavigateLibrary={() => onNavigate('library')} />
+      </div>
+      <div className={item}>
+        <FreeHoursCard events={allEvents} overrides={overrides} schedules={schedules} assessments={assessments} subjects={subjects} topics={topics} resources={pendingResources} onNavigateFocus={() => onNavigate('focus')} />
+      </div>
+      <div className={item}>
+        <UpcomingDeadlinesCard resources={pendingResources} assessments={assessments} subjectName={subjectName} onNavigateLibrary={() => onNavigate('library')} />
+      </div>
+      <div className={item}><WeeklyHoursCard overrides={overrides} schedules={schedules} onNavigateShifts={() => onNavigate('shifts')} /></div>
+      <div className={item}><PomodoroMiniWidget onNavigateFocus={() => onNavigate('focus')} /></div>
+      <div className={item}><StatsCard onNavigate={onNavigate} /></div>
+    </>
   );
+
+  const cols = fill
+    ? 'columns-1'
+    : expanded
+      ? 'columns-1 md:columns-2 xl:columns-1 min-[1500px]:columns-2'
+      : 'columns-1 md:columns-2 xl:columns-3 min-[1800px]:columns-4';
 
   const cards = (
     <>
@@ -118,13 +129,22 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, fill =
         shiftLine={freeInfo.shiftLine}
         onNavigate={onNavigate}
       />
-      {fill ? (
-        <div className="flex flex-col gap-4">{agenda}{secondary}</div>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          <div className="lg:col-span-8 min-w-0">{agenda}</div>
-          <aside className="lg:col-span-4 min-w-0" aria-label="More">{secondary}</aside>
+      {expanded && !fill ? (
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] gap-4 items-start">
+          <div className="min-w-0 xl:sticky xl:top-0">
+            <button
+              onClick={() => setExpanded(false)}
+              aria-label="Collapse today's agenda"
+              className="mb-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs text-content-secondary hover:text-content-primary hover:border-border-strong"
+            >
+              <Minimize2 className="w-3.5 h-3.5" /> Collapse
+            </button>
+            {agenda}
+          </div>
+          <div className={`${cols} gap-4`}>{cardList}</div>
         </div>
+      ) : (
+        <div className={`${cols} gap-4`}>{cardList}</div>
       )}
     </>
   );
