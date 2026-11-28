@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { addDays, format } from 'date-fns';
+import { addDays, format, parseISO } from 'date-fns';
 import { ChevronLeft, ChevronRight, Check } from 'lucide-react';
 import type { Assessment, CalendarEvent, Resource, ShiftOverride, Subject, Topic, TodoItem, WeeklySchedule } from '../../../types';
 import { buildAgenda, type AgendaBlock } from '../agenda';
@@ -57,6 +57,17 @@ export const TodayAgenda: React.FC<Props> = ({
   }, [date, now, events, overrides, schedules, todos, assessments, subjects, topics, resources]);
 
   const isToday = offset === 0;
+  /**
+   * Due label for a to-do row, relative to the day being viewed. "due today" is
+   * only true on today; on any other day the row is due on that day, so show
+   * the real date instead of a second, wrong "today".
+   */
+  const dueLabel = (dueDate?: string) => {
+    if (!dueDate) return '';
+    if (dueDate < agenda.dateKey) return 'overdue';
+    if (isToday) return 'due today';
+    return `due ${format(parseISO(dueDate), 'EEE, MMM d')}`;
+  };
   const nowMin = now.getHours() * 60 + now.getMinutes();
   const top = (m: number) => ((Math.min(Math.max(m, GRID_START * 60), GRID_END * 60) - GRID_START * 60) / 60) * HOUR_PX;
   const height = (GRID_END - GRID_START) * HOUR_PX;
@@ -109,9 +120,7 @@ export const TodayAgenda: React.FC<Props> = ({
                 <Check className="w-3 h-3 text-transparent" />
               </button>
               <span className="text-sm text-content-primary truncate flex-1">{t.title}</span>
-              <span className="text-[11px] text-content-tertiary">
-                {t.dueDate && t.dueDate < agenda.dateKey ? 'overdue' : 'due today'}
-              </span>
+              <span className="text-[11px] text-content-tertiary">{dueLabel(t.dueDate)}</span>
             </li>
           ))}
         </ul>
