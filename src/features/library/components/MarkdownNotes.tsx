@@ -3,6 +3,8 @@ import { DEFAULT_NOTE_TITLE } from '../../../db/noteTitle';
 import { setTopicTitle } from '../libraryRepo';
 import { extractFormatting, restoreFormatting } from '../noteFormat';
 import { sanitizeEditorHtml } from '../noteEditor/sanitizeHtml';
+import { typesetMath, renderLatexSource } from '../noteEditor/mathRender';
+import 'katex/dist/katex.min.css';
 import { NoteToolbar, type NoteToolbarApi } from './NoteToolbar';
 import type { Topic } from '../../../types';
 
@@ -175,17 +177,22 @@ function inlineFormat(escaped: string): string {
  * move. Today it styles `$..$` and `$$..$$` rather than typesetting them.
  */
 function renderLatex(escaped: string): string {
-  // Block $$..$$ left as a styled block; inline $..$ as styled span. No katex dep.
-  let out = escaped.replace(
-    /\$\$([\s\S]+?)\$\$/g,
-    '<div class="my-2 px-3 py-2 rounded-lg bg-accent-subtle border border-border font-mono text-[13px] text-accent-text overflow-x-auto">$1</div>'
-  );
-  out = out.replace(
-    /\$([^$\n]+?)\$/g,
-    '<span class="px-1 rounded bg-accent-subtle font-mono text-[12px] text-accent-text">$1</span>'
-  );
+  // Typeset markup must not pass through `inlineFormat` (its `*`/backtick rules
+  // would corrupt KaTeX output), so formulas are held as tokens and put back last.
+  const un = (t: string) =>
+    t.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  const hold = (f: string, display: boolean) => {
+    mathStash.push(renderLatexSource(un(f), display));
+    return `\uE010${mathStash.length - 1}\uE011`;
+  };
+  let out = escaped.replace(/\$\$([\s\S]+?)\$\$/g, (_m, f: string) => hold(f, true));
+  out = out.replace(/\$([^$\n]+?)\$/g, (_m, f: string) => hold(f, false));
   return out;
 }
+
+let mathStash: string[] = [];
+const releaseMath = (html: string): string =>
+  html.replace(/\uE010(\d+)\uE011/g, (_m, n: string) => mathStash[Number(n)] ?? '');
 
 /**
  * The one place the whole pipeline is applied, in the order that matters:
@@ -204,7 +211,9 @@ function renderLatex(escaped: string): string {
  */
 const renderNoteHtml = (raw: string): string => {
   const { text, tags } = extractFormatting(raw);
-  const html = renderMarkdown(text);
+  mathStash = [];
+  const html = releaseMath(renderMarkdown(text));
+  mathStash = [];
   return restoreFormatting(html, tags);
 };
 
@@ -371,7 +380,12 @@ export const NotesEditorBody: React.FC<{
 export const __renderNoteHtml = renderNoteHtml;
 
 /** Exported for tests: math rendering is its own seam. */
-export const __renderLatex = renderLatex;
+export const __renderLatex = (escaped: string): string => {
+  mathStash = [];
+  const out = releaseMath(renderLatex(escaped));
+  mathStash = [];
+  return out;
+};
 
 /**
  * Rendered notes.
@@ -385,7 +399,7 @@ export const MarkdownNotes: React.FC<MarkdownNotesProps> = ({ text, html, hasHtm
   // `hasHtml` is set by the caller that read `contentFormat`, so a stray field
   // cannot change which renderer is used.
   const out = hasHtml && html
-    ? sanitizeEditorHtml(html)
+    ? typesetMath(sanitizeEditorHtml(html))
     : renderNoteHtml(text);
   const body = useMemo(() => out, [out]);
 

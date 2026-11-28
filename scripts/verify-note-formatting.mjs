@@ -38,6 +38,7 @@ await build({
   bundle: true,
   format: 'esm',
   platform: 'node',
+  loader: { '.css': 'empty' },
   logLevel: 'silent',
   external: ['react', 'react-dom', 'react/jsx-runtime', 'lucide-react'],
 });
@@ -127,10 +128,10 @@ check('XSS via a dropped attribute is fully neutralised',
  * ordering. */
 
 // A rendered math span is identifiable by the styling renderLatex applies.
-const isMathStyled = (html) => html.includes('bg-accent-subtle') && html.includes('font-mono');
+const isMathStyled = (html) => html.includes('class="note-math') && html.includes('katex');
 
 check('plain inline math still renders', isMathStyled(render('Energy is $E = mc^2$ here')) && render('Energy is $E = mc^2$ here').includes('E = mc^2'));
-check('plain block math still renders', render('$$\\sum_1^n$$').includes('my-2 px-3 py-2 rounded-lg'));
+check('plain block math still renders', render('$$\\sum_1^n$$').includes('note-math-block'));
 
 {
   const html = render('<span style="color:var(--note-c-rose)">Energy is $E = mc^2$ ok</span>');
@@ -198,7 +199,7 @@ check('compat: link', render('[x](https://e.co)').includes('href="https://e.co"'
 check('compat: fenced code block', render('```js\nlet a;\n```').includes('<pre class="my-2') && render('```js\nlet a;\n```').includes('>js</div>') && render('```js\nlet a;\n```').includes('let a;'));
 check('compat: a code block drops raw HTML (its own pre-existing rule, unchanged)', !render('```\n<b>hi</b>\n```').includes('<b>') && render('```\n<b>hi</b>\n```').includes('>hi</code>'));
 check('compat: math output is byte-identical with no formatting present',
-  render('Cost is $x$ here') === '<p class="text-sm leading-relaxed text-content-primary">Cost is <span class="px-1 rounded bg-accent-subtle font-mono text-[12px] text-accent-text">x</span> here</p>',
+  /^<p class="text-sm leading-relaxed text-content-primary">Cost is <span class="note-math" data-latex="x"[^>]*>.*<\/span> here<\/p>$/.test(render('Cost is $x$ here')),
   render('Cost is $x$ here'));
 check('compat: an unformatted note emits no formatting markup',
   !render('Plain note text').includes('<span style=') && !render('Plain note text').includes('<div style='));

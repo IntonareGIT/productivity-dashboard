@@ -311,24 +311,21 @@ html.light {
   margin: 0.75rem 0;
 }
 
-/* Maths, shared with the read view so an inline formula looks the same in the
-   editor and after saving. Without an engine the formula is styled as clearly
-   delimited source rather than pretending to be typeset. */
+/* Maths, typeset by KaTeX and shared by the editor and the read view. */
 .note-math {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.92em;
-  background: var(--accent-subtle);
-  color: var(--accent-text);
-  border-radius: 0.3rem;
-  padding: 0.05em 0.3em;
-  white-space: pre-wrap;
+  color: inherit;
+  white-space: normal;
 }
 
 .note-math-block {
   display: block;
-  padding: 0.4rem 0.6rem;
-  margin: 0.35rem 0;
+  margin: 0.4rem 0;
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
 }
+.note-math-block .katex-display { margin: 0; }
 
 /* ---- Assistant panel tokens ---------------------------------------------
    The assistant surface uses the SAME tokens the rest of the app uses, so it

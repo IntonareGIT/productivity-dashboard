@@ -1,39 +1,62 @@
 /**
- * The one place that turns a formula into markup.
+ * The one place that turns a formula into markup, now typeset with KaTeX.
  *
- * This is the seam the project already had as `renderLatex` in
- * `MarkdownNotes.tsx`, extracted so BOTH the read view and the editor share it.
- * Nothing else in the app formats maths, so replacing this function (and adding a
- * real parser) is the whole of a future KaTeX migration.
+ * Shared by the read view and the editor. Stored note HTML stays INERT
+ * (`<span data-latex="..." data-display="...">source</span>`); the typeset markup
+ * is generated here, after sanitizing, and never stored. KaTeX runs with
+ * `trust: false` and `throwOnError: false`, so a bad formula shows its source
+ * (in red) instead of breaking the note.
  *
- * It styles the formula; it does not typeset it. That is deliberate and
- * unchanged: there is no engine yet, and an engine swap must not require
- * touching storage, the toolbar, or the sanitizer.
+ * Listen is unaffected: it reads the `data-latex` attribute, never the typeset
+ * text, and says simple formulas in words or a cue for complex ones.
  */
+import katex from 'katex';
 
 const esc = (s: string) =>
-  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+const unesc = (s: string) =>
+  s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
 /** Shared class so the editor and the read view look identical. */
 export const MATH_CLASS = 'note-math';
 
-/**
- * Render a formula SOURCE (no `$` delimiters) to styled HTML.
- *
- * `display` switches the block padding/background. Both variants keep the source
- * visible, because without a real engine a typeset-looking-but-wrong result would
- * be worse than honest plain text.
- */
+/** KaTeX markup for a formula source (no `$` delimiters). Falls back to escaped source. */
+export function katexHtml(source: string, display = false): string {
+  const src = String(source ?? '');
+  try {
+    return katex.renderToString(src, {
+      displayMode: display,
+      throwOnError: false,
+      trust: false,
+      strict: 'ignore',
+      output: 'html',
+      maxSize: 20,
+      maxExpand: 200,
+    });
+  } catch {
+    return esc(src);
+  }
+}
+
+/** Render a formula SOURCE (no `$` delimiters) to a typeset, labelled wrapper. */
 export function renderLatexSource(source: string, display = false): string {
-  const body = esc(String(source ?? ''));
-  if (!body) return '';
-  return display
-    ? `<span class="${MATH_CLASS} ${MATH_CLASS}-block" data-latex="${esc(source)}">${body}</span>`
-    : `<span class="${MATH_CLASS}" data-latex="${esc(source)}">${body}</span>`;
+  const src = String(source ?? '');
+  if (!src.trim()) return '';
+  const cls = display ? `${MATH_CLASS} ${MATH_CLASS}-block` : MATH_CLASS;
+  return `<span class="${cls}" data-latex="${esc(src)}" data-display="${display}" role="math" aria-label="${esc(src)}">${katexHtml(src, display)}</span>`;
 }
 
 /**
- * Class names the theme stylesheet uses for a rendered formula.
- * Kept here so the editor, the read view and the CSS cannot drift.
+ * Typeset every inert formula span in already-sanitized note HTML.
+ * Matches only the exact shape the sanitizer emits.
  */
+export function typesetMath(html: string): string {
+  return html.replace(
+    /<span\s+data-latex="([^"]*)"(?:\s+data-display="(true|false)")?[^>]*>[^<]*<\/span>/g,
+    (_m, latex: string, display?: string) => renderLatexSource(unesc(latex), display === 'true'),
+  );
+}
+
+/** Class name the theme stylesheet uses for a rendered formula. */
 export const NOTE_MATH_CLASS = MATH_CLASS;
