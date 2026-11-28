@@ -355,7 +355,9 @@ function htmlToBlocks(html: string): { text: string; heading: boolean; pause?: b
   s = s.replace(/<(script|style|pre)\b[\s\S]*?<\/\1>/gi, ' ');
   // A maths span carries its source in `data-latex`, so the editor's formulas
   // are read (or cued) exactly like a markdown `$..$`.
-  s = s.replace(/<span[^>]*class="[^"]*note-math[^"]*"[^>]*>[\s\S]*?<\/span>/gi, (match) => {
+  // Stored notes keep the inert form (`data-latex` and the source as text, no
+  // class), so match on the attribute; the typeset form is nested spans.
+  s = s.replace(/<span\b[^>]*\bdata-latex="[^"]*"[^>]*>[^<]*<\/span>/gi, (match) => {
     const latex = /data-latex="([^"]*)"/.exec(match);
     return ` ${formulaWordsOrCue(latex ? decodeEntities(latex[1]) : '')} `;
   });

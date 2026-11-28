@@ -1,4 +1,5 @@
 import React from 'react';
+import 'katex/dist/katex.min.css';
 import { NoteEditor } from '../noteEditor/NoteEditor';
 import { editorHtmlForTopic, updateTopicContentHtml } from '../libraryRepo';
 import type { Topic } from '../../../types';

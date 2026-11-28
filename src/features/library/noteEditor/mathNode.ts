@@ -4,7 +4,7 @@ import { Node, mergeAttributes } from '@tiptap/core';
 // `replaceWith` accepts.
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { InputRule } from '@tiptap/core';
-import { renderLatexSource } from './mathRender';
+import { katexHtml } from './mathRender';
 
 /**
  * Math as an INLINE ATOM node.
@@ -125,7 +125,7 @@ export const MathNode = Node.create<MathOptions>({
       dom.setAttribute('data-display', String(!!node.attrs.display));
       // `contenteditable=false` keeps the atom from being edited into.
       dom.setAttribute('contenteditable', 'false');
-      dom.innerHTML = renderLatexSource(String(node.attrs.latex ?? ''), !!node.attrs.display);
+      dom.innerHTML = katexHtml(String(node.attrs.latex ?? ''), !!node.attrs.display);
       Object.entries(HTMLAttributes).forEach(([k, v]) => {
         if (k !== 'class' && k !== 'data-latex' && k !== 'data-display') dom.setAttribute(k, v);
       });

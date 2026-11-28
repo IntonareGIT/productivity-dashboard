@@ -126,6 +126,10 @@ export function sanitizeStyleAttr(raw: string): string | null {
 const ALLOWED_DATA_ATTRS: Record<string, RegExp> = {
   'data-callout': /^(formula|warning|note)$/,
   'data-align': /^(left|right)$/,
+  // Math: inert source text, typeset later by `typesetMath`. No angle brackets or
+  // quotes can pass, so it cannot break out of the attribute.
+  'data-latex': /^[^"<>]{1,2000}$/,
+  'data-display': /^(true|false)$/,
 };
 
 /** Extract one attribute value, quoted either way. */
@@ -150,7 +154,7 @@ export function safeDataAttrs(attrs: string): string {
     if (!pattern.test(v)) continue;
     // The token patterns admit no quotes or angle brackets, so this cannot break
     // out of the attribute; the escape is belt-and-braces.
-    kept.push(`${name}="${v.replace(/["<>&]/g, '')}"`);
+    kept.push(`${name}="${name === 'data-latex' ? raw : v.replace(/["<>&]/g, '')}"`);
   }
   return kept.length > 0 ? ` ${kept.join(' ')}` : '';
 }
